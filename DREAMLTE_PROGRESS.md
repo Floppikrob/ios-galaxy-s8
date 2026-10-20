@@ -105,3 +105,21 @@ persistent log still gets every line. A plain number (`sweetlog=0`/`1`) keeps
 its old meaning (persistent log off/on) and is not a filter. Example:
 `sweetlog=S8WLAN,S8CHG,panic` or `sweetlog=-hfs,-AMFI`. Ported from
 MakrSas/ios-topaz 0112. Not yet built in CI or tried on the phone.
+
+## Wi-Fi step 1 (patch 0126, 2026-10-21)
+
+`bsd/dev/s8_wlan.c`, boot-arg `s8wlan=N` (steps 1..N), written after
+MakrSas/LinuxS8 `pcie-exynos8895.c` + quirk and brcmfmac. Started once when
+the root search begins; with no root found it waits for the steps (max 60 s)
+before the root-device panic. Locally built kernel, BOOT image with
+`ufsroot=NOSUCHPART` (no UFS writes; the test phone carries LinuxS8 Debian).
+
+Phone result (photo), all 5 steps:
+- survey: S-Boot leaves the FSYS1 PCIe gates on (0x200000), PMU PCIe PHY 0;
+- power: WLAN_REG_ON gpj1-3 high (dat 0x2b), PMU PHY control 0x1;
+- link: up on try 3 (LTSSM 0x3607d11); tries 1-2 fail as under Linux;
+- config: endpoint `0x441f14e4`, class 0x280000, BAR0 32 KiB, BAR2 4 MiB;
+- bars: ChipCommon chip id `0x10034361` = BCM4361 rev 3.
+
+Next: firmware + NVRAM download to TCM (rambase 0x170000), wait for the
+shared-RAM address, then msgbuf rings.

@@ -1,4 +1,4 @@
-From 17430b69e049d11bcd890ae1dafd0383debaf787 Mon Sep 17 00:00:00 2001
+From a44f013dfb5edced23ad6fa0339511207a9e0faa Mon Sep 17 00:00:00 2001
 From: local <local@s8>
 Date: Tue, 20 Oct 2026 23:57:56 +0300
 Subject: [PATCH] dreamlte: Wi-Fi step 1, Exynos 8895 PCIe and BCM4361 chip id
@@ -6,9 +6,9 @@ Subject: [PATCH] dreamlte: Wi-Fi step 1, Exynos 8895 PCIe and BCM4361 chip id
 
 ---
  bsd/conf/files      |   1 +
- bsd/dev/s8_wlan.c   | 518 ++++++++++++++++++++++++++++++++++++++++++++
- bsd/dev/sweet_ufs.c |   4 +
- 3 files changed, 523 insertions(+)
+ bsd/dev/s8_wlan.c   | 541 ++++++++++++++++++++++++++++++++++++++++++++
+ bsd/dev/sweet_ufs.c |   9 +
+ 3 files changed, 551 insertions(+)
  create mode 100644 bsd/dev/s8_wlan.c
 
 diff --git a/bsd/conf/files b/bsd/conf/files
@@ -25,10 +25,10 @@ index 851addd..6824ddf 100644
  bsd/dev/a5xelte_touch.c			standard
 diff --git a/bsd/dev/s8_wlan.c b/bsd/dev/s8_wlan.c
 new file mode 100644
-index 0000000..b1bb920
+index 0000000..61a85ef
 --- /dev/null
 +++ b/bsd/dev/s8_wlan.c
-@@ -0,0 +1,518 @@
+@@ -0,0 +1,541 @@
 +/* SPDX-License-Identifier: GPL-2.0-only
 + *
 + * Galaxy S8 (dreamlte) Wi-Fi: Exynos 8895 PCIe channel 0 and the Broadcom
@@ -139,6 +139,7 @@ index 0000000..b1bb920
 +
 +static volatile uint8_t *elbi, *pcs, *phy, *dbi, *mem, *pmu, *sysreg, *cmu_fsys1, *cmu_top, *gpj1;
 +static uint32_t s8wlan_steps;
++static volatile bool s8wlan_done;
 +
 +static inline uint32_t rd(volatile uint8_t *b, uint32_t o) { return *(volatile uint32_t *)(b + o); }
 +static inline void wr(volatile uint8_t *b, uint32_t o, uint32_t v) { *(volatile uint32_t *)(b + o) = v; __asm__ volatile ("dsb sy" ::: "memory"); }
@@ -521,6 +522,7 @@ index 0000000..b1bb920
 +		}
 +	}
 +	LOG("done");
++	s8wlan_done = true;
 +	thread_terminate(current_thread());
 +}
 +
@@ -529,8 +531,13 @@ index 0000000..b1bb920
 +void
 +s8_wlan_start(void)
 +{
++	static bool started;
 +	thread_t thread;
 +
++	if (started) {
++		return;
++	}
++	started = true;
 +	if (!PE_parse_boot_argn("s8wlan", &s8wlan_steps, sizeof(s8wlan_steps)) || s8wlan_steps == 0) {
 +		return;
 +	}
@@ -540,7 +547,23 @@ index 0000000..b1bb920
 +	}
 +}
 +
++/* Wait (at most 60 s) for the steps to finish: the root search panics when there is no root. */
++void s8_wlan_wait(void);
++
++void
++s8_wlan_wait(void)
++{
++	for (int i = 0; s8wlan_steps && !s8wlan_done && i < 600; i++) {
++		IOSleep(100);
++	}
++}
++
 +#elif defined(ARM64_BOARD_CONFIG_A5XELTE)
++void s8_wlan_wait(void);
++void
++s8_wlan_wait(void)
++{
++}
 +void s8_wlan_start(void);
 +void
 +s8_wlan_start(void)
@@ -548,20 +571,28 @@ index 0000000..b1bb920
 +}
 +#endif /* ARM64_BOARD_CONFIG_A5XELTE && DREAMLTE */
 diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
-index e70a4ce..665d572 100644
+index e70a4ce..726e225 100644
 --- a/bsd/dev/sweet_ufs.c
 +++ b/bsd/dev/sweet_ufs.c
-@@ -883,6 +883,10 @@ sweet_ufs_rootdev(dev_t *dev)
+@@ -876,9 +876,18 @@ int sweet_ufs_rootdev(dev_t *dev);
+ int
+ sweet_ufs_rootdev(dev_t *dev)
+ {
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++	/* boot-arg s8wlan=N (bsd/dev/s8_wlan.c): started once, whether or not a root is found */
++	extern void s8_wlan_start(void);
++	s8_wlan_start();
++#endif
+ 	if (!su.ready) {
+ 		int error = sweet_ufs_init();
+ 		if (error) {
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++			extern void s8_wlan_wait(void);
++			s8_wlan_wait();
++#endif
+ 			return error;
  		}
  	}
- 	*dev = su.bdev;
-+#if defined(ARM64_BOARD_CONFIG_A5XELTE)
-+	extern void s8_wlan_start(void);
-+	s8_wlan_start();                /* boot-arg s8wlan=N (bsd/dev/s8_wlan.c) */
-+#endif
- 	return 0;
- }
- #endif /* ARM64_BOARD_CONFIG_SWEET */
 -- 
 2.54.0 (Apple Git-157)
 
