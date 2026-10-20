@@ -1,0 +1,567 @@
+From 17430b69e049d11bcd890ae1dafd0383debaf787 Mon Sep 17 00:00:00 2001
+From: local <local@s8>
+Date: Tue, 20 Oct 2026 23:57:56 +0300
+Subject: [PATCH] dreamlte: Wi-Fi step 1, Exynos 8895 PCIe and BCM4361 chip id
+ (s8wlan=N)
+
+---
+ bsd/conf/files      |   1 +
+ bsd/dev/s8_wlan.c   | 518 ++++++++++++++++++++++++++++++++++++++++++++
+ bsd/dev/sweet_ufs.c |   4 +
+ 3 files changed, 523 insertions(+)
+ create mode 100644 bsd/dev/s8_wlan.c
+
+diff --git a/bsd/conf/files b/bsd/conf/files
+index 851addd..6824ddf 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -105,6 +105,7 @@ bsd/dev/random/randomdev.c		standard
+ 
+ bsd/dev/memdev.c			standard
+ bsd/dev/sweet_ufs.c			standard
++bsd/dev/s8_wlan.c			standard
+ bsd/dev/a5xelte_emmc.c			standard
+ bsd/dev/a5xelte_keys.c			standard
+ bsd/dev/a5xelte_touch.c			standard
+diff --git a/bsd/dev/s8_wlan.c b/bsd/dev/s8_wlan.c
+new file mode 100644
+index 0000000..b1bb920
+--- /dev/null
++++ b/bsd/dev/s8_wlan.c
+@@ -0,0 +1,518 @@
++/* SPDX-License-Identifier: GPL-2.0-only
++ *
++ * Galaxy S8 (dreamlte) Wi-Fi: Exynos 8895 PCIe channel 0 and the Broadcom
++ * BCM4361 behind it.
++ *
++ * Written after MakrSas/LinuxS8 (drivers/pci/controller/dwc/pcie-exynos8895.c
++ * and pcie-exynos8895-quirk.c, themselves after Samsung's 4.4 vendor kernel)
++ * and mainline Linux brcmfmac (pcie.c, chip.c). GPL-2.0 like those.
++ *
++ * Boot-arg s8wlan=N runs steps 1..N and stops (default 0: nothing is touched):
++ *   1  reads   clocks, pins, PMU and PHY state as the bootloader left them
++ *   2  writes  clock gates, WLAN_REG_ON (gpj1-3) on, PMU PHY isolation off
++ *   3  writes  PHY/PCS/ELBI bring-up and the DWC root complex, LTSSM on:
++ *              link up (10 tries, as LinuxS8)
++ *   4  reads   the endpoint's config space through iATU 0 (14e4:44xx)
++ *   5  writes  the endpoint's BARs (BAR2 0x11800000, BAR0 bus 0x11c00000 at
++ *              CPU 0x11b00000 through iATU 2), memory + bus master on, and
++ *              reads ChipCommon's chip id through BAR0 (0x4361 expected)
++ * Everything is polled, every step is logged before its first access.
++ */
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/errno.h>
++#include <kern/thread.h>
++#include <kern/clock.h>
++#include <pexpert/pexpert.h>
++#include <libkern/libkern.h>
++#include <pexpert/arm64/board_config.h>
++
++#if defined(ARM64_BOARD_CONFIG_A5XELTE) && defined(DREAMLTE)
++
++extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++extern kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
++extern void IOSleep(unsigned int milliseconds);
++extern kern_return_t thread_terminate(thread_t thread);
++
++#define LOG(fmt, ...)   printf("S8WLAN: " fmt "\n", ##__VA_ARGS__)
++
++/* ---- addresses (exynos8895.dtsi pcie_wifi, LinuxS8) ---- */
++#define ELBI_PA         0x116a0000UL
++#define PCS_PA          0x116c0000UL
++#define PHY_PA          0x116d0000UL
++#define DBI_PA          0x11700000UL
++#define MEM_PA          0x11800000UL    /* 4 MiB: BAR2, BAR0 window, config */
++#define MEM_SIZE        0x400000UL
++#define CFG_PA          0x11bff000UL
++#define PMU_PA          0x16480000UL
++#define SYSREG_FSYS1_PA 0x11420000UL
++#define SYSREG_PCIE_OFF 0x1044
++#define CMU_FSYS1_PA    0x11400000UL
++#define CMU_TOP_PA      0x15a80000UL
++#define GPJ1_PA         0x11430000UL    /* pinctrl_fsys1 bank 0: CON DAT PUD DRV */
++
++/* ELBI (Samsung wrapper) */
++#define ELBI_IRQ_PULSE                  0x000
++#define ELBI_IRQ_EN_PULSE               0x00c
++#define  IRQ_INTX_ASSERT                (0x55u)
++#define ELBI_IRQ_EN_LEVEL               0x010
++#define ELBI_IRQ_EN_SPECIAL             0x014
++#define ELBI_SW_WAKE                    0x018
++#define  SW_WAKE_BUS_EN                 (1u << 1)
++#define ELBI_APP_LTSSM_ENABLE           0x02c
++#define ELBI_IRQ_TOE_EN_PULSE2          0x034
++#define ELBI_L1_BUG_FIX_ENABLE          0x038
++#define ELBI_RDLH_LINKUP                0x074
++#define ELBI_APP_REQ_EXIT_L1_MODE       0x0f4
++#define ELBI_LINKDOWN_RST_CTRL_SEL      0x1b8
++#define ELBI_SOFT_CORE_RESET            0x1d0
++#define ELBI_STATE_HISTORY_CHECK        0x274
++#define ELBI_PCS_G_RST                  0x288
++#define ELBI_PHY_CMN_RST                0x28c
++#define ELBI_MAC_RST                    0x290
++#define ELBI_QCH_SEL                    0x2c8
++
++#define PMU_WAKEUP_MASK                 0x610
++#define PMU_PCIE_PHY_CONTROL            0x71c
++#define SYSREG_PCIE                     0x0
++#define SYSREG_PCIE_PHY_CONTROL         0xc
++#define PCS_RX_ELECIDLE                 0xec
++
++/* DesignWare port logic */
++#define DBI_LINK_CONTROL                0x710
++#define DBI_GEN2_CTRL                   0x80c
++#define DBI_MISC_CONTROL_1              0x8bc
++#define DBI_ATU_VIEWPORT                0x900
++#define DBI_ATU_CR1                     0x904
++#define DBI_ATU_CR2                     0x908
++#define DBI_ATU_LOWER_BASE              0x90c
++#define DBI_ATU_UPPER_BASE              0x910
++#define DBI_ATU_LIMIT                   0x914
++#define DBI_ATU_LOWER_TARGET            0x918
++#define DBI_ATU_UPPER_TARGET            0x91c
++#define DBI_AUX_CLK_FREQ                0xb40
++#define DBI_L1_SUBSTATES                0xb44
++#define ATU_TYPE_MEM                    0
++#define ATU_TYPE_CFG0                   4
++
++/* layout (LinuxS8 quirk): BAR2 3 MiB at 0x11800000, BAR0 bus 0x11c00000 seen at 0x11b00000 */
++#define BAR2_CPU        0x11800000u
++#define BAR2_LIMIT      0x11afffffu
++#define BAR0_CPU        0x11b00000u
++#define BAR0_BUS        0x11c00000u
++#define BAR0_WIN        0x10000u
++
++/* BCM PCIe core config registers (brcmfmac pcie.c) */
++#define BCMA_PCI_BAR0_WINDOW            0x80
++#define SI_ENUM_BASE                    0x18000000u
++
++static volatile uint8_t *elbi, *pcs, *phy, *dbi, *mem, *pmu, *sysreg, *cmu_fsys1, *cmu_top, *gpj1;
++static uint32_t s8wlan_steps;
++
++static inline uint32_t rd(volatile uint8_t *b, uint32_t o) { return *(volatile uint32_t *)(b + o); }
++static inline void wr(volatile uint8_t *b, uint32_t o, uint32_t v) { *(volatile uint32_t *)(b + o) = v; __asm__ volatile ("dsb sy" ::: "memory"); }
++static inline void set(volatile uint8_t *b, uint32_t o, uint32_t clr, uint32_t s) { wr(b, o, (rd(b, o) & ~clr) | s); }
++
++/* ---- PHY tables, vendor pci-exynos8895_cal.c, 26 MHz Gen1 ---- */
++static const uint8_t cmn_config_val[48] = {
++	0x01, 0xE1, 0x05, 0x00, 0x88, 0x88, 0x88, 0x04, 0x31, 0x45, 0x65, 0x24, 0x33, 0x08, 0xA4, 0xFC,
++	0xC6, 0x05, 0xE6, 0x80, 0x00, 0x00, 0x00, 0x00, 0x60, 0x11, 0x00, 0x90, 0x10, 0x04, 0x4E, 0x8E,
++	0xC0, 0xFF, 0x9B, 0x52, 0x22, 0x73, 0x47, 0x8C, 0x40, 0x00, 0x22, 0xFF, 0xFF, 0xFF, 0x00, 0x80,
++};
++static const uint8_t trsv_config_val[156] = {
++	0x31, 0x40, 0x37, 0x99, 0x85, 0x00, 0xC0, 0xFF, 0xFF, 0x3F, 0x8C, 0xC8, 0x02, 0x01, 0x88, 0x80,
++	0x06, 0x90, 0x68, 0x66, 0x09, 0x31, 0x42, 0x44, 0xC6, 0x18, 0x03, 0x33, 0x58, 0xE7, 0x20, 0x22,
++	0x80, 0x38, 0x05, 0x85, 0x00, 0x00, 0x00, 0x7E, 0x00, 0x00, 0x55, 0x15, 0xAC, 0xAA, 0x3E, 0x00,
++	0x00, 0x00, 0x00, 0x3F, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
++	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x05, 0x85, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00,
++	0x81, 0x40, 0x37, 0x99, 0x85, 0x00, 0xC0, 0xFF, 0xFF, 0x3F, 0x8C, 0xC8, 0x02, 0x01, 0x88, 0x80,
++	0x06, 0x90, 0x68, 0x66, 0x09, 0x31, 0x42, 0x44, 0xC6, 0x18, 0x03, 0x33, 0x58, 0xE7, 0x20, 0x22,
++	0x80, 0x38, 0x05, 0x85, 0x00, 0x00, 0x00, 0x7E, 0x00, 0x00, 0x55, 0x15, 0xAC, 0xAA, 0x3E, 0x00,
++	0x00, 0x00, 0x00, 0x3F, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
++	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x05, 0x85, 0xFF, 0x00,
++};
++
++static bool
++linked(void)
++{
++	uint32_t st = rd(elbi, ELBI_RDLH_LINKUP) & 0x1f;
++	return st >= 0x0d && st <= 0x14;
++}
++
++static void
++rx_elecidle(bool ignore)
++{
++	set(pcs, PCS_RX_ELECIDLE, 1u << 3, ignore ? 1u << 3 : 0);
++}
++
++/* Before the link is up, DBI is read with the rx elecidle check off. */
++static uint32_t
++dbi_rd(uint32_t o)
++{
++	bool l = linked();
++	if (!l) {
++		rx_elecidle(true);
++	}
++	uint32_t v = rd(dbi, o);
++	if (!l) {
++		rx_elecidle(false);
++	}
++	return v;
++}
++
++static void
++dbi_wr(uint32_t o, uint32_t v)
++{
++	bool l = linked();
++	if (!l) {
++		rx_elecidle(true);
++	}
++	wr(dbi, o, v);
++	if (!l) {
++		rx_elecidle(false);
++	}
++}
++
++static void
++dbi_wr16(uint32_t o, uint16_t v)
++{
++	uint32_t w = dbi_rd(o & ~3u);
++	unsigned sh = (o & 2) * 8;
++	dbi_wr(o & ~3u, (w & ~(0xffffu << sh)) | ((uint32_t)v << sh));
++}
++
++static void
++dbi_ro_wr(bool en)
++{
++	uint32_t v = dbi_rd(DBI_MISC_CONTROL_1);
++	dbi_wr(DBI_MISC_CONTROL_1, en ? (v | 1) : (v & ~1u));
++}
++
++static unsigned
++dbi_find_cap(unsigned id)
++{
++	unsigned p = dbi_rd(0x34) & 0xff;
++	for (int n = 0; p && n < 48; n++) {
++		uint32_t h = dbi_rd(p);
++		if ((h & 0xff) == id) {
++			return p;
++		}
++		p = (h >> 8) & 0xfc;
++	}
++	return 0;
++}
++
++static void
++atu(uint32_t index, uint32_t type, uint32_t cpu, uint32_t limit, uint32_t target)
++{
++	dbi_wr(DBI_ATU_VIEWPORT, index);        /* outbound */
++	dbi_wr(DBI_ATU_LOWER_BASE, cpu);
++	dbi_wr(DBI_ATU_UPPER_BASE, 0);
++	dbi_wr(DBI_ATU_LIMIT, limit);
++	dbi_wr(DBI_ATU_LOWER_TARGET, target);
++	dbi_wr(DBI_ATU_UPPER_TARGET, 0);
++	dbi_wr(DBI_ATU_CR1, type);
++	dbi_wr(DBI_ATU_CR2, 1u << 31);
++	for (int i = 0; i < 50 && !(dbi_rd(DBI_ATU_CR2) & (1u << 31)); i++) {
++		delay(10);
++	}
++}
++
++/* Endpoint config space, bus 1 device 0, through iATU 0 and the config window. */
++static uint32_t
++ep_cfg_rd(uint32_t o)
++{
++	return rd(mem, (CFG_PA - MEM_PA) + o);
++}
++
++static void
++ep_cfg_wr(uint32_t o, uint32_t v)
++{
++	wr(mem, (CFG_PA - MEM_PA) + o, v);
++}
++
++static void
++phy_tables(void)
++{
++	for (unsigned i = 0; i < sizeof(cmn_config_val); i++) {
++		wr(phy, i * 4, cmn_config_val[i]);
++	}
++	for (unsigned i = 0; i < sizeof(trsv_config_val); i++) {
++		wr(phy, (0x30 + i) * 4, trsv_config_val[i]);
++	}
++}
++
++static void
++phy_config(void)
++{
++	volatile uint8_t *sr = sysreg + SYSREG_PCIE_OFF;
++	uint32_t v;
++
++	set(sr, SYSREG_PCIE, 1u << 1, 0);
++	v = rd(sr, SYSREG_PCIE_PHY_CONTROL);
++	v &= ~(0xf0u | 0x3cu | 0x2u);
++	v |= 0x3u << 2;
++	wr(sr, SYSREG_PCIE_PHY_CONTROL, v);
++
++	wr(elbi, ELBI_MAC_RST, 0);
++	delay(10);
++	wr(elbi, ELBI_PHY_CMN_RST, 0);
++	delay(10);
++	wr(elbi, ELBI_PCS_G_RST, 1);
++	delay(10);
++	wr(elbi, ELBI_PCS_G_RST, 0);
++	delay(10);
++	wr(elbi, ELBI_PCS_G_RST, 1);
++	delay(10);
++
++	phy_tables();
++	wr(phy, 0x5c * 4, 0x14);                /* tx amplitude */
++	wr(pcs, 0xf8, 0x70);                    /* tx latency, refclk out */
++	wr(pcs, 0x100, 0x87);
++	wr(pcs, 0x104, 0x50);
++	set(pcs, 0xc, 1u << 1, 1u << 4);        /* PRGM_TIMEOUT_L1SS_VAL */
++
++	wr(elbi, ELBI_MAC_RST, 1);
++	delay(10);
++	wr(elbi, ELBI_PHY_CMN_RST, 1);
++	delay(10);
++	phy_tables();                           /* the vendor writes them again */
++}
++
++static void
++perst(bool assert)
++{
++	set(gpj1, 0x4, 1u << 2, assert ? 0 : 1u << 2);     /* active low */
++}
++
++static void
++link_bringup(void)
++{
++	rx_elecidle(true);
++	wr(elbi, ELBI_SOFT_CORE_RESET, 0);
++	delay(20);
++	wr(elbi, ELBI_SOFT_CORE_RESET, 1);
++	perst(false);
++	IOSleep(20);
++	set(elbi, ELBI_APP_REQ_EXIT_L1_MODE, 0, (1u << 0) | (1u << 4));
++	wr(elbi, ELBI_LINKDOWN_RST_CTRL_SEL, 1u << 1);
++	set(elbi, ELBI_QCH_SEL, 0xfffu, 0);
++	phy_config();
++	set(elbi, ELBI_SW_WAKE, SW_WAKE_BUS_EN, 0);
++	wr(elbi, ELBI_L1_BUG_FIX_ENABLE, 1);
++	wr(elbi, ELBI_IRQ_EN_PULSE, IRQ_INTX_ASSERT);
++	wr(elbi, ELBI_IRQ_TOE_EN_PULSE2, 0);
++	wr(elbi, ELBI_IRQ_EN_LEVEL, 0);
++	wr(elbi, ELBI_IRQ_EN_SPECIAL, 0);
++}
++
++/* The parts of dw_pcie_setup_rc() this root complex needs, then exynos_pcie_setup_rc(). */
++static void
++setup_rc(void)
++{
++	unsigned exp, pm;
++	uint32_t v;
++
++	dbi_ro_wr(true);
++	v = dbi_rd(DBI_LINK_CONTROL);
++	v = (v & ~(0x3fu << 16)) | (0x1u << 16);        /* x1 */
++	dbi_wr(DBI_LINK_CONTROL, v);
++	v = dbi_rd(DBI_GEN2_CTRL);
++	v = (v & ~(0x1fu << 8)) | (0x1u << 8);
++	dbi_wr(DBI_GEN2_CTRL, v);
++	dbi_wr(0x10, 0);                                /* RC BAR0/1 */
++	dbi_wr(0x14, 0);
++	dbi_wr(0x3c, (dbi_rd(0x3c) & 0xffff00ffu) | 0x100);     /* INTA */
++	dbi_wr(0x18, 0x00ff0100u);                      /* primary 0, secondary 1, subordinate ff */
++	dbi_wr(0x20, ((BAR2_CPU >> 16) & 0xfff0u) | (((MEM_PA + MEM_SIZE - 1) >> 16) & 0xfff0u) << 16);
++	dbi_wr(0x24, 0x0000fff0u);                      /* no prefetchable window */
++	dbi_wr(0x28, 0);
++	dbi_wr(0x2c, 0);
++	dbi_wr(0x1c, (dbi_rd(0x1c) & 0xffff0000u) | 0x00f0u);   /* no I/O window */
++	dbi_wr16(0x08 + 2, 0x0604);                     /* class: PCI bridge */
++	dbi_wr16(0x00, 0x144d);                         /* Samsung */
++	dbi_wr16(0x02, 0xecec);
++
++	exp = dbi_find_cap(0x10);
++	pm = dbi_find_cap(0x01);
++	if (exp) {
++		v = dbi_rd(exp + 0x0c);                 /* LNKCAP */
++		v &= ~((0x7u << 15) | (0x3fu << 4) | 0xfu);
++		v |= (0x7u << 15) | (0x1u << 4) | 0x2u;
++		dbi_wr(exp + 0x0c, v);
++		v = dbi_rd(exp + 0x30);                 /* LNKCTL2: 2.5 GT/s */
++		dbi_wr(exp + 0x30, (v & ~0xfu) | 0x1u);
++	}
++	dbi_wr(DBI_AUX_CLK_FREQ, 0x1a);
++	dbi_wr(DBI_L1_SUBSTATES, 0xea);
++	if (pm) {
++		dbi_wr(pm + 0x4, 0);
++	}
++	dbi_wr(0x04, (dbi_rd(0x04) & 0xffff0000u) | 0x0006u);   /* memory, bus master */
++	dbi_ro_wr(false);
++
++	set(sysreg + SYSREG_PCIE_OFF, SYSREG_PCIE_PHY_CONTROL, (1u << 16) | (1u << 14) | (1u << 12),
++	    (1u << 14) | (1u << 12));
++	LOG("rc: exp cap %#x pm cap %#x lnkcap %#x", exp, pm, exp ? dbi_rd(exp + 0x0c) : 0);
++}
++
++static int
++step_survey(void)
++{
++	static const uint32_t gates[] = { 0x2000, 0x203c, 0x2044, 0x2048, 0x2050, 0x2058, 0x205c };
++	LOG("1: cmu_top fsys1_pcie mux %#x div %#x gate %#x", rd(cmu_top, 0x1074), rd(cmu_top, 0x1870),
++	    rd(cmu_top, 0x2078));
++	LOG("1: cmu_fsys1 pcie_user %#x", rd(cmu_fsys1, 0x140));
++	for (unsigned i = 0; i < sizeof(gates) / sizeof(gates[0]); i++) {
++		LOG("1: cmu_fsys1 gate %#x = %#x", gates[i], rd(cmu_fsys1, gates[i]));
++	}
++	LOG("1: gpj1 con %#x dat %#x pud %#x drv %#x", rd(gpj1, 0), rd(gpj1, 4), rd(gpj1, 8), rd(gpj1, 0xc));
++	LOG("1: pmu wakeup_mask %#x pcie_phy %#x", rd(pmu, PMU_WAKEUP_MASK), rd(pmu, PMU_PCIE_PHY_CONTROL));
++	LOG("1: sysreg pcie %#x phy_control %#x", rd(sysreg + SYSREG_PCIE_OFF, SYSREG_PCIE),
++	    rd(sysreg + SYSREG_PCIE_OFF, SYSREG_PCIE_PHY_CONTROL));
++	return 0;
++}
++
++static int
++step_power(void)
++{
++	static const uint32_t gates[] = { 0x2000, 0x203c, 0x2044, 0x2048, 0x2050, 0x2058, 0x205c };
++	set(cmu_top, 0x2078, 0, 1u << 21);
++	for (unsigned i = 0; i < sizeof(gates) / sizeof(gates[0]); i++) {
++		set(cmu_fsys1, gates[i], 0, 1u << 21);
++	}
++	LOG("2: gates on: top %#x phy_ref %#x dbi %#x", rd(cmu_top, 0x2078), rd(cmu_fsys1, 0x2000),
++	    rd(cmu_fsys1, 0x203c));
++
++	/* gpj1-0 CLKREQ function 2; gpj1-2 PERST# output, asserted; gpj1-3 WLAN_REG_ON output */
++	perst(true);
++	set(gpj1, 0x0, 0xf | (0xf << 8) | (0xf << 12), 0x2 | (0x1 << 8) | (0x1 << 12));
++	set(gpj1, 0x4, 1u << 3, 1u << 3);
++	LOG("2: WLAN_REG_ON on: gpj1 con %#x dat %#x", rd(gpj1, 0), rd(gpj1, 4));
++	IOSleep(100);
++
++	set(pmu, PMU_WAKEUP_MASK, 1u << 5, 0);
++	set(pmu, PMU_PCIE_PHY_CONTROL, 0, 1u << 0);
++	wr(phy, 0x20 * 4, 0xc0);                /* phy all power down clear, ch0 */
++	wr(phy, 0xa7 * 4, 0x7e);
++	set(elbi, ELBI_STATE_HISTORY_CHECK, 0, 1u << 0);
++	LOG("2: pmu pcie_phy %#x, elbi ltssm %#x", rd(pmu, PMU_PCIE_PHY_CONTROL), rd(elbi, ELBI_RDLH_LINKUP));
++	return 0;
++}
++
++static int
++step_link(void)
++{
++	for (int t = 1; t <= 10; t++) {
++		if (t > 1) {
++			perst(true);
++			wr(elbi, ELBI_APP_LTSSM_ENABLE, 0);
++			IOSleep(10);
++		}
++		link_bringup();
++		setup_rc();
++		rx_elecidle(false);
++		wr(elbi, ELBI_APP_LTSSM_ENABLE, 1);
++		for (int i = 0; i < 200; i++) {
++			if (linked()) {
++				LOG("3: link up on try %d: ltssm %#x", t, rd(elbi, ELBI_RDLH_LINKUP));
++				return 0;
++			}
++			delay(100);
++		}
++		LOG("3: try %d: no link, ltssm %#x", t, rd(elbi, ELBI_RDLH_LINKUP));
++	}
++	return ETIMEDOUT;
++}
++
++static int
++step_config(void)
++{
++	IOSleep(100);                           /* endpoint config ready after link up */
++	atu(0, ATU_TYPE_CFG0, CFG_PA, CFG_PA + 0xfff, 1u << 24);
++	uint32_t id = ep_cfg_rd(0x00);
++	LOG("4: endpoint id %#x class %#x header %#x", id, ep_cfg_rd(0x08), ep_cfg_rd(0x0c));
++	if ((id & 0xffff) != 0x14e4) {
++		return ENODEV;
++	}
++	for (unsigned b = 0; b < 6; b++) {
++		uint32_t o = 0x10 + 4 * b, was = ep_cfg_rd(o);
++		ep_cfg_wr(o, 0xffffffffu);
++		LOG("4: BAR%u %#x size mask %#x", b, was, ep_cfg_rd(o));
++		ep_cfg_wr(o, was);
++	}
++	return 0;
++}
++
++static int
++step_bars(void)
++{
++	atu(1, ATU_TYPE_MEM, BAR2_CPU, BAR2_LIMIT, BAR2_CPU);
++	atu(2, ATU_TYPE_MEM, BAR0_CPU, BAR0_CPU + BAR0_WIN - 1, BAR0_BUS);
++	atu(0, ATU_TYPE_CFG0, CFG_PA, CFG_PA + 0xfff, 1u << 24);  /* index 0 again: config */
++	ep_cfg_wr(0x10, BAR0_BUS);
++	ep_cfg_wr(0x14, 0);
++	ep_cfg_wr(0x18, BAR2_CPU);
++	ep_cfg_wr(0x1c, 0);
++	ep_cfg_wr(0x04, (ep_cfg_rd(0x04) & 0xffff0000u) | 0x0006u);
++	ep_cfg_wr(BCMA_PCI_BAR0_WINDOW, SI_ENUM_BASE);
++	LOG("5: BAR0 %#x BAR2 %#x cmd %#x window %#x", ep_cfg_rd(0x10), ep_cfg_rd(0x18), ep_cfg_rd(0x04),
++	    ep_cfg_rd(BCMA_PCI_BAR0_WINDOW));
++	uint32_t chipid = rd(mem, BAR0_CPU - MEM_PA);
++	LOG("5: chipcommon chipid %#x (chip %#x rev %u pkg %u)", chipid, chipid & 0xffff, (chipid >> 16) & 0xf,
++	    (chipid >> 20) & 0xf);
++	return (chipid & 0xffff) == 0x4361 ? 0 : ENODEV;
++}
++
++static void
++s8_wlan_thread(__unused void *arg, __unused wait_result_t wr_)
++{
++	static int (*const steps[])(void) = { step_survey, step_power, step_link, step_config, step_bars };
++	static const char *const names[] = { "survey", "power", "link", "config", "bars" };
++
++	elbi = (volatile uint8_t *)ml_io_map(ELBI_PA, 0x1000);
++	pcs = (volatile uint8_t *)ml_io_map(PCS_PA, 0x1000);
++	phy = (volatile uint8_t *)ml_io_map(PHY_PA, 0x1000);
++	dbi = (volatile uint8_t *)ml_io_map(DBI_PA, 0x1000);
++	mem = (volatile uint8_t *)ml_io_map(MEM_PA, MEM_SIZE);
++	pmu = (volatile uint8_t *)ml_io_map(PMU_PA, 0x1000);
++	sysreg = (volatile uint8_t *)ml_io_map(SYSREG_FSYS1_PA, 0x2000);
++	cmu_fsys1 = (volatile uint8_t *)ml_io_map(CMU_FSYS1_PA, 0x3000);
++	cmu_top = (volatile uint8_t *)ml_io_map(CMU_TOP_PA, 0x3000);
++	gpj1 = (volatile uint8_t *)ml_io_map(GPJ1_PA, 0x1000);
++
++	for (unsigned i = 0; i < s8wlan_steps && i < sizeof(steps) / sizeof(steps[0]); i++) {
++		LOG("step %u (%s)", i + 1, names[i]);
++		int error = steps[i]();
++		if (error) {
++			LOG("step %u (%s) failed: %d, stopping", i + 1, names[i], error);
++			break;
++		}
++	}
++	LOG("done");
++	thread_terminate(current_thread());
++}
++
++void s8_wlan_start(void);
++
++void
++s8_wlan_start(void)
++{
++	thread_t thread;
++
++	if (!PE_parse_boot_argn("s8wlan", &s8wlan_steps, sizeof(s8wlan_steps)) || s8wlan_steps == 0) {
++		return;
++	}
++	LOG("steps 1..%u", s8wlan_steps);
++	if (kernel_thread_start(s8_wlan_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	}
++}
++
++#elif defined(ARM64_BOARD_CONFIG_A5XELTE)
++void s8_wlan_start(void);
++void
++s8_wlan_start(void)
++{
++}
++#endif /* ARM64_BOARD_CONFIG_A5XELTE && DREAMLTE */
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index e70a4ce..665d572 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -883,6 +883,10 @@ sweet_ufs_rootdev(dev_t *dev)
+ 		}
+ 	}
+ 	*dev = su.bdev;
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++	extern void s8_wlan_start(void);
++	s8_wlan_start();                /* boot-arg s8wlan=N (bsd/dev/s8_wlan.c) */
++#endif
+ 	return 0;
+ }
+ #endif /* ARM64_BOARD_CONFIG_SWEET */
+-- 
+2.54.0 (Apple Git-157)
+
