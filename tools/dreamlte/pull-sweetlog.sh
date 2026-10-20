@@ -8,7 +8,8 @@ repo=$(cd "$(dirname "$0")/../.." && pwd)
 name=$1
 dev=${2:-$(adb shell readlink -f /dev/block/platform/11120000.ufs/by-name/USERDATA | tr -d '\r')}
 mkdir -p "$repo/logs"
-adb shell "b=\$(blockdev --getsize64 $dev); dd if=$dev of=/tmp/slog.bin bs=4096 skip=\$((b/4096-1025)) count=1025 2>/dev/null"
+size=$(adb shell blockdev --getsize64 "$dev" | tr -d '\r')    # TWRP's sh is 32-bit: count here
+adb shell "dd if=$dev of=/tmp/slog.bin bs=4096 skip=$((size / 4096 - 1025)) count=1025 2>/dev/null"
 adb pull /tmp/slog.bin "$repo/logs/sweetlog-$name.bin" >/dev/null
 adb pull /sys/fs/pstore/pmsg-ramoops-0 "$repo/logs/pmsg-$name.txt" >/dev/null 2>&1 || echo "no pmsg"
 python3 "$repo/tools/sweet-log.py" "$repo/logs/sweetlog-$name.bin" "$repo/logs/sweetlog-$name.txt"
