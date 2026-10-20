@@ -95,3 +95,13 @@ to the pmsg zone and read from TWRP as `/sys/fs/pstore/pmsg-ramoops-0`.
 1. CI kernel build; first boot target: loader log + XNU entry marker, then the
    early XNU console on the S8 screen.
 2. UFS driver for the root filesystem (USERDATA), then the iPhone X root.
+
+## Console filter (patch 0125)
+
+Boot-arg `sweetlog=WORD,WORD,...` draws on the screen only the console lines
+that contain one of the words; `-WORD` hides lines with that word (with only
+`-` words every other line is drawn). A panic is always drawn and the
+persistent log still gets every line. A plain number (`sweetlog=0`/`1`) keeps
+its old meaning (persistent log off/on) and is not a filter. Example:
+`sweetlog=S8WLAN,S8CHG,panic` or `sweetlog=-hfs,-AMFI`. Ported from
+MakrSas/ios-topaz 0112. Not yet built in CI or tried on the phone.
