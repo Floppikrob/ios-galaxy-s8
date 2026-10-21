@@ -171,6 +171,15 @@ CPUSEQUENCER_OPTION `0x2488` bit 0 := 0), `core0n_on` = CONFIGURATION 0xF +
   registers (`0x2400` = 0xF, `0x2600` = 0x7; names from the 8890 pmusfr).
   Frame statistics every 10 s and `sweetfb_hz=30` for the 30-60 fps work.
 
+- **Boot 34** (CI run 39641507601, first BOOT `bf45ab21…146d1d`, without
+  the CRC probe): BUCK2 was already on (`b2ctrl=0x70`, the same enable mode
+  01 as the A53 rail `b3ctrl=0x58`); forcing NONCPU/L2 CONFIGURATION did not
+  change their status (`0x5140000` / `0x10050000`), the PLL stayed unlocked,
+  core 0x000 did not run; capped to 4 CPUs. **Frame statistics** (10 s
+  windows): iOS swapped 1-10 frames/s, all of them shown; copy ~8.3 ms,
+  frame-done wait ~9 ms per frame. The limit is CoreAnimation's CPU
+  rendering (100-500 ms per frame), not the presentation.
+
 ## Hardware graphics through the DPU (plan, 2026-10-21)
 
 The Mali-G71 cannot serve iOS (Metal/AGX). The display processor can do
@@ -187,6 +196,19 @@ six layers (DPP channels, IOMobileFramebuffer layers) and scale in hardware.
    masked, shadow update, unmask) instead of copying 17 MB.
 4. Hardware layers and scaling: map up to four swap layers to DPP channels;
    a smaller iOS canvas scaled up by the DPP.
+5. Panel scaler: the S6E3HA6 DDI scales 1080x2220 or 720x1480 input to the
+   full panel (Samsung `s6e3ha6_dream_a3_da_panel.h` scaler/CASET/PASET/PPS
+   tables, the Android "screen resolution" setting): fewer pixels for iOS to
+   draw.
+
+## Mali-G71 for iOS (started 2026-10-21)
+
+Step 1, loader `gpu_probe.c` with `s8gpu=1`: log/enable S2MPS17 BUCK6
+(`vdd_g3d`), run Samsung's `g3d_on` (CMU_G3D `0x13800000`, PMU `0x40E0`/
+`0x40E4`) and, only if the domain reports on, read `GPU_ID`/`L2_FEATURES`/
+`SHADER_PRESENT` at `0x13900000` (Mali-G71 = product `0x6000`). Next steps:
+a polled XNU GPU driver (power, MMU page tables, job slots) after the ID
+answers; then a userland Metal plugin that CoreAnimation can load.
 
 GPU: iOS draws through Metal on Apple's GPU only (AGX); the Mali-G71 runs
 under Linux (Panfrost, see LinuxS8) but no iOS driver can use it. Graphics

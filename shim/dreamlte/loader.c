@@ -19,6 +19,7 @@
 #include "smp_probe.h"
 #include "touch_probe.h"
 #include "pmic.h"
+#include "gpu_probe.h"
 #include "display_probe.h"
 
 #define UFS_PROBE_DMA		0x8f0000000UL	/* high bank, outside XNU's window */
@@ -453,6 +454,10 @@ uint64_t dl_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 	battery_probe(kv, out);
 	display_probe(kv, out);
 	pmic_mngs_rail();
+	if (arg_at(ba, "s8gpu=1") >= 0) {
+		pmic_g3d_rail();
+		gpu_probe(kv, out);
+	}
 	cap_cpus(ba, mngs_probe(kv, out, arg_at(ba, "s8mngsdbg=1") >= 0));
 	clean(ba_pa, ba_pa + PAGE_SIZE);
 	/* smp_probe(kv, out) proved the PMU power-up (boot 19); it leaves the

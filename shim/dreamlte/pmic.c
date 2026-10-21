@@ -38,6 +38,8 @@
 #define B2OUT			0x1c
 #define B3CTRL			0x1d	/* BUCK3 vdd_cpucl1 (A53) */
 #define B3OUT			0x1e
+#define B6CTRL			0x23	/* BUCK6 vdd_g3d (Mali) */
+#define B6OUT1			0x24
 #define BUCK_EN			(3u << 6)	/* S2MPS17_ENABLE_MASK */
 #define BUCK_VSEL(uv)		(((uv) - 300000) / 6250)	/* BUCK_MIN1, STEP1 */
 #define RTC_UPDATE		0x02
@@ -172,5 +174,30 @@ void pmic_mngs_rail(void)
 	out("MNGS rail on");
 	show(" b2ctrl", SLAVE_PMIC, B2CTRL);
 	show("b2out", SLAVE_PMIC, B2OUT);
+	out("\n");
+}
+
+/*
+ * Mali rail: S2MPS17 BUCK6 "vdd_g3d" (dreamlte_common.dtsi: 0.45-0.85 V,
+ * regulator-always-on). Log it; if it is not enabled, set 0.8 V and
+ * enable it.
+ */
+void pmic_g3d_rail(void)
+{
+	out("G3D rail");
+	show(" b6ctrl", SLAVE_PMIC, B6CTRL);
+	show("b6out1", SLAVE_PMIC, B6OUT1);
+	out("\n");
+	int ctrl = speedy(SLAVE_PMIC, B6CTRL, 0, 0);
+	int vsel = speedy(SLAVE_PMIC, B6OUT1, 0, 0);
+	if (ctrl < 0 || vsel < 0 || (ctrl & BUCK_EN))
+		return;
+	if (vsel < BUCK_VSEL(600000) || vsel > BUCK_VSEL(850000))
+		speedy(SLAVE_PMIC, B6OUT1, 1, BUCK_VSEL(800000));
+	speedy(SLAVE_PMIC, B6CTRL, 1, (uint8_t)(ctrl | BUCK_EN));
+	delay_us(1000);
+	out("G3D rail on");
+	show(" b6ctrl", SLAVE_PMIC, B6CTRL);
+	show("b6out1", SLAVE_PMIC, B6OUT1);
 	out("\n");
 }
