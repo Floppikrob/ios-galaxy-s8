@@ -8,10 +8,17 @@
  * by tools/dreamlte/mali-blit-gen.c (Mesa Panfrost v6: pre-frame shader
  * VAR_TEX + BLEND, unnormalised nearest sampler) to the free RAM right
  * after XNU's 512 MiB (S8_BLIT_BASE_PA), and for each full-screen layer
- * patches the texture (size, physical pointer, row stride) and the source
+ * patches the texture (size, GPU address, row stride) and the source
  * corners, then runs the fragment job: the GPU stretches the iOS frame over
  * the panel instead of the CPU copy. Any GPU error falls back to the CPU
  * path; three errors switch the GPU path off.
+ *
+ * Boot 41: 17 MiB physically contiguous IOSurfaces could not be allocated,
+ * so the GPU has its own page tables (kbase AArch64 4K format, levels 0-3:
+ * table = PA | AF | 3, page = PA | attr 0 << 2 | RW | AF | 3; AS_TRANSCFG
+ * mode 6). The blob and the panel are mapped GPU VA = PA; each iOS frame
+ * surface gets a 32 MiB window at S8GPU_SLOT_VA mapping its scattered pages,
+ * rebuilt only when a slot is reused for another surface.
  */
 extern "C" void clean_dcache(vm_offset_t addr, unsigned count, int phys);
 
@@ -21,12 +28,27 @@ extern "C" void clean_dcache(vm_offset_t addr, unsigned count, int phys);
 #define S8GPU_JOB_IRQ_CLEAR     0x1004
 #define S8GPU_JS0               0x1800
 #define S8GPU_AS0               0x2400
+#define S8GPU_PT_PA             (S8_BLIT_BASE_PA + 0x10000)     /* page-table pool */
+#define S8GPU_PT_PAGES          96
+#define S8GPU_SLOTS             4
+#define S8GPU_SLOT_VA           0x100000000ULL
+#define S8GPU_SLOT_SIZE         0x2000000ULL                    /* 32 MiB */
+#define S8GPU_PANEL_PA          0xcc000000ULL
+#define S8GPU_PANEL_SIZE        (5760ULL * 2960)
 
 static volatile uint32_t *s8gpu_regs;
 static volatile uint32_t *s8gpu_blob;
 static uint32_t s8gpu_shaders;
 static bool s8gpu_ready;
 static uint32_t s8gpu_frames, s8gpu_errors, s8gpu_skips;
+static volatile uint64_t *s8gpu_pt;             /* S8GPU_PT_PAGES pages of 512 entries */
+static unsigned s8gpu_pt_used;
+static struct {
+	IOMemoryDescriptor *md;                 /* not retained: identity only */
+	uint32_t id;
+	uint64_t len;
+} s8gpu_slot[S8GPU_SLOTS];
+static unsigned s8gpu_slot_next;
 
 static inline uint32_t
 s8gpu_rd(uint32_t off)
@@ -64,6 +86,54 @@ s8gpu_float(uint32_t v)
 	return ((e + 127) << 23) | (m & 0x7fffff);
 }
 
+/* Entry for va at level 3, creating tables; NULL when the pool is full. */
+static volatile uint64_t *
+s8gpu_pte(uint64_t va)
+{
+	unsigned table = 0;                     /* level 0 is page 0 */
+	for (unsigned level = 0; level < 3; level++) {
+		unsigned idx = (unsigned)(va >> (39 - 9 * level)) & 511;
+		volatile uint64_t *e = &s8gpu_pt[table * 512 + idx];
+		if ((*e & 3) != 3) {
+			if (s8gpu_pt_used == S8GPU_PT_PAGES) {
+				return NULL;
+			}
+			unsigned t = s8gpu_pt_used++;
+			*e = (S8GPU_PT_PA + (uint64_t)t * 4096) | (1ULL << 10) | 3;
+			table = t;
+		} else {
+			table = (unsigned)(((*e & 0xfffffffff000ULL) - S8GPU_PT_PA) / 4096);
+		}
+	}
+	return &s8gpu_pt[table * 512 + ((va >> 12) & 511)];
+}
+
+static bool
+s8gpu_map(uint64_t va, uint64_t pa, uint64_t len)
+{
+	for (uint64_t o = 0; o < len; o += 4096) {
+		volatile uint64_t *e = s8gpu_pte(va + o);
+		if (e == NULL) {
+			return false;
+		}
+		*e = ((pa + o) & 0xfffffffff000ULL) | (1ULL << 6) | (1ULL << 10) | 3;
+	}
+	return true;
+}
+
+/* After changing mappings: lock the whole VA space and flush (kbase). */
+static void
+s8gpu_flush_tlb(void)
+{
+	__builtin_arm_dsb(0xf);
+	s8gpu_wr(S8GPU_AS0 + 0x10, 47);                 /* AS_LOCKADDR: 2^48 at 0 */
+	s8gpu_wr(S8GPU_AS0 + 0x14, 0);
+	s8gpu_wr(S8GPU_AS0 + 0x18, 2);                  /* AS_COMMAND_LOCK */
+	s8gpu_wait(S8GPU_AS0 + 0x28, 1, 0, 100000);
+	s8gpu_wr(S8GPU_AS0 + 0x18, 5);                  /* AS_COMMAND_FLUSH_MEM */
+	s8gpu_wait(S8GPU_AS0 + 0x28, 1, 0, 100000);
+}
+
 static void
 s8gpu_init(void)
 {
@@ -93,19 +163,27 @@ s8gpu_init(void)
 	bool tiler_on = s8gpu_wait(0x150, tiler, tiler, 100000);
 	s8gpu_wr(0x180, s8gpu_shaders);
 	bool sh_on = s8gpu_wait(0x140, s8gpu_shaders, s8gpu_shaders, 100000);
-	s8gpu_wr(S8GPU_AS0 + 0x30, 2);                  /* AS_TRANSCFG: IDENTITY */
-	s8gpu_wr(S8GPU_AS0 + 0x34, 0);
-	s8gpu_wr(S8GPU_AS0 + 0x08, 0x88888888u);        /* AS_MEMATTR */
-	s8gpu_wr(S8GPU_AS0 + 0x0c, 0x88888888u);
-	s8gpu_wr(S8GPU_AS0 + 0x00, 0);
-	s8gpu_wr(S8GPU_AS0 + 0x04, 0);
-	s8gpu_wr(S8GPU_AS0 + 0x18, 1);                  /* AS_COMMAND_UPDATE */
-	bool as_on = s8gpu_wait(S8GPU_AS0 + 0x28, 1, 0, 100000);
 	s8gpu_blob = (volatile uint32_t *)ml_io_map(S8_BLIT_BASE_PA, S8_BLIT_SIZE);
-	if (s8gpu_blob == NULL) {
-		IOLog("S8 GPU: cannot map the descriptor blob at 0x%llx\n", S8_BLIT_BASE_PA);
+	s8gpu_pt = (volatile uint64_t *)ml_io_map(S8GPU_PT_PA, S8GPU_PT_PAGES * 4096);
+	if (s8gpu_blob == NULL || s8gpu_pt == NULL) {
+		IOLog("S8 GPU: cannot map the blob/page tables at 0x%llx\n", S8_BLIT_BASE_PA);
 		return;
 	}
+	for (unsigned i = 0; i < S8GPU_PT_PAGES * 512; i++) {
+		s8gpu_pt[i] = 0;
+	}
+	s8gpu_pt_used = 1;                              /* page 0: level 0 */
+	bool mapped = s8gpu_map(S8_BLIT_BASE_PA, S8_BLIT_BASE_PA, S8_BLIT_SIZE) &&
+	    s8gpu_map(S8GPU_PANEL_PA, S8GPU_PANEL_PA, (S8GPU_PANEL_SIZE + 4095) & ~4095ULL);
+	__builtin_arm_dsb(0xf);
+	s8gpu_wr(S8GPU_AS0 + 0x00, (uint32_t)S8GPU_PT_PA);     /* AS_TRANSTAB */
+	s8gpu_wr(S8GPU_AS0 + 0x04, (uint32_t)(S8GPU_PT_PA >> 32));
+	s8gpu_wr(S8GPU_AS0 + 0x08, 0x88888888u);        /* AS_MEMATTR: all impl. defined */
+	s8gpu_wr(S8GPU_AS0 + 0x0c, 0x88888888u);
+	s8gpu_wr(S8GPU_AS0 + 0x30, 6);                  /* AS_TRANSCFG: AARCH64_4K */
+	s8gpu_wr(S8GPU_AS0 + 0x34, 0);
+	s8gpu_wr(S8GPU_AS0 + 0x18, 1);                  /* AS_COMMAND_UPDATE */
+	bool as_on = mapped && s8gpu_wait(S8GPU_AS0 + 0x28, 1, 0, 100000);
 	for (unsigned i = 0; i < S8_BLIT_SIZE / 4; i++) {
 		uint32_t w;
 		memcpy(&w, s8_blit_blob + i * 4, 4);
@@ -113,18 +191,59 @@ s8gpu_init(void)
 	}
 	__builtin_arm_dsb(0xf);
 	s8gpu_ready = reset && l2_on && tiler_on && sh_on && as_on;
-	IOLog("S8 GPU: Mali-G71 0x%x reset=%d l2=%d tiler=%d shaders=0x%x/%d as0=%d -> %s\n",
-	    s8gpu_rd(0x000), reset, l2_on, tiler_on, s8gpu_shaders, sh_on, as_on,
+	IOLog("S8 GPU: Mali-G71 0x%x reset=%d l2=%d tiler=%d shaders=0x%x/%d as0=%d pt=%u -> %s\n",
+	    s8gpu_rd(0x000), reset, l2_on, tiler_on, s8gpu_shaders, sh_on, as_on, s8gpu_pt_used,
 	    s8gpu_ready ? "GPU present on" : "CPU present");
 }
 
-/* One frame: texture at physical pa (w x h, bpr) stretched over the panel. */
-static bool
-s8gpu_present(uint64_t pa, uint32_t bpr, uint32_t w, uint32_t h)
+/* GPU address of a surface's bytes, mapping it into a slot if needed. */
+static uint64_t
+s8gpu_surface_va(IOMemoryDescriptor *md, uint32_t id, uint64_t off, uint64_t len)
 {
-	if (!s8gpu_ready || (bpr & 15) != 0) {
+	uint64_t first = off & ~4095ULL, span = ((off + len + 4095) & ~4095ULL) - first;
+	if (span > S8GPU_SLOT_SIZE) {
+		return 0;
+	}
+	for (unsigned i = 0; i < S8GPU_SLOTS; i++) {
+		if (s8gpu_slot[i].md == md && s8gpu_slot[i].id == id && s8gpu_slot[i].len >= span) {
+			return S8GPU_SLOT_VA + i * S8GPU_SLOT_SIZE + (off - first);
+		}
+	}
+	unsigned i = s8gpu_slot_next++ % S8GPU_SLOTS;
+	uint64_t va = S8GPU_SLOT_VA + i * S8GPU_SLOT_SIZE;
+	s8gpu_slot[i].md = NULL;
+	for (uint64_t o = 0; o < span; o += 4096) {
+		IOByteCount seg = 0;
+		addr64_t pa = md->getPhysicalSegment(first + o, &seg, kIOMemoryMapperNone);
+		if (pa == 0 || !s8gpu_map(va + o, pa, 4096)) {
+			IOLog("S8 GPU: cannot map surface %u page at 0x%llx\n", id, (unsigned long long)o);
+			return 0;
+		}
+	}
+	s8gpu_flush_tlb();
+	s8gpu_slot[i].md = md;
+	s8gpu_slot[i].id = id;
+	s8gpu_slot[i].len = span;
+	IOLog("S8 GPU: surface %u mapped in slot %u (%llu KiB, %u table pages)\n",
+	    id, i, (unsigned long long)(span >> 10), s8gpu_pt_used);
+	return va + (off - first);
+}
+
+/* One frame: surface (w x h, bpr) stretched over the panel by the GPU. */
+static bool
+s8gpu_present(IOMemoryDescriptor *md, uint32_t id, uint64_t off, uintptr_t kva,
+    uint32_t bpr, uint32_t w, uint32_t h)
+{
+	if (!s8gpu_ready || (bpr & 15) != 0 || md == NULL) {
 		return false;
 	}
+	uint64_t need = (uint64_t)(h - 1) * bpr + (uint64_t)w * 4;
+	uint64_t pa = s8gpu_surface_va(md, id, off, need);
+	if (pa == 0) {
+		return false;
+	}
+	/* CoreAnimation drew through the CPU caches. */
+	clean_dcache((vm_offset_t)kva, (unsigned)need, 0);
 	/* Fresh job header and payload: the GPU writes its status back. */
 	for (unsigned i = 0; i < 0x40 / 4; i++) {
 		uint32_t v;

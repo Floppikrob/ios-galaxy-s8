@@ -260,6 +260,14 @@ six layers (DPP channels, IOMobileFramebuffer layers) and scale in hardware.
   failed`), so no touch this boot. Next: the enable writes retry after a
   bus reset; the log says why a layer is not GPU-presented and whether the
   contiguous surface allocation worked.
+- **Boot 41** (BOOT `8067accb…d3c2a041`): touch works again (enable
+  retries). `SWEET SURF: contiguous 17428480 bytes: failed`, so every frame
+  was `not contiguous: segment 4096 need 17428352` and went through the CPU.
+  Next: the Mali gets its own page tables (kbase AArch64 4K format, AS mode
+  6); the blob and panel are mapped VA = PA, and each frame surface's
+  scattered pages are mapped into a 32 MiB GPU window (4 slots at
+  `0x100000000`, rebuilt only when a slot is reused, then AS lock +
+  FLUSH_MEM). The contiguous allocation is gone.
 - **GPU present (built, not yet booted):** `tools/dreamlte/mali-blit-gen.c`,
   built against Mesa 25.2.8 (`build-mali-blit.sh`), compiles a Bifrost
   fragment shader for GPU_ID `0x60a00001` (144 bytes: `VAR_TEX.f32` +
