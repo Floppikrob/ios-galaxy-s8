@@ -67,7 +67,17 @@ static S8MaliUnimplemented *s8_unimplemented;
 
 /* ---- the device ---- */
 
-@interface S8MaliDevice : _MTLDevice {
+/*
+ * Boot 47: MTLAddDevice asserts [newDevice conformsToProtocol:@protocol(
+ * MTLDevice)]. Declaring the protocols by name is enough: the runtime
+ * unifies protocols by name with Metal's own definitions.
+ */
+@protocol MTLDevice
+@end
+@protocol MTLDeviceSPI <MTLDevice>
+@end
+
+@interface S8MaliDevice : _MTLDevice <MTLDeviceSPI> {
 	unsigned int _s8port;
 	unsigned int _s8calls;
 }
@@ -82,7 +92,7 @@ static S8MaliUnimplemented *s8_unimplemented;
 	if (self == nil)
 		return nil;
 	_s8port = port;
-	s8_log("MTL device created on accelerator port 0x%x (S8MaliMetal stage 1)", port);
+	s8_log("MTL device created on accelerator port 0x%x (S8MaliMetal stage 1b)", port);
 	return self;
 }
 

@@ -407,3 +407,16 @@ the kernel, must get GPU memory and run Mali jobs.
   fail to draw (black screen or backboardd restarts) in this boot: it is a
   diagnostic boot; boot 46 restores the normal UI.
 - sha256 a95e125959201fec3d3b9bfd6dc2713973f3ec321f562077f9d4dcf78235cc30.
+- Boot 47 result: overlay installed the bundle; Metal loaded it and every
+  process creating a Metal device logged `MTL device created on accelerator
+  port ...`, but backboardd aborted at once in a loop: `failed assertion
+  [newDevice conformsToProtocol:@protocol(MTLDevice)] at line 834 in
+  MTLAddDevice` (so no `unimplemented` lines yet; the phone never reached
+  the UI).
+
+## Boot 48 (prepared, not yet run): Metal stage 1b
+
+- Same kernel as boot 47; the plugin now adopts MTLDevice / MTLDeviceSPI
+  (declared by name; the runtime unifies them with Metal's). Diagnostic
+  boot again. sha256 recorded with the image below.
+  sha256 174c540996925dab8c807a896bc14667e037d9d2a8e92c091c56be336ebaa53f.
