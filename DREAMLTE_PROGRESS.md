@@ -396,3 +396,14 @@ the kernel, must get GPU memory and run Mali jobs.
   the Mali, and a full-screen fragment pass (clear + tile writeback) costs
   ~1.2 ms. iOS itself still swaps at most ~10 frames/s (SWEET FB 100-102
   swaps per 10 s under load) with CoreAnimation rendering on the CPU.
+
+## Boot 47 (prepared, not yet run): Metal stage 1, diagnostic
+
+- Kernel CI run 39676237484 (commit a4b8bf3). Boot-arg `s8metal=1`
+  publishes `S8MaliAccelerator` (class IOAcceleratorES) naming
+  `S8MaliMetal.bundle` / `S8MaliDevice`; the overlay installs the bundle.
+- Stage 1 device logs each unimplemented message (`S8 MALI| MTL -[MTLDevice
+  ...] unimplemented`) and answers nil/0, so CoreAnimation is expected to
+  fail to draw (black screen or backboardd restarts) in this boot: it is a
+  diagnostic boot; boot 46 restores the normal UI.
+- sha256 a95e125959201fec3d3b9bfd6dc2713973f3ec321f562077f9d4dcf78235cc30.
