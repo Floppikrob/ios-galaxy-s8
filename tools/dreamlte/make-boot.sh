@@ -16,6 +16,8 @@ mkdir -p "$work"
 canvas=1125x2436
 [[ " $args " == *" sweetfb_native=1 "* ]] && canvas=1440x2960
 python3 "$repo/tools/mkadt_dreamlte.py" "$work/dreamlte.adt" --canvas "$canvas"
-python3 "$repo/tools/mkpayload.py" "$kernel" "$work/dreamlte.adt" "$work/payload.bin" --cmdline "$args"
+# S8_OVERLAY=FILE: an S8OVL1 archive (mkoverlay.py) for the kernel to install.
+python3 "$repo/tools/mkpayload.py" "$kernel" "$work/dreamlte.adt" "$work/payload.bin" --cmdline "$args" \
+	${S8_OVERLAY:+--overlay "$(realpath "$S8_OVERLAY")"}
 bash "$repo/shim/dreamlte/build.sh" "$stock" "$work/payload.bin" "$out"
 python3 "$repo/tools/dreamlte_bootimg_info.py" "$out" | head -4

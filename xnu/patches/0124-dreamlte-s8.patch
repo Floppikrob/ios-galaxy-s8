@@ -1,4 +1,16 @@
-diff --git bsd/dev/a5xelte_keys.c bsd/dev/a5xelte_keys.c
+diff --git a/bsd/conf/files b/bsd/conf/files
+index 851addd..9e7653e 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -107,6 +107,7 @@ bsd/dev/memdev.c			standard
+ bsd/dev/sweet_ufs.c			standard
+ bsd/dev/a5xelte_emmc.c			standard
+ bsd/dev/a5xelte_keys.c			standard
++bsd/dev/dreamlte_s8.c			standard
+ bsd/dev/a5xelte_touch.c			standard
+ bsd/dev/sweet_sample.c			standard
+ bsd/dev/sweet_keys.c			standard
+diff --git a/bsd/dev/a5xelte_keys.c b/bsd/dev/a5xelte_keys.c
 index 3ba2fd4..dcbd143 100644
 --- a/bsd/dev/a5xelte_keys.c
 +++ b/bsd/dev/a5xelte_keys.c
@@ -80,7 +92,7 @@ index 3ba2fd4..dcbd143 100644
  	if (a5_keys_started) {
  		return;
  	}
-diff --git bsd/dev/a5xelte_touch.c bsd/dev/a5xelte_touch.c
+diff --git a/bsd/dev/a5xelte_touch.c b/bsd/dev/a5xelte_touch.c
 index 7ba309b..5317426 100644
 --- a/bsd/dev/a5xelte_touch.c
 +++ b/bsd/dev/a5xelte_touch.c
@@ -424,7 +436,258 @@ index 7ba309b..5317426 100644
  	int log_contacts = 0;
  	int bus_trial = 0;
  	vm_offset_t alive;
-diff --git bsd/dev/sweet_sample.c bsd/dev/sweet_sample.c
+diff --git a/bsd/dev/dreamlte_s8.c b/bsd/dev/dreamlte_s8.c
+new file mode 100644
+index 0000000..a0b7f11
+--- /dev/null
++++ b/bsd/dev/dreamlte_s8.c
+@@ -0,0 +1,245 @@
++/*
++ * Galaxy S8 (DREAMLTE) BSD pieces, run once from bsd_init just before
++ * launchd (tools/dreamlte/apply-dreamlte.py pastes this file into the xnu
++ * tree as bsd/dev/dreamlte_s8.c):
++ *
++ * 1. /dev/s8mali, a cloning character device for the Mali-G71: each open
++ *    gets its own minor (client); the ioctls (tools/dreamlte/s8mali_ioctl.h)
++ *    are served by s8gpu_user_ioctl() in SweetFramebuffer.cpp, which owns
++ *    the GPU. Closing frees the client's GPU memory.
++ *
++ * 2. The boot overlay: tools/dreamlte/mkoverlay.py packs files (our iOS
++ *    programs) into an "S8OVL1" archive, tools/mkpayload.py --overlay puts
++ *    it in kernel-owned RAM and names it in /chosen/memory-map "S8Overlay".
++ *    Its directories and files are written to the root filesystem here, so
++ *    a new program reaches the phone with the BOOT image alone.
++ */
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/conf.h>
++#include <sys/errno.h>
++#include <sys/fcntl.h>
++#include <sys/proc.h>
++#include <sys/vnode.h>
++#include <sys/kauth.h>
++#include <sys/uio.h>
++#include <miscfs/devfs/devfs.h>
++#include <kern/locks.h>
++#include <pexpert/pexpert.h>
++#include <pexpert/device_tree.h>
++#include <pexpert/arm64/board_config.h>
++#include <libkern/libkern.h>
++
++#if defined(DREAMLTE)
++
++extern int s8gpu_user_ioctl(int client, unsigned long cmd, void *data);
++extern void s8gpu_user_close(int client);
++extern int s8_kernel_mkdir(const char *path, int mode);
++extern vm_offset_t ml_static_ptovirt(vm_offset_t paddr);
++
++#define S8MALI_CLIENTS 16
++
++static LCK_GRP_DECLARE(s8mali_grp, "s8mali");
++static LCK_MTX_DECLARE(s8mali_mtx, &s8mali_grp);
++static bool s8mali_open[S8MALI_CLIENTS];
++
++static int
++s8mali_clone(__unused dev_t dev, int action)
++{
++	int m = 0;
++	if (action != DEVFS_CLONE_ALLOC) {
++		return action == DEVFS_CLONE_FREE ? 0 : -1;
++	}
++	lck_mtx_lock(&s8mali_mtx);
++	for (int i = 0; i < S8MALI_CLIENTS; i++) {
++		if (!s8mali_open[i]) {
++			m = i;
++			break;
++		}
++	}
++	lck_mtx_unlock(&s8mali_mtx);
++	return m;       /* all busy: open() of minor 0 then fails with EBUSY */
++}
++
++static int
++s8mali_dev_open(dev_t dev, __unused int flags, __unused int devtype, __unused proc_t p)
++{
++	int m = minor(dev), err = 0;
++	if (m < 0 || m >= S8MALI_CLIENTS) {
++		return ENXIO;
++	}
++	lck_mtx_lock(&s8mali_mtx);
++	if (s8mali_open[m]) {
++		err = EBUSY;
++	} else {
++		s8mali_open[m] = true;
++	}
++	lck_mtx_unlock(&s8mali_mtx);
++	return err;
++}
++
++static int
++s8mali_dev_close(dev_t dev, __unused int flags, __unused int devtype, __unused proc_t p)
++{
++	int m = minor(dev);
++	if (m < 0 || m >= S8MALI_CLIENTS) {
++		return ENXIO;
++	}
++	s8gpu_user_close(m);
++	lck_mtx_lock(&s8mali_mtx);
++	s8mali_open[m] = false;
++	lck_mtx_unlock(&s8mali_mtx);
++	return 0;
++}
++
++static int
++s8mali_dev_ioctl(dev_t dev, u_long cmd, caddr_t data, __unused int flag, __unused proc_t p)
++{
++	return s8gpu_user_ioctl(minor(dev), cmd, data);
++}
++
++static const struct cdevsw s8mali_cdevsw = {
++	.d_open = s8mali_dev_open, .d_close = s8mali_dev_close,
++	.d_ioctl = s8mali_dev_ioctl,
++	.d_read = eno_rdwrt, .d_write = eno_rdwrt, .d_stop = eno_stop,
++	.d_reset = eno_reset, .d_ttys = NULL, .d_select = eno_select,
++	.d_mmap = eno_mmap, .d_strategy = eno_strat, .d_type = 0,
++};
++
++static void
++s8mali_dev_init(void)
++{
++	int major = cdevsw_add(-1, &s8mali_cdevsw);
++	if (major < 0) {
++		printf("S8 MALI: cdevsw_add failed %d\n", major);
++		return;
++	}
++	void *node = devfs_make_node_clone(makedev(major, 0), DEVFS_CHAR,
++	    UID_ROOT, GID_WHEEL, 0666, s8mali_clone, "s8mali");
++	printf("S8 MALI: /dev/s8mali major %d %s\n", major, node ? "ready" : "devfs failed");
++}
++
++/* ---- boot overlay ---- */
++
++#define S8OVL_DIR  1
++#define S8OVL_FILE 2
++
++struct s8ovl_entry {
++	uint32_t kind, mode, uid, gid;
++	uint64_t size;
++	uint32_t pathlen, pad;          /* path follows, NUL included, then data */
++};
++
++static int
++s8ovl_owner(const char *path, const struct s8ovl_entry *e, vfs_context_t ctx)
++{
++	vnode_t vp = NULLVP;
++	int err = vnode_lookup(path, 0, &vp, ctx);
++	if (err != 0) {
++		return err;
++	}
++	struct vnode_attr va;
++	VATTR_INIT(&va);
++	VATTR_SET(&va, va_uid, e->uid);
++	VATTR_SET(&va, va_gid, e->gid);
++	VATTR_SET(&va, va_mode, e->mode & 07777);
++	err = vnode_setattr(vp, &va, ctx);
++	vnode_put(vp);
++	return err;
++}
++
++static int
++s8ovl_write(const char *path, const struct s8ovl_entry *e, const uint8_t *data, vfs_context_t ctx)
++{
++	vnode_t vp = NULLVP;
++	int err = vnode_open(path, O_CREAT | O_TRUNC | FWRITE | O_NOFOLLOW, (int)(e->mode & 07777),
++	    0, &vp, ctx);
++	if (err != 0) {
++		return err;
++	}
++	int resid = 0;
++	err = vn_rdwr(UIO_WRITE, vp, (caddr_t)(uintptr_t)data, (int)e->size, 0, UIO_SYSSPACE,
++	    IO_UNIT | IO_SYNC, vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
++	if (err == 0 && resid != 0) {
++		err = EIO;
++	}
++	vnode_close(vp, FWRITE, ctx);
++	return err ? err : s8ovl_owner(path, e, ctx);
++}
++
++static void
++s8ovl_install(void)
++{
++	DTEntry entry;
++	void const *prop;
++	unsigned int size;
++	if (SecureDTLookupEntry(NULL, "/chosen/memory-map", &entry) != kSuccess ||
++	    SecureDTGetProperty(entry, "S8Overlay", &prop, &size) != kSuccess || size < 16) {
++		printf("S8 OVERLAY: none\n");
++		return;
++	}
++	uint64_t range[2];
++	memcpy(range, prop, sizeof(range));
++	const uint8_t *b = (const uint8_t *)ml_static_ptovirt((vm_offset_t)range[0]);
++	uint64_t len = range[1];
++	if (b == NULL || len < 16 || memcmp(b, "S8OVL1\0\0", 8) != 0) {
++		printf("S8 OVERLAY: bad archive at 0x%llx\n", range[0]);
++		return;
++	}
++	uint32_t count;
++	memcpy(&count, b + 8, 4);
++	vfs_context_t ctx = vfs_context_kernel();
++	uint64_t off = 16;
++	unsigned written = 0, failed = 0;
++	for (uint32_t i = 0; i < count; i++) {
++		struct s8ovl_entry e;
++		if (off + sizeof(e) > len) {
++			break;
++		}
++		memcpy(&e, b + off, sizeof(e));
++		off += sizeof(e);
++		if (e.pathlen < 2 || e.pathlen > 1024 || off + e.pathlen > len ||
++		    b[off + e.pathlen - 1] != 0 || b[off] != '/') {
++			printf("S8 OVERLAY: bad entry %u\n", i);
++			break;
++		}
++		const char *path = (const char *)(b + off);
++		off = (off + e.pathlen + 7) & ~7ULL;
++		int err;
++		if (e.kind == S8OVL_DIR) {
++			err = s8_kernel_mkdir(path, (int)(e.mode & 07777));
++			if (err == 0 || err == EEXIST) {
++				err = s8ovl_owner(path, &e, ctx);
++			}
++		} else if (e.kind == S8OVL_FILE && e.size <= len - off && e.size < (1ULL << 30)) {
++			err = s8ovl_write(path, &e, b + off, ctx);
++			off = (off + e.size + 7) & ~7ULL;
++		} else {
++			printf("S8 OVERLAY: bad entry %u (%s)\n", i, path);
++			break;
++		}
++		if (err == 0) {
++			written++;
++		} else {
++			failed++;
++		}
++		printf("S8 OVERLAY: %s %s -> %d\n", e.kind == S8OVL_DIR ? "dir " : "file", path, err);
++	}
++	printf("S8 OVERLAY: %u written, %u failed\n", written, failed);
++}
++
++void
++dreamlte_bsd_late(void)
++{
++	s8mali_dev_init();
++	s8ovl_install();
++}
++
++#else
++
++void
++dreamlte_bsd_late(void)
++{
++}
++
++#endif /* DREAMLTE */
+diff --git a/bsd/dev/sweet_sample.c b/bsd/dev/sweet_sample.c
 index 1b57aeb..f42f892 100644
 --- a/bsd/dev/sweet_sample.c
 +++ b/bsd/dev/sweet_sample.c
@@ -434,7 +697,7 @@ index 1b57aeb..f42f892 100644
  /*
   * SWEET process sampler: where is a daemon stuck?
   *
-diff --git bsd/dev/sweet_ufs.c bsd/dev/sweet_ufs.c
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
 index 6b926fe..e70a4ce 100644
 --- a/bsd/dev/sweet_ufs.c
 +++ b/bsd/dev/sweet_ufs.c
@@ -619,7 +882,46 @@ index 6b926fe..e70a4ce 100644
  	return 0;
  }
  
-diff --git iokit/Kernel/IOPlatformExpert.cpp iokit/Kernel/IOPlatformExpert.cpp
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+index d26e1ee..7fcbca8 100644
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -1103,6 +1103,12 @@ bsdinit_task(void)
+ 
+ 	bsd_init_kprintf("bsd_do_post - done");
+ 
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++	{
++		extern void dreamlte_bsd_late(void);
++		dreamlte_bsd_late();
++	}
++#endif
+ 	load_init_program(p);
+ 	lock_trace = 1;
+ }
+diff --git a/bsd/vfs/vfs_syscalls.c b/bsd/vfs/vfs_syscalls.c
+index 90e68bb..5d0d3f9 100644
+--- a/bsd/vfs/vfs_syscalls.c
++++ b/bsd/vfs/vfs_syscalls.c
+@@ -9876,6 +9876,17 @@ mkdir_extended(proc_t p, struct mkdir_extended_args *uap, __unused int32_t *retv
+ 	return ciferror;
+ }
+ 
++/* Galaxy S8 boot overlay (bsd/dev/dreamlte_s8.c): mkdir as the kernel. */
++int s8_kernel_mkdir(const char *path, int mode);
++int
++s8_kernel_mkdir(const char *path, int mode)
++{
++	struct vnode_attr va;
++	VATTR_INIT(&va);
++	VATTR_SET(&va, va_mode, mode & ACCESSPERMS);
++	return mkdir1at(vfs_context_kernel(), CAST_USER_ADDR_T(path), &va, AT_FDCWD, UIO_SYSSPACE);
++}
++
+ int
+ mkdir(proc_t p, struct mkdir_args *uap, __unused int32_t *retval)
+ {
+diff --git a/iokit/Kernel/IOPlatformExpert.cpp b/iokit/Kernel/IOPlatformExpert.cpp
 index 7a32a23..13e62e5 100644
 --- a/iokit/Kernel/IOPlatformExpert.cpp
 +++ b/iokit/Kernel/IOPlatformExpert.cpp
@@ -648,7 +950,7 @@ index 7a32a23..13e62e5 100644
  
  	assert(nsecs < NSEC_PER_SEC);
  	*usecs = nsecs / NSEC_PER_USEC;
-diff --git iokit/Kernel/arm/SweetBattery.cpp iokit/Kernel/arm/SweetBattery.cpp
+diff --git a/iokit/Kernel/arm/SweetBattery.cpp b/iokit/Kernel/arm/SweetBattery.cpp
 index 9969739..0535b28 100644
 --- a/iokit/Kernel/arm/SweetBattery.cpp
 +++ b/iokit/Kernel/arm/SweetBattery.cpp
@@ -765,7 +1067,7 @@ index 9969739..0535b28 100644
  	/* Publish a complete source BEFORE registerService wakes powerd. */
  	poll();
  	if (fReal) {
-diff --git iokit/Kernel/arm/SweetCPU.cpp iokit/Kernel/arm/SweetCPU.cpp
+diff --git a/iokit/Kernel/arm/SweetCPU.cpp b/iokit/Kernel/arm/SweetCPU.cpp
 index 55d0057..dee6635 100644
 --- a/iokit/Kernel/arm/SweetCPU.cpp
 +++ b/iokit/Kernel/arm/SweetCPU.cpp
@@ -970,8 +1272,8 @@ index 55d0057..dee6635 100644
  	__builtin_arm_dsb(DSB_SY);
  	int32_t rc = sweet_psci_cpu_on(cpu->phys_id, entry, getCPUNumber());
  	IOLog(CPU_PORT_NAME " CPU: cpu=%u PSCI CPU_ON rc=%d\n", getCPUNumber(), rc);
-diff --git iokit/Kernel/arm/SweetFramebuffer.cpp iokit/Kernel/arm/SweetFramebuffer.cpp
-index 356ff51..3aa4c2e 100644
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 356ff51..e78bcc5 100644
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
 @@ -48,6 +48,7 @@ extern "C" int sweet_console_muted;     /* osfmk/console/serial_console.c */
@@ -1133,7 +1435,7 @@ index 356ff51..3aa4c2e 100644
  	setProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");
  	setProperty("external", false);
  	setProperty("DisplayPipePlaneBaseAlignment", 64ULL, 32);
-@@ -302,6 +390,961 @@ get32(const uint8_t *p, uint32_t off)
+@@ -302,6 +390,1285 @@ get32(const uint8_t *p, uint32_t off)
  	return v;
  }
  
@@ -1789,6 +2091,72 @@ index 356ff51..3aa4c2e 100644
 +};
 +
 +/*
++ * /dev/s8mali: user access to the Galaxy S8 Mali-G71 (kernel side in
++ * tools/dreamlte/s8_gpu_present.inc and s8_mali_dev.c, both pasted into the
++ * xnu tree by apply-dreamlte.py). Shared by the kernel and iOS programs.
++ *
++ * Memory: S8MALI_ALLOC hands out physically contiguous GPU memory from the
++ * RAM above XNU's 512 MiB window. The GPU sees it at gpu_va (= its physical
++ * address, mapped 1:1 in the Mali page tables); the calling process sees the
++ * same bytes at user_va, mapped write-combined (uncached), so neither side
++ * needs cache maintenance. Allocations are freed by S8MALI_FREE or when the
++ * descriptor is closed.
++ *
++ * Jobs: S8MALI_SUBMIT starts a job chain (GPU address of the first job
++ * header) on a job slot -- 0 fragment, 1 vertex/tiler/compute -- and waits
++ * for it. The kernel serialises it with the frame presentation it does
++ * itself on slot 0.
++ */
++#ifndef S8MALI_IOCTL_H
++#define S8MALI_IOCTL_H
++
++#include <stdint.h>
++#include <sys/ioccom.h>
++
++struct s8mali_info {
++	uint32_t gpu_id;                /* GPU_ID, 0x60a00001 on the S8 */
++	uint32_t shader_present;        /* SHADER_PRESENT low word */
++	uint32_t tiler_features;        /* TILER_FEATURES */
++	uint32_t ready;                 /* 1: powered, AS0 on */
++	uint64_t heap_base, heap_size;  /* GPU memory pool (physical) */
++	uint64_t heap_free;
++};
++
++struct s8mali_alloc {
++	uint64_t size;                  /* in: bytes (rounded to 64 KiB) */
++	uint64_t gpu_va;                /* out */
++	uint64_t user_va;               /* out */
++};
++
++struct s8mali_free {
++	uint64_t gpu_va;
++};
++
++struct s8mali_submit {
++	uint64_t jc;                    /* in: GPU address of the first job */
++	uint32_t slot;                  /* in: 0 fragment, 1 vertex/tiler/compute */
++	uint32_t timeout_ms;            /* in: 0 = 1000, max 5000 */
++	uint32_t result;                /* out: 0 done, 1 job fault, 2 timeout, 3 busy/off */
++	uint32_t js_status;             /* out: JS_STATUS (0x01 done, 0x4x/0x5x faults) */
++	uint32_t irq_rawstat;           /* out: JOB_IRQ_RAWSTAT */
++	uint32_t as_fault;              /* out: AS0_FAULTSTATUS */
++	uint64_t as_fault_addr;         /* out: AS0_FAULTADDRESS */
++	uint64_t elapsed_us;            /* out */
++};
++
++struct s8mali_log {
++	char text[120];                 /* NUL-terminated; printed as "S8 MALI| ..." */
++};
++
++#define S8MALI_INFO     _IOR('M', 1, struct s8mali_info)
++#define S8MALI_ALLOC    _IOWR('M', 2, struct s8mali_alloc)
++#define S8MALI_FREE     _IOW('M', 3, struct s8mali_free)
++#define S8MALI_SUBMIT   _IOWR('M', 4, struct s8mali_submit)
++#define S8MALI_LOG      _IOW('M', 5, struct s8mali_log)
++
++#endif
++
++/*
 + * Galaxy S8: iOS frames presented by the Mali-G71 (boot-arg sweetfb_gpu=1).
 + *
 + * Loader boots 37/38 proved the GPU path on this phone: soft reset, L2/
@@ -1819,12 +2187,19 @@ index 356ff51..3aa4c2e 100644
 +#define S8GPU_JS0               0x1800
 +#define S8GPU_AS0               0x2400
 +#define S8GPU_PT_PA             (S8_BLIT_BASE_PA + 0x10000)     /* page-table pool */
-+#define S8GPU_PT_PAGES          96
++#define S8GPU_PT_PAGES          512                             /* 2 MiB pool */
 +#define S8GPU_SLOTS             4
 +#define S8GPU_SLOT_VA           0x100000000ULL
 +#define S8GPU_SLOT_SIZE         0x2000000ULL                    /* 32 MiB */
 +#define S8GPU_PANEL_PA          0xcc000000ULL
 +#define S8GPU_PANEL_SIZE        (5760ULL * 2960)
++/* GPU memory for iOS programs (/dev/s8mali): free RAM of the high bank,
++ * mapped GPU VA = PA. */
++#define S8GPU_HEAP_PA           0x8b0000000ULL
++#define S8GPU_HEAP_SIZE         0x20000000ULL                   /* 512 MiB */
++#define S8GPU_HEAP_UNIT         0x10000ULL                      /* 64 KiB */
++#define S8GPU_HEAP_UNITS        (S8GPU_HEAP_SIZE / S8GPU_HEAP_UNIT)
++#define S8GPU_ALLOCS            256
 +
 +static volatile uint32_t *s8gpu_regs;
 +static volatile uint32_t *s8gpu_blob;
@@ -1839,6 +2214,14 @@ index 356ff51..3aa4c2e 100644
 +	uint64_t len;
 +} s8gpu_slot[S8GPU_SLOTS];
 +static unsigned s8gpu_slot_next;
++static IOLock *s8gpu_lock;                      /* one job chain at a time */
++static uint8_t s8gpu_heap_used[S8GPU_HEAP_UNITS];
++static struct {
++	IOMemoryMap *map;                       /* the owner's mapping */
++	uint64_t pa, len;
++	int client;                             /* /dev/s8mali minor, -1 free */
++} s8gpu_alloc[S8GPU_ALLOCS];
++static uint32_t s8gpu_user_jobs, s8gpu_user_faults;
 +
 +static inline uint32_t
 +s8gpu_rd(uint32_t off)
@@ -1941,6 +2324,10 @@ index 356ff51..3aa4c2e 100644
 +		IOLog("S8 GPU: no Mali-G71 (GPU_ID 0x%x)\n", s8gpu_regs ? s8gpu_rd(0x000) : 0);
 +		return;
 +	}
++	s8gpu_lock = IOLockAlloc();
++	for (unsigned i = 0; i < S8GPU_ALLOCS; i++) {
++		s8gpu_alloc[i].client = -1;
++	}
 +	s8gpu_wr(0x024, 0xffffffffu);                   /* GPU_IRQ_CLEAR */
 +	s8gpu_wr(0x030, 1);                             /* SOFT_RESET */
 +	bool reset = s8gpu_wait(0x020, 1u << 8, 1u << 8, 100000);
@@ -2021,7 +2408,7 @@ index 356ff51..3aa4c2e 100644
 +
 +/* One frame: surface (w x h, bpr) stretched over the panel by the GPU. */
 +static bool
-+s8gpu_present(IOMemoryDescriptor *md, uint32_t id, uint64_t off, uintptr_t kva,
++s8gpu_present_locked(IOMemoryDescriptor *md, uint32_t id, uint64_t off, uintptr_t kva,
 +    uint32_t bpr, uint32_t w, uint32_t h)
 +{
 +	if (!s8gpu_ready || (bpr & 15) != 0 || md == NULL) {
@@ -2090,12 +2477,251 @@ index 356ff51..3aa4c2e 100644
 +	}
 +	return false;
 +}
++
++static bool
++s8gpu_present(IOMemoryDescriptor *md, uint32_t id, uint64_t off, uintptr_t kva,
++    uint32_t bpr, uint32_t w, uint32_t h)
++{
++	if (!s8gpu_ready || s8gpu_lock == NULL) {
++		return false;
++	}
++	IOLockLock(s8gpu_lock);
++	bool ok = s8gpu_present_locked(md, id, off, kva, bpr, w, h);
++	IOLockUnlock(s8gpu_lock);
++	return ok;
++}
++
++/*
++ * /dev/s8mali (tools/dreamlte/s8mali_ioctl.h): iOS programs get GPU memory
++ * and run job chains. The character device itself is bsd/dev/dreamlte_s8.c;
++ * it calls these with the ioctl argument already copied in.
++ */
++static void
++s8gpu_free_index(unsigned i)
++{
++	uint64_t first = (s8gpu_alloc[i].pa - S8GPU_HEAP_PA) / S8GPU_HEAP_UNIT;
++	for (uint64_t u = 0; u < s8gpu_alloc[i].len / S8GPU_HEAP_UNIT; u++) {
++		s8gpu_heap_used[first + u] = 0;
++	}
++	if (s8gpu_alloc[i].map != NULL) {
++		s8gpu_alloc[i].map->release();  /* unmaps it from the owner */
++	}
++	s8gpu_alloc[i].map = NULL;
++	s8gpu_alloc[i].client = -1;
++}
++
++static uint64_t
++s8gpu_heap_free_bytes(void)
++{
++	uint64_t n = 0;
++	for (unsigned u = 0; u < S8GPU_HEAP_UNITS; u++) {
++		n += s8gpu_heap_used[u] == 0;
++	}
++	return n * S8GPU_HEAP_UNIT;
++}
++
++static int
++s8gpu_user_alloc(int client, struct s8mali_alloc *a)
++{
++	uint64_t len = (a->size + S8GPU_HEAP_UNIT - 1) & ~(S8GPU_HEAP_UNIT - 1);
++	if (len == 0 || len > S8GPU_HEAP_SIZE) {
++		return EINVAL;
++	}
++	unsigned slot = S8GPU_ALLOCS;
++	for (unsigned i = 0; i < S8GPU_ALLOCS; i++) {
++		if (s8gpu_alloc[i].client < 0) {
++			slot = i;
++			break;
++		}
++	}
++	if (slot == S8GPU_ALLOCS) {
++		return ENOMEM;
++	}
++	uint64_t units = len / S8GPU_HEAP_UNIT, run = 0, first = 0;
++	for (uint64_t u = 0; u < S8GPU_HEAP_UNITS && run < units; u++) {
++		if (s8gpu_heap_used[u]) {
++			run = 0;
++		} else if (run++ == 0) {
++			first = u;
++		}
++	}
++	if (run < units) {
++		return ENOMEM;
++	}
++	uint64_t pa = S8GPU_HEAP_PA + first * S8GPU_HEAP_UNIT;
++	IOMemoryDescriptor *md = IOMemoryDescriptor::withAddressRange(pa, len,
++	    kIODirectionInOut | kIOMemoryTypePhysical64, TASK_NULL);
++	if (md == NULL) {
++		return ENOMEM;
++	}
++	/* Zero it through a temporary kernel mapping (no stale data). */
++	IOMemoryMap *km = md->createMappingInTask(kernel_task, 0, kIOMapAnywhere | kIOMapWriteCombineCache);
++	if (km == NULL) {
++		md->release();
++		return ENOMEM;
++	}
++	volatile uint64_t *z = (volatile uint64_t *)km->getVirtualAddress();
++	for (uint64_t o = 0; o < len / 8; o++) {
++		z[o] = 0;
++	}
++	km->release();
++	IOMemoryMap *um = md->createMappingInTask(current_task(), 0, kIOMapAnywhere | kIOMapWriteCombineCache);
++	md->release();                          /* the mapping keeps it */
++	if (um == NULL) {
++		return ENOMEM;
++	}
++	if (!s8gpu_map(pa, pa, len)) {
++		um->release();
++		return ENOMEM;
++	}
++	s8gpu_flush_tlb();
++	for (uint64_t u = 0; u < units; u++) {
++		s8gpu_heap_used[first + u] = 1;
++	}
++	s8gpu_alloc[slot].map = um;
++	s8gpu_alloc[slot].pa = pa;
++	s8gpu_alloc[slot].len = len;
++	s8gpu_alloc[slot].client = client;
++	a->size = len;
++	a->gpu_va = pa;
++	a->user_va = um->getAddress();
++	return 0;
++}
++
++static int
++s8gpu_user_submit(struct s8mali_submit *s)
++{
++	if (s->slot > 2) {
++		return EINVAL;
++	}
++	unsigned ms = s->timeout_ms == 0 ? 1000 : (s->timeout_ms > 5000 ? 5000 : s->timeout_ms);
++	uint32_t js = S8GPU_JS0 + 0x80 * s->slot;
++	uint32_t done = 1u << s->slot, fail = 1u << (16 + s->slot);
++	uint64_t t0 = mach_absolute_time();
++	s8gpu_wr(S8GPU_JOB_IRQ_CLEAR, done | fail);
++	s8gpu_wr(js + 0x40, (uint32_t)s->jc);           /* JS_HEAD_NEXT */
++	s8gpu_wr(js + 0x44, (uint32_t)(s->jc >> 32));
++	s8gpu_wr(js + 0x50, s8gpu_shaders);             /* JS_AFFINITY_NEXT */
++	s8gpu_wr(js + 0x54, 0);
++	s8gpu_wr(js + 0x58, (8u << 16) | (3u << 12) | (3u << 8));
++	s8gpu_wr(js + 0x60, 1);                         /* JS_COMMAND_START */
++	uint32_t irq = 0;
++	/* Busy-wait the first 2 ms (frame-sized jobs), then sleep-poll. */
++	for (unsigned i = 0; i < 200; i++) {
++		irq = s8gpu_rd(S8GPU_JOB_IRQ_RAWSTAT);
++		if (irq & (done | fail)) {
++			break;
++		}
++		IODelay(10);
++	}
++	for (unsigned i = 0; !(irq & (done | fail)) && i < ms; i++) {
++		IOSleep(1);
++		irq = s8gpu_rd(S8GPU_JOB_IRQ_RAWSTAT);
++	}
++	uint64_t ns;
++	absolutetime_to_nanoseconds(mach_absolute_time() - t0, &ns);
++	s->elapsed_us = ns / 1000;
++	s->irq_rawstat = irq;
++	s->js_status = s8gpu_rd(js + 0x24);
++	s->as_fault = s8gpu_rd(S8GPU_AS0 + 0x1c);
++	s->as_fault_addr = s8gpu_rd(S8GPU_AS0 + 0x20) | (uint64_t)s8gpu_rd(S8GPU_AS0 + 0x24) << 32;
++	if (!(irq & (done | fail))) {
++		s8gpu_wr(js + 0x60, 3);                 /* JS_COMMAND_HARD_STOP */
++		s8gpu_wait(S8GPU_JOB_IRQ_RAWSTAT, done | fail, done | fail, 100000);
++		s->result = 2;
++	} else {
++		s->result = (irq & fail) ? 1 : 0;
++	}
++	s8gpu_wr(S8GPU_JOB_IRQ_CLEAR, done | fail);
++	s8gpu_wr(0x2004, 0xffffffffu);                  /* MMU_IRQ_CLEAR */
++	s8gpu_user_jobs++;
++	if (s->result != 0 && s8gpu_user_faults++ < 16) {
++		IOLog("S8 MALI: slot %u job 0x%llx result %u js 0x%x irq 0x%x as fault 0x%x at 0x%llx\n",
++		    s->slot, s->jc, s->result, s->js_status, irq, s->as_fault, s->as_fault_addr);
++	}
++	return 0;
++}
++
++extern "C" int
++s8gpu_user_ioctl(int client, unsigned long cmd, void *data)
++{
++	if (s8gpu_lock == NULL) {
++		return ENODEV;
++	}
++	int err = 0;
++	IOLockLock(s8gpu_lock);
++	switch (cmd) {
++	case S8MALI_INFO: {
++		struct s8mali_info *i = (struct s8mali_info *)data;
++		i->gpu_id = s8gpu_rd(0x000);
++		i->shader_present = s8gpu_shaders;
++		i->tiler_features = s8gpu_rd(0x00c);
++		i->ready = s8gpu_ready;
++		i->heap_base = S8GPU_HEAP_PA;
++		i->heap_size = S8GPU_HEAP_SIZE;
++		i->heap_free = s8gpu_heap_free_bytes();
++		break;
++	}
++	case S8MALI_ALLOC:
++		err = s8gpu_ready ? s8gpu_user_alloc(client, (struct s8mali_alloc *)data) : ENODEV;
++		break;
++	case S8MALI_FREE: {
++		uint64_t va = ((struct s8mali_free *)data)->gpu_va;
++		err = ENOENT;
++		for (unsigned i = 0; i < S8GPU_ALLOCS; i++) {
++			if (s8gpu_alloc[i].client == client && s8gpu_alloc[i].pa == va) {
++				s8gpu_free_index(i);
++				err = 0;
++				break;
++			}
++		}
++		break;
++	}
++	case S8MALI_SUBMIT:
++		if (s8gpu_ready) {
++			err = s8gpu_user_submit((struct s8mali_submit *)data);
++		} else {
++			((struct s8mali_submit *)data)->result = 3;
++		}
++		break;
++	case S8MALI_LOG: {
++		struct s8mali_log *l = (struct s8mali_log *)data;
++		l->text[sizeof(l->text) - 1] = 0;
++		IOLog("S8 MALI| %s\n", l->text);
++		break;
++	}
++	default:
++		err = ENOTTY;
++	}
++	IOLockUnlock(s8gpu_lock);
++	return err;
++}
++
++extern "C" void
++s8gpu_user_close(int client)
++{
++	if (s8gpu_lock == NULL) {
++		return;
++	}
++	IOLockLock(s8gpu_lock);
++	unsigned n = 0;
++	for (unsigned i = 0; i < S8GPU_ALLOCS; i++) {
++		if (s8gpu_alloc[i].client == client) {
++			s8gpu_free_index(i);
++			n++;
++		}
++	}
++	IOLockUnlock(s8gpu_lock);
++	if (n != 0) {
++		IOLog("S8 MALI: client %d closed, %u allocations freed (%u jobs so far)\n", client, n, s8gpu_user_jobs);
++	}
++}
 +#endif
 +
  static uint32_t sweet_fb_swaps_logged;
  static uint64_t sweet_fb_swap_count;
  
-@@ -318,7 +1361,19 @@ AppleCLCD::swap(const uint8_t *rec)
+@@ -318,7 +1685,19 @@ AppleCLCD::swap(const uint8_t *rec)
  	IOLockLock(fLock);
  	memcpy(fPending, rec, SWEET_FB_SWAP_REC_SIZE);
  	fDirty = true;
@@ -2115,7 +2741,7 @@ index 356ff51..3aa4c2e 100644
  	if ((++sweet_fb_swap_count % 1000) == 0) {
  		IOLog("SWEET FB: %llu swaps\n", sweet_fb_swap_count);
  	}
-@@ -328,6 +1383,13 @@ void
+@@ -328,6 +1707,13 @@ void
  AppleCLCD::present(const uint8_t *rec)
  {
  	uint32_t mask = get32(rec, 0x104);
@@ -2129,7 +2755,7 @@ index 356ff51..3aa4c2e 100644
  
  
  	if (!fConsolePaused) {
-@@ -369,6 +1431,50 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -369,6 +1755,50 @@ AppleCLCD::present(const uint8_t *rec)
  		}
  		uintptr_t src = s->kernelAddress();
  		uint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;
@@ -2180,7 +2806,7 @@ index 356ff51..3aa4c2e 100644
  		if (w <= 0 || h <= 0) {
  			w = (int32_t)s->width;
  			h = (int32_t)s->height;
-@@ -410,6 +1516,19 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -410,6 +1840,19 @@ AppleCLCD::present(const uint8_t *rec)
  		    s->memory == NULL || last > s->memory->getLength()) {
  			src = 0;
  		}
@@ -2200,7 +2826,7 @@ index 356ff51..3aa4c2e 100644
  		if (src != 0 && bpe == 4) {
  			for (int32_t y = 0; y < h; y++) {
  				memcpy((void *)(fPixels + (uint64_t)(dy + y) * fRowBytes + (uint64_t)dx * 4),
-@@ -419,6 +1538,11 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -419,6 +1862,11 @@ AppleCLCD::present(const uint8_t *rec)
  		}
  		s->release();
  	}
@@ -2212,7 +2838,7 @@ index 356ff51..3aa4c2e 100644
  }
  
  bool
-diff --git iokit/KernelConfigTables.cpp iokit/KernelConfigTables.cpp
+diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
 index 9987f5a..9a35982 100644
 --- a/iokit/KernelConfigTables.cpp
 +++ b/iokit/KernelConfigTables.cpp
@@ -2243,7 +2869,7 @@ index 9987f5a..9a35982 100644
      "   {"
      "     'IOClass'         = SweetBattery;"
      "     'IOProviderClass' = IOResources;"
-diff --git iokit/bsddev/IOKitBSDInit.cpp iokit/bsddev/IOKitBSDInit.cpp
+diff --git a/iokit/bsddev/IOKitBSDInit.cpp b/iokit/bsddev/IOKitBSDInit.cpp
 index 63a3c37..b6ba676 100644
 --- a/iokit/bsddev/IOKitBSDInit.cpp
 +++ b/iokit/bsddev/IOKitBSDInit.cpp
@@ -2259,7 +2885,7 @@ index 63a3c37..b6ba676 100644
  //
  	if (strcmp(rdBootVar, "ufsroot0") == 0) {
  		extern int sweet_ufs_rootdev(dev_t *dev);
-diff --git osfmk/arm64/arm_vm_init.c osfmk/arm64/arm_vm_init.c
+diff --git a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
 index fbc383d..57e6096 100644
 --- a/osfmk/arm64/arm_vm_init.c
 +++ b/osfmk/arm64/arm_vm_init.c
@@ -2291,7 +2917,7 @@ index fbc383d..57e6096 100644
  	va_l1_end = (va_l1_end + 0x00000000007FFFFFULL) & 0xFFFFFFFFFF800000ULL;
  
  	cpu_l1_tte = cpu_tte + ((va_l1 & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT);
-diff --git osfmk/arm64/machine_routines.c osfmk/arm64/machine_routines.c
+diff --git a/osfmk/arm64/machine_routines.c b/osfmk/arm64/machine_routines.c
 index c5b33bd..1ebc543 100644
 --- a/osfmk/arm64/machine_routines.c
 +++ b/osfmk/arm64/machine_routines.c
@@ -2357,7 +2983,7 @@ index c5b33bd..1ebc543 100644
  }
  
  void
-diff --git osfmk/arm64/start.s osfmk/arm64/start.s
+diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
 index 7da26d2..1606c91 100644
 --- a/osfmk/arm64/start.s
 +++ b/osfmk/arm64/start.s
@@ -2476,7 +3102,7 @@ index 7da26d2..1606c91 100644
  	madd	x12, x8, x13, x4
  	add	x12, x12, x10, lsl #3
  	mov	w14, #-1
-diff --git osfmk/arm64/sweet_early.c osfmk/arm64/sweet_early.c
+diff --git a/osfmk/arm64/sweet_early.c b/osfmk/arm64/sweet_early.c
 index dcdbcf6..d4f3ca3 100644
 --- a/osfmk/arm64/sweet_early.c
 +++ b/osfmk/arm64/sweet_early.c
@@ -2514,7 +3140,7 @@ index dcdbcf6..d4f3ca3 100644
  		a5_clear_row();
  		if (c == '\n') {
  			return;
-diff --git osfmk/console/serial_console.c osfmk/console/serial_console.c
+diff --git a/osfmk/console/serial_console.c b/osfmk/console/serial_console.c
 index 2ab4334..f2489bd 100644
 --- a/osfmk/console/serial_console.c
 +++ b/osfmk/console/serial_console.c
@@ -2536,7 +3162,7 @@ index 2ab4334..f2489bd 100644
  	sweet_log_append(c, size);
  #endif
  #if defined(ARM64_BOARD_CONFIG_A5XELTE)
-diff --git osfmk/vm/vm_resident.c osfmk/vm/vm_resident.c
+diff --git a/osfmk/vm/vm_resident.c b/osfmk/vm/vm_resident.c
 index 6394730..de4a6a7 100644
 --- a/osfmk/vm/vm_resident.c
 +++ b/osfmk/vm/vm_resident.c
@@ -2582,7 +3208,7 @@ index 6394730..de4a6a7 100644
  
  	if (!vm_himemory_mode) {
  		do {
-diff --git pexpert/arm/pe_fiq.c pexpert/arm/pe_fiq.c
+diff --git a/pexpert/arm/pe_fiq.c b/pexpert/arm/pe_fiq.c
 index d3f8767..0207f32 100644
 --- a/pexpert/arm/pe_fiq.c
 +++ b/pexpert/arm/pe_fiq.c
@@ -2600,7 +3226,7 @@ index d3f8767..0207f32 100644
  	a5_gic_write32(a5_gicc_base, 0x004, 0xff); /* GICC_PMR */
  	a5_gic_write32(a5_gicc_base, 0x008, 0);    /* GICC_BPR */
  	a5_gic_write32(a5_gicc_base, 0x000,
-diff --git pexpert/arm/pe_serial.c pexpert/arm/pe_serial.c
+diff --git a/pexpert/arm/pe_serial.c b/pexpert/arm/pe_serial.c
 index ed7dccd..1966bdd 100644
 --- a/pexpert/arm/pe_serial.c
 +++ b/pexpert/arm/pe_serial.c
@@ -2684,7 +3310,7 @@ index ed7dccd..1966bdd 100644
  	sweet_early_mark(18, "fbcon mapping returned");
  	if (fbcon_base != NULL) {
  		register_serial_functions(&sweet_fbcon_serial_functions);
-diff --git pexpert/pexpert/arm64/A5XELTE.h pexpert/pexpert/arm64/A5XELTE.h
+diff --git a/pexpert/pexpert/arm64/A5XELTE.h b/pexpert/pexpert/arm64/A5XELTE.h
 index e6718d4..b6f812d 100644
 --- a/pexpert/pexpert/arm64/A5XELTE.h
 +++ b/pexpert/pexpert/arm64/A5XELTE.h

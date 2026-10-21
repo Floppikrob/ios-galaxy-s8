@@ -29,12 +29,19 @@ extern "C" void clean_dcache(vm_offset_t addr, unsigned count, int phys);
 #define S8GPU_JS0               0x1800
 #define S8GPU_AS0               0x2400
 #define S8GPU_PT_PA             (S8_BLIT_BASE_PA + 0x10000)     /* page-table pool */
-#define S8GPU_PT_PAGES          96
+#define S8GPU_PT_PAGES          512                             /* 2 MiB pool */
 #define S8GPU_SLOTS             4
 #define S8GPU_SLOT_VA           0x100000000ULL
 #define S8GPU_SLOT_SIZE         0x2000000ULL                    /* 32 MiB */
 #define S8GPU_PANEL_PA          0xcc000000ULL
 #define S8GPU_PANEL_SIZE        (5760ULL * 2960)
+/* GPU memory for iOS programs (/dev/s8mali): free RAM of the high bank,
+ * mapped GPU VA = PA. */
+#define S8GPU_HEAP_PA           0x8b0000000ULL
+#define S8GPU_HEAP_SIZE         0x20000000ULL                   /* 512 MiB */
+#define S8GPU_HEAP_UNIT         0x10000ULL                      /* 64 KiB */
+#define S8GPU_HEAP_UNITS        (S8GPU_HEAP_SIZE / S8GPU_HEAP_UNIT)
+#define S8GPU_ALLOCS            256
 
 static volatile uint32_t *s8gpu_regs;
 static volatile uint32_t *s8gpu_blob;
@@ -49,6 +56,14 @@ static struct {
 	uint64_t len;
 } s8gpu_slot[S8GPU_SLOTS];
 static unsigned s8gpu_slot_next;
+static IOLock *s8gpu_lock;                      /* one job chain at a time */
+static uint8_t s8gpu_heap_used[S8GPU_HEAP_UNITS];
+static struct {
+	IOMemoryMap *map;                       /* the owner's mapping */
+	uint64_t pa, len;
+	int client;                             /* /dev/s8mali minor, -1 free */
+} s8gpu_alloc[S8GPU_ALLOCS];
+static uint32_t s8gpu_user_jobs, s8gpu_user_faults;
 
 static inline uint32_t
 s8gpu_rd(uint32_t off)
@@ -151,6 +166,10 @@ s8gpu_init(void)
 		IOLog("S8 GPU: no Mali-G71 (GPU_ID 0x%x)\n", s8gpu_regs ? s8gpu_rd(0x000) : 0);
 		return;
 	}
+	s8gpu_lock = IOLockAlloc();
+	for (unsigned i = 0; i < S8GPU_ALLOCS; i++) {
+		s8gpu_alloc[i].client = -1;
+	}
 	s8gpu_wr(0x024, 0xffffffffu);                   /* GPU_IRQ_CLEAR */
 	s8gpu_wr(0x030, 1);                             /* SOFT_RESET */
 	bool reset = s8gpu_wait(0x020, 1u << 8, 1u << 8, 100000);
@@ -231,7 +250,7 @@ s8gpu_surface_va(IOMemoryDescriptor *md, uint32_t id, uint64_t off, uint64_t len
 
 /* One frame: surface (w x h, bpr) stretched over the panel by the GPU. */
 static bool
-s8gpu_present(IOMemoryDescriptor *md, uint32_t id, uint64_t off, uintptr_t kva,
+s8gpu_present_locked(IOMemoryDescriptor *md, uint32_t id, uint64_t off, uintptr_t kva,
     uint32_t bpr, uint32_t w, uint32_t h)
 {
 	if (!s8gpu_ready || (bpr & 15) != 0 || md == NULL) {
@@ -299,4 +318,243 @@ s8gpu_present(IOMemoryDescriptor *md, uint32_t id, uint64_t off, uintptr_t kva,
 		IOLog("S8 GPU: GPU present off after %u errors; CPU present\n", s8gpu_errors);
 	}
 	return false;
+}
+
+static bool
+s8gpu_present(IOMemoryDescriptor *md, uint32_t id, uint64_t off, uintptr_t kva,
+    uint32_t bpr, uint32_t w, uint32_t h)
+{
+	if (!s8gpu_ready || s8gpu_lock == NULL) {
+		return false;
+	}
+	IOLockLock(s8gpu_lock);
+	bool ok = s8gpu_present_locked(md, id, off, kva, bpr, w, h);
+	IOLockUnlock(s8gpu_lock);
+	return ok;
+}
+
+/*
+ * /dev/s8mali (tools/dreamlte/s8mali_ioctl.h): iOS programs get GPU memory
+ * and run job chains. The character device itself is bsd/dev/dreamlte_s8.c;
+ * it calls these with the ioctl argument already copied in.
+ */
+static void
+s8gpu_free_index(unsigned i)
+{
+	uint64_t first = (s8gpu_alloc[i].pa - S8GPU_HEAP_PA) / S8GPU_HEAP_UNIT;
+	for (uint64_t u = 0; u < s8gpu_alloc[i].len / S8GPU_HEAP_UNIT; u++) {
+		s8gpu_heap_used[first + u] = 0;
+	}
+	if (s8gpu_alloc[i].map != NULL) {
+		s8gpu_alloc[i].map->release();  /* unmaps it from the owner */
+	}
+	s8gpu_alloc[i].map = NULL;
+	s8gpu_alloc[i].client = -1;
+}
+
+static uint64_t
+s8gpu_heap_free_bytes(void)
+{
+	uint64_t n = 0;
+	for (unsigned u = 0; u < S8GPU_HEAP_UNITS; u++) {
+		n += s8gpu_heap_used[u] == 0;
+	}
+	return n * S8GPU_HEAP_UNIT;
+}
+
+static int
+s8gpu_user_alloc(int client, struct s8mali_alloc *a)
+{
+	uint64_t len = (a->size + S8GPU_HEAP_UNIT - 1) & ~(S8GPU_HEAP_UNIT - 1);
+	if (len == 0 || len > S8GPU_HEAP_SIZE) {
+		return EINVAL;
+	}
+	unsigned slot = S8GPU_ALLOCS;
+	for (unsigned i = 0; i < S8GPU_ALLOCS; i++) {
+		if (s8gpu_alloc[i].client < 0) {
+			slot = i;
+			break;
+		}
+	}
+	if (slot == S8GPU_ALLOCS) {
+		return ENOMEM;
+	}
+	uint64_t units = len / S8GPU_HEAP_UNIT, run = 0, first = 0;
+	for (uint64_t u = 0; u < S8GPU_HEAP_UNITS && run < units; u++) {
+		if (s8gpu_heap_used[u]) {
+			run = 0;
+		} else if (run++ == 0) {
+			first = u;
+		}
+	}
+	if (run < units) {
+		return ENOMEM;
+	}
+	uint64_t pa = S8GPU_HEAP_PA + first * S8GPU_HEAP_UNIT;
+	IOMemoryDescriptor *md = IOMemoryDescriptor::withAddressRange(pa, len,
+	    kIODirectionInOut | kIOMemoryTypePhysical64, TASK_NULL);
+	if (md == NULL) {
+		return ENOMEM;
+	}
+	/* Zero it through a temporary kernel mapping (no stale data). */
+	IOMemoryMap *km = md->createMappingInTask(kernel_task, 0, kIOMapAnywhere | kIOMapWriteCombineCache);
+	if (km == NULL) {
+		md->release();
+		return ENOMEM;
+	}
+	volatile uint64_t *z = (volatile uint64_t *)km->getVirtualAddress();
+	for (uint64_t o = 0; o < len / 8; o++) {
+		z[o] = 0;
+	}
+	km->release();
+	IOMemoryMap *um = md->createMappingInTask(current_task(), 0, kIOMapAnywhere | kIOMapWriteCombineCache);
+	md->release();                          /* the mapping keeps it */
+	if (um == NULL) {
+		return ENOMEM;
+	}
+	if (!s8gpu_map(pa, pa, len)) {
+		um->release();
+		return ENOMEM;
+	}
+	s8gpu_flush_tlb();
+	for (uint64_t u = 0; u < units; u++) {
+		s8gpu_heap_used[first + u] = 1;
+	}
+	s8gpu_alloc[slot].map = um;
+	s8gpu_alloc[slot].pa = pa;
+	s8gpu_alloc[slot].len = len;
+	s8gpu_alloc[slot].client = client;
+	a->size = len;
+	a->gpu_va = pa;
+	a->user_va = um->getAddress();
+	return 0;
+}
+
+static int
+s8gpu_user_submit(struct s8mali_submit *s)
+{
+	if (s->slot > 2) {
+		return EINVAL;
+	}
+	unsigned ms = s->timeout_ms == 0 ? 1000 : (s->timeout_ms > 5000 ? 5000 : s->timeout_ms);
+	uint32_t js = S8GPU_JS0 + 0x80 * s->slot;
+	uint32_t done = 1u << s->slot, fail = 1u << (16 + s->slot);
+	uint64_t t0 = mach_absolute_time();
+	s8gpu_wr(S8GPU_JOB_IRQ_CLEAR, done | fail);
+	s8gpu_wr(js + 0x40, (uint32_t)s->jc);           /* JS_HEAD_NEXT */
+	s8gpu_wr(js + 0x44, (uint32_t)(s->jc >> 32));
+	s8gpu_wr(js + 0x50, s8gpu_shaders);             /* JS_AFFINITY_NEXT */
+	s8gpu_wr(js + 0x54, 0);
+	s8gpu_wr(js + 0x58, (8u << 16) | (3u << 12) | (3u << 8));
+	s8gpu_wr(js + 0x60, 1);                         /* JS_COMMAND_START */
+	uint32_t irq = 0;
+	/* Busy-wait the first 2 ms (frame-sized jobs), then sleep-poll. */
+	for (unsigned i = 0; i < 200; i++) {
+		irq = s8gpu_rd(S8GPU_JOB_IRQ_RAWSTAT);
+		if (irq & (done | fail)) {
+			break;
+		}
+		IODelay(10);
+	}
+	for (unsigned i = 0; !(irq & (done | fail)) && i < ms; i++) {
+		IOSleep(1);
+		irq = s8gpu_rd(S8GPU_JOB_IRQ_RAWSTAT);
+	}
+	uint64_t ns;
+	absolutetime_to_nanoseconds(mach_absolute_time() - t0, &ns);
+	s->elapsed_us = ns / 1000;
+	s->irq_rawstat = irq;
+	s->js_status = s8gpu_rd(js + 0x24);
+	s->as_fault = s8gpu_rd(S8GPU_AS0 + 0x1c);
+	s->as_fault_addr = s8gpu_rd(S8GPU_AS0 + 0x20) | (uint64_t)s8gpu_rd(S8GPU_AS0 + 0x24) << 32;
+	if (!(irq & (done | fail))) {
+		s8gpu_wr(js + 0x60, 3);                 /* JS_COMMAND_HARD_STOP */
+		s8gpu_wait(S8GPU_JOB_IRQ_RAWSTAT, done | fail, done | fail, 100000);
+		s->result = 2;
+	} else {
+		s->result = (irq & fail) ? 1 : 0;
+	}
+	s8gpu_wr(S8GPU_JOB_IRQ_CLEAR, done | fail);
+	s8gpu_wr(0x2004, 0xffffffffu);                  /* MMU_IRQ_CLEAR */
+	s8gpu_user_jobs++;
+	if (s->result != 0 && s8gpu_user_faults++ < 16) {
+		IOLog("S8 MALI: slot %u job 0x%llx result %u js 0x%x irq 0x%x as fault 0x%x at 0x%llx\n",
+		    s->slot, s->jc, s->result, s->js_status, irq, s->as_fault, s->as_fault_addr);
+	}
+	return 0;
+}
+
+extern "C" int
+s8gpu_user_ioctl(int client, unsigned long cmd, void *data)
+{
+	if (s8gpu_lock == NULL) {
+		return ENODEV;
+	}
+	int err = 0;
+	IOLockLock(s8gpu_lock);
+	switch (cmd) {
+	case S8MALI_INFO: {
+		struct s8mali_info *i = (struct s8mali_info *)data;
+		i->gpu_id = s8gpu_rd(0x000);
+		i->shader_present = s8gpu_shaders;
+		i->tiler_features = s8gpu_rd(0x00c);
+		i->ready = s8gpu_ready;
+		i->heap_base = S8GPU_HEAP_PA;
+		i->heap_size = S8GPU_HEAP_SIZE;
+		i->heap_free = s8gpu_heap_free_bytes();
+		break;
+	}
+	case S8MALI_ALLOC:
+		err = s8gpu_ready ? s8gpu_user_alloc(client, (struct s8mali_alloc *)data) : ENODEV;
+		break;
+	case S8MALI_FREE: {
+		uint64_t va = ((struct s8mali_free *)data)->gpu_va;
+		err = ENOENT;
+		for (unsigned i = 0; i < S8GPU_ALLOCS; i++) {
+			if (s8gpu_alloc[i].client == client && s8gpu_alloc[i].pa == va) {
+				s8gpu_free_index(i);
+				err = 0;
+				break;
+			}
+		}
+		break;
+	}
+	case S8MALI_SUBMIT:
+		if (s8gpu_ready) {
+			err = s8gpu_user_submit((struct s8mali_submit *)data);
+		} else {
+			((struct s8mali_submit *)data)->result = 3;
+		}
+		break;
+	case S8MALI_LOG: {
+		struct s8mali_log *l = (struct s8mali_log *)data;
+		l->text[sizeof(l->text) - 1] = 0;
+		IOLog("S8 MALI| %s\n", l->text);
+		break;
+	}
+	default:
+		err = ENOTTY;
+	}
+	IOLockUnlock(s8gpu_lock);
+	return err;
+}
+
+extern "C" void
+s8gpu_user_close(int client)
+{
+	if (s8gpu_lock == NULL) {
+		return;
+	}
+	IOLockLock(s8gpu_lock);
+	unsigned n = 0;
+	for (unsigned i = 0; i < S8GPU_ALLOCS; i++) {
+		if (s8gpu_alloc[i].client == client) {
+			s8gpu_free_index(i);
+			n++;
+		}
+	}
+	IOLockUnlock(s8gpu_lock);
+	if (n != 0) {
+		IOLog("S8 MALI: client %d closed, %u allocations freed (%u jobs so far)\n", client, n, s8gpu_user_jobs);
+	}
 }

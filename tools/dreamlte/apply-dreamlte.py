@@ -796,6 +796,7 @@ edit('iokit/Kernel/arm/SweetFramebuffer.cpp', [
     ('static uint32_t sweet_fb_swaps_logged;\n',
      '#if defined(DREAMLTE)\n' +
      (Path(__file__).parent / 's8_mali_blit.h').read_text() + '\n' +
+     (Path(__file__).parent / 's8mali_ioctl.h').read_text() + '\n' +
      (Path(__file__).parent / 's8_gpu_present.inc').read_text() +
      '#endif\n\nstatic uint32_t sweet_fb_swaps_logged;\n', 1),
     ('bool\nAppleCLCD::start(IOService *provider)\n{\n#if defined(DREAMLTE)\n\tsweet_fb_echo_loader();\n#endif\n',
@@ -1117,4 +1118,40 @@ edit('bsd/dev/a5xelte_keys.c', [
      '\t\t\t\tkeys_t bit = (keys_t)(1u << pins[key]);\n', 1),
     ('\tint enabled = 1;\n\tif (a5_keys_started) {',
      '\tint enabled = A5_KEYS_DEFAULT;\n\tif (a5_keys_started) {', 1),
+])
+
+# /dev/s8mali and the boot overlay (tools/dreamlte/dreamlte_s8.c), run from
+# bsd_init right before launchd. s8_kernel_mkdir lets the overlay create
+# directories with the kernel's credentials.
+(tree / 'bsd/dev/dreamlte_s8.c').write_text((Path(__file__).parent / 'dreamlte_s8.c').read_text())
+print('wrote bsd/dev/dreamlte_s8.c')
+edit('bsd/conf/files', [
+    ('bsd/dev/a5xelte_keys.c\t\t\tstandard\n',
+     'bsd/dev/a5xelte_keys.c\t\t\tstandard\n'
+     'bsd/dev/dreamlte_s8.c\t\t\tstandard\n', 1),
+])
+edit('bsd/vfs/vfs_syscalls.c', [
+    ('int\nmkdir(proc_t p, struct mkdir_args *uap, __unused int32_t *retval)\n',
+     '/* Galaxy S8 boot overlay (bsd/dev/dreamlte_s8.c): mkdir as the kernel. */\n'
+     'int s8_kernel_mkdir(const char *path, int mode);\n'
+     'int\n'
+     's8_kernel_mkdir(const char *path, int mode)\n'
+     '{\n'
+     '\tstruct vnode_attr va;\n'
+     '\tVATTR_INIT(&va);\n'
+     '\tVATTR_SET(&va, va_mode, mode & ACCESSPERMS);\n'
+     '\treturn mkdir1at(vfs_context_kernel(), CAST_USER_ADDR_T(path), &va, AT_FDCWD, UIO_SYSSPACE);\n'
+     '}\n'
+     '\n'
+     'int\nmkdir(proc_t p, struct mkdir_args *uap, __unused int32_t *retval)\n', 1),
+])
+edit('bsd/kern/bsd_init.c', [
+    ('\tload_init_program(p);\n',
+     '#if defined(ARM64_BOARD_CONFIG_A5XELTE)\n'
+     '\t{\n'
+     '\t\textern void dreamlte_bsd_late(void);\n'
+     '\t\tdreamlte_bsd_late();\n'
+     '\t}\n'
+     '#endif\n'
+     '\tload_init_program(p);\n', 1),
 ])
