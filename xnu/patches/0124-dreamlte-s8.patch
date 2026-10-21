@@ -958,7 +958,7 @@ index 55d0057..dee6635 100644
  	int32_t rc = sweet_psci_cpu_on(cpu->phys_id, entry, getCPUNumber());
  	IOLog(CPU_PORT_NAME " CPU: cpu=%u PSCI CPU_ON rc=%d\n", getCPUNumber(), rc);
 diff --git iokit/Kernel/arm/SweetFramebuffer.cpp iokit/Kernel/arm/SweetFramebuffer.cpp
-index 356ff51..1b0d7cf 100644
+index 356ff51..39f474b 100644
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
 @@ -48,6 +48,7 @@ extern "C" int sweet_console_muted;     /* osfmk/console/serial_console.c */
@@ -979,12 +979,25 @@ index 356ff51..1b0d7cf 100644
  
  	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
  	void addClient(IOMobileFramebufferUserClient *client);
-@@ -153,9 +157,55 @@ public:
+@@ -153,9 +157,68 @@ public:
  
  OSDefineMetaClassAndStructors(IOMobileFramebufferUserClient, IOUserClient);
  
 +#if defined(DREAMLTE)
 +extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++
++/* The kernel has no strstr. */
++static bool
++sweet_fb_has(const char *s, const char *w)
++{
++	size_t n = strlen(w);
++	for (; *s; s++) {
++		if (strncmp(s, w, n) == 0) {
++			return true;
++		}
++	}
++	return false;
++}
 +
 +static void
 +sweet_fb_echo_loader(void)
@@ -1011,8 +1024,8 @@ index 356ff51..1b0d7cf 100644
 +		}
 +		i++;
 +		/* pmsg cells lose bits: accept any of the probes' first lines. */
-+		if (start == UINT32_MAX && (strstr(line, "DISPLAY") || strstr(line, "rail") ||
-+		    strstr(line, "GPU") || strstr(line, "MNGS"))) {
++		if (start == UINT32_MAX && (sweet_fb_has(line, "DISPLAY") || sweet_fb_has(line, "rail") ||
++		    sweet_fb_has(line, "GPU") || sweet_fb_has(line, "MNGS"))) {
 +			start = i;
 +		}
 +		if (start != UINT32_MAX) {
@@ -1035,7 +1048,7 @@ index 356ff51..1b0d7cf 100644
  	PE_Video video;
  
  	if (!IOService::start(provider)) {
-@@ -166,10 +216,10 @@ AppleCLCD::start(IOService *provider)
+@@ -166,10 +229,10 @@ AppleCLCD::start(IOService *provider)
  	/* The loader's DECON handoff scans out this physical XRGB8888 buffer.
  	 * It does not fill boot_args.Video, so PE_current_console is empty.
  	 * Keep the physical address out of the donor path. */
@@ -1050,7 +1063,7 @@ index 356ff51..1b0d7cf 100644
  #else
  	fPhys = video.v_baseAddr;
  	fWidth = (uint32_t)video.v_width;
-@@ -184,7 +234,12 @@ AppleCLCD::start(IOService *provider)
+@@ -184,7 +247,12 @@ AppleCLCD::start(IOService *provider)
  	PE_parse_boot_argn("sweetfb_native", &native, sizeof(native));
  	fLogicalW = fWidth;
  	fLogicalH = fHeight;
@@ -1064,7 +1077,7 @@ index 356ff51..1b0d7cf 100644
  	if (!native && fWidth <= SWEET_FB_LOGICAL_W && fHeight <= SWEET_FB_LOGICAL_H) {
  		fLogicalW = SWEET_FB_LOGICAL_W;
  		fLogicalH = SWEET_FB_LOGICAL_H;
-@@ -211,6 +266,11 @@ AppleCLCD::start(IOService *provider)
+@@ -211,6 +279,11 @@ AppleCLCD::start(IOService *provider)
  	uint32_t hz = 10;
  	PE_parse_boot_argn("sweetfb_hz", &hz, sizeof(hz));
  	fFlushTicks = (hz == 0 || hz >= 60) ? 1 : 60 / hz;
@@ -1076,7 +1089,7 @@ index 356ff51..1b0d7cf 100644
  	fVsync->setTimeoutUS(SWEET_FB_VSYNC_US);
  
  	setProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");
-@@ -302,6 +362,84 @@ get32(const uint8_t *p, uint32_t off)
+@@ -302,6 +375,84 @@ get32(const uint8_t *p, uint32_t off)
  	return v;
  }
  
@@ -1161,7 +1174,7 @@ index 356ff51..1b0d7cf 100644
  static uint32_t sweet_fb_swaps_logged;
  static uint64_t sweet_fb_swap_count;
  
-@@ -318,7 +456,19 @@ AppleCLCD::swap(const uint8_t *rec)
+@@ -318,7 +469,19 @@ AppleCLCD::swap(const uint8_t *rec)
  	IOLockLock(fLock);
  	memcpy(fPending, rec, SWEET_FB_SWAP_REC_SIZE);
  	fDirty = true;
@@ -1181,7 +1194,7 @@ index 356ff51..1b0d7cf 100644
  	if ((++sweet_fb_swap_count % 1000) == 0) {
  		IOLog("SWEET FB: %llu swaps\n", sweet_fb_swap_count);
  	}
-@@ -328,6 +478,13 @@ void
+@@ -328,6 +491,13 @@ void
  AppleCLCD::present(const uint8_t *rec)
  {
  	uint32_t mask = get32(rec, 0x104);
@@ -1195,7 +1208,7 @@ index 356ff51..1b0d7cf 100644
  
  
  	if (!fConsolePaused) {
-@@ -419,6 +576,11 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -419,6 +589,11 @@ AppleCLCD::present(const uint8_t *rec)
  		}
  		s->release();
  	}
