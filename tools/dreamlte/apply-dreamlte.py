@@ -1155,3 +1155,20 @@ edit('bsd/kern/bsd_init.c', [
      '#endif\n'
      '\tload_init_program(p);\n', 1),
 ])
+
+# Boot 44: the overlay found the root read-only (EROFS) before launchd;
+# launchd only remounts it read-write later. As on SWEET (patch 0031),
+# boot-arg rootrw=1 mounts the journaled HFS+ root read-write from the start.
+edit('bsd/vfs/vfs_subr.c', [
+    ('\t\tmp = vfs_rootmountalloc_internal(vfsp, "root_device");\n\t\tmp->mnt_devvp = rootvp;\n',
+     '\t\tmp = vfs_rootmountalloc_internal(vfsp, "root_device");\n\t\tmp->mnt_devvp = rootvp;\n'
+     '#if defined(ARM64_BOARD_CONFIG_A5XELTE)\n'
+     '\t\t{\n'
+     '\t\t\textern boolean_t PE_parse_boot_argn(const char *, void *, int);\n'
+     '\t\t\tuint32_t rootrw = 0;\n'
+     '\t\t\tif (PE_parse_boot_argn("rootrw", &rootrw, sizeof(rootrw)) && rootrw) {\n'
+     '\t\t\t\tmp->mnt_flag &= ~MNT_RDONLY;\n'
+     '\t\t\t}\n'
+     '\t\t}\n'
+     '#endif\n', 1),
+])
