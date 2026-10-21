@@ -373,3 +373,16 @@ the kernel, must get GPU memory and run Mali jobs.
   /System/Library/Extensions (AGXMetalA11 on a real A11). Plan: the kernel
   publishes a Mali accelerator entry naming our own plugin bundle, which
   implements MTLDevice on /dev/s8mali.
+
+## Boot 45 result and boot 46 (prepared, not yet run)
+
+- Boot 45 (root mounted read-write from the start): the screen stopped at
+  the kernel banner; pmsg ended at `JUMP TO XNU` and the USERDATA log
+  ring still held boot 44 (byte-identical), so the kernel wrote nothing.
+  Cause not proven; the read-write mountroot was the only functional
+  change, so it is reverted.
+- Boot 46 (CI run 39672025527, commit ff3f28f): root mounts read-only as in
+  boot 44; a kernel thread waits until launchd has remounted it writable
+  and then installs the overlay (`S8 OVERLAY: root writable after N s`).
+  `launchd.s8` therefore runs from the boot after that: boot 46 twice.
+  sha256 13d3f772bbd7f3c4bf203825a5b9fe253d5c57d1ffec2c2ca82d551d7a20ee93.
