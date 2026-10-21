@@ -201,3 +201,24 @@ TRANSCFG legacy. A WRITE_VALUE job (v6 header type 2, Immediate 32) on slot 1
 stores 0xCAFEBABE: job IRQ 0x2, no MMU fault, header exception 0x1, the CPU
 reads 0xcafebabe back. Next: a kernel interface for userspace (panfrost
 ioctls: BO create/mmap, submit, wait) and Mesa panfrost for iOS.
+
+## GPU from userspace, Wi-Fi firmware running, hands-free test boots (2026-10-21)
+
+- **0136 S8GPU** (boot-arg s8gpu=4): IOKit service + user client answering
+  panfrost DRM requests (GET_PARAM, CREATE_BO, MMAP_BO, GET_BO_OFFSET, SUBMIT
+  (synchronous), WAIT_BO, MADVISE); per-client GPU address space (AS 1-7),
+  wired buffers mapped write-combined into the client. tools/dreamlte/
+  s8gpu-test.c (a launchd job in the root) creates two buffers, submits a
+  WRITE_VALUE job: "GPU WROTE IT FROM USERSPACE".
+- 0130 also marks binaries in /usr/local/bin as platform binaries (launchd
+  panics on a non-platform binary among its system jobs).
+- `s8int=667000` (INT bus at its top level while MIF stays low) correlates
+  with SHA-256 data aborts in code-signing page checks: left out.
+- **0126 Wi-Fi step 6**: EROM scan (ChipCommon, 2x D11, ARM CR4 rev 13, PCIe2
+  rev 23, ...), CR4 halted, TCM 1344 KiB, firmware + NVRAM written at
+  rambase 0x170000 through BAR2, ARM released: the firmware publishes its
+  shared area (0x1fc8b4, flags 0x30040007: msgbuf protocol 7). Firmware and
+  NVRAM come from a local header (not in this repository).
+- **0129 s8autotwrp=N**: N seconds after boot the kernel writes the log out
+  and reboots into TWRP (PMU INFORM2 0x12345678, INFORM3 0x12345674, as
+  Samsung's sec_reboot.c, then SWRESET): test boots need no button presses.

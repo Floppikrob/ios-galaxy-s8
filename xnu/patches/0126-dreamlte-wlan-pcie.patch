@@ -1,14 +1,13 @@
-From a44f013dfb5edced23ad6fa0339511207a9e0faa Mon Sep 17 00:00:00 2001
+From 421fe27e2e48c4031a1dbc2ba22361aff1b420aa Mon Sep 17 00:00:00 2001
 From: local <local@s8>
-Date: Tue, 20 Oct 2026 23:57:56 +0300
-Subject: [PATCH] dreamlte: Wi-Fi step 1, Exynos 8895 PCIe and BCM4361 chip id
- (s8wlan=N)
+Date: Wed, 21 Oct 2026 09:45:35 +0300
+Subject: [PATCH] 0126-dreamlte-wlan-pcie.patch
 
 ---
  bsd/conf/files      |   1 +
- bsd/dev/s8_wlan.c   | 541 ++++++++++++++++++++++++++++++++++++++++++++
+ bsd/dev/s8_wlan.c   | 808 ++++++++++++++++++++++++++++++++++++++++++++
  bsd/dev/sweet_ufs.c |   9 +
- 3 files changed, 551 insertions(+)
+ 3 files changed, 818 insertions(+)
  create mode 100644 bsd/dev/s8_wlan.c
 
 diff --git a/bsd/conf/files b/bsd/conf/files
@@ -25,10 +24,10 @@ index 851addd..6824ddf 100644
  bsd/dev/a5xelte_touch.c			standard
 diff --git a/bsd/dev/s8_wlan.c b/bsd/dev/s8_wlan.c
 new file mode 100644
-index 0000000..61a85ef
+index 0000000..360c886
 --- /dev/null
 +++ b/bsd/dev/s8_wlan.c
-@@ -0,0 +1,541 @@
+@@ -0,0 +1,808 @@
 +/* SPDX-License-Identifier: GPL-2.0-only
 + *
 + * Galaxy S8 (dreamlte) Wi-Fi: Exynos 8895 PCIe channel 0 and the Broadcom
@@ -47,6 +46,13 @@ index 0000000..61a85ef
 + *   5  writes  the endpoint's BARs (BAR2 0x11800000, BAR0 bus 0x11c00000 at
 + *              CPU 0x11b00000 through iATU 2), memory + bus master on, and
 + *              reads ChipCommon's chip id through BAR0 (0x4361 expected)
++ *   6  writes  the firmware: cores from the EROM, the ARM CR4 halted and the
++ *              D11 cores disabled (brcmf_chip_cr4_set_passive), TCM size from
++ *              the CR4 banks, firmware at rambase 0x170000 and NVRAM at the
++ *              end of RAM through BAR2, the reset vector at TCM 0, the ARM
++ *              released; then waits for the firmware's shared-RAM address in
++ *              the last word of RAM. Firmware and NVRAM come from a local
++ *              s8_wlan_fw.h (Broadcom's binaries are not in this repository).
 + * Everything is polled, every step is logged before its first access.
 + */
 +#include <sys/param.h>
@@ -57,6 +63,10 @@ index 0000000..61a85ef
 +#include <pexpert/pexpert.h>
 +#include <libkern/libkern.h>
 +#include <pexpert/arm64/board_config.h>
++#if __has_include("s8_wlan_fw.h")
++#include "s8_wlan_fw.h"
++#define HAVE_WLAN_FW 1
++#endif
 +
 +#if defined(ARM64_BOARD_CONFIG_A5XELTE) && defined(DREAMLTE)
 +
@@ -496,11 +506,267 @@ index 0000000..61a85ef
 +	return (chipid & 0xffff) == 0x4361 ? 0 : ENODEV;
 +}
 +
++/* ---- the chip's backplane through the 4 KiB BAR0 window (brcmf_pcie_buscore_read32) ---- */
++static uint32_t bar0_window = ~0u;
++
++static uint32_t
++bp_rd(uint32_t addr)
++{
++	if ((addr & ~0xfffu) != bar0_window) {
++		bar0_window = addr & ~0xfffu;
++		ep_cfg_wr(BCMA_PCI_BAR0_WINDOW, bar0_window);
++	}
++	return rd(mem, (BAR0_CPU - MEM_PA) + (addr & 0xfffu));
++}
++
++static void
++bp_wr(uint32_t addr, uint32_t v)
++{
++	if ((addr & ~0xfffu) != bar0_window) {
++		bar0_window = addr & ~0xfffu;
++		ep_cfg_wr(BCMA_PCI_BAR0_WINDOW, bar0_window);
++	}
++	wr(mem, (BAR0_CPU - MEM_PA) + (addr & 0xfffu), v);
++}
++
++/* TCM (the ARM's RAM) through BAR2 */
++static inline uint32_t tcm_rd(uint32_t o) { return rd(mem, o); }
++static inline void tcm_wr(uint32_t o, uint32_t v) { *(volatile uint32_t *)(mem + o) = v; }
++
++#define BCMA_IOCTL              0x408
++#define BCMA_IOCTL_CLK          0x1
++#define BCMA_IOCTL_FGC          0x2
++#define BCMA_RESET_CTL          0x800
++#define CORE_80211              0x812
++#define CORE_PCIE2              0x83c
++#define CORE_ARM_CR4            0x83e
++#define CR4_CPUHALT             0x20
++#define D11_PHYCLOCKEN          0x4
++#define D11_PHYRESET            0x8
++#define WLAN_RAMBASE            0x170000u
++
++struct bcm_core { uint16_t id; uint8_t rev; uint32_t base, wrap; };
++static struct bcm_core cores[32];
++static unsigned ncores;
++
++/* EROM walk, as brcmf_chip_dmp_erom_scan()/_get_regaddr() */
++static uint32_t
++erom_desc(uint32_t *a, uint8_t *type)
++{
++	uint32_t v = bp_rd(*a);
++	*a += 4;
++	if (type) {
++		*type = v & 0xf;
++		if ((*type & ~0x8u) == 0x5) {
++			*type = 0x5;
++		}
++	}
++	return v;
++}
++
++static int
++erom_regaddr(uint32_t *a, uint32_t *base, uint32_t *wrap)
++{
++	uint8_t d, wtype;
++	uint32_t v;
++	*base = *wrap = 0;
++	v = erom_desc(a, &d);
++	if (d == 0x3) {                 /* master port */
++		wtype = 3;
++	} else if (d == 0x5) {
++		*a -= 4;
++		wtype = 2;
++	} else {
++		*a -= 4;
++		return -1;
++	}
++	do {
++		do {
++			v = erom_desc(a, &d);
++			if (d == 0xf) {
++				*a -= 4;
++				return -1;
++			}
++		} while (d != 0x5 && d != 0x1);
++		if (d == 0x1) {
++			*a -= 4;
++			return 0;
++		}
++		if (v & 0x8) {
++			erom_desc(a, NULL);
++		}
++		uint32_t sz = (v >> 4) & 3;
++		if (sz == 3) {
++			uint32_t szd = erom_desc(a, NULL);
++			if (szd & 0x8) {
++				erom_desc(a, NULL);
++			}
++		}
++		if (sz != 0 && sz != 1) {
++			continue;
++		}
++		uint32_t st = (v >> 6) & 3;
++		if (*base == 0 && st == 0) {
++			*base = v & 0xfffff000u;
++		}
++		if (*wrap == 0 && st == wtype) {
++			*wrap = v & 0xfffff000u;
++		}
++	} while (*base == 0 || *wrap == 0);
++	return 0;
++}
++
++static void
++erom_scan(void)
++{
++	uint32_t a = bp_rd(SI_ENUM_BASE + 0xfc);
++	uint8_t d = 0;
++	ncores = 0;
++	for (int guard = 0; d != 0xf && guard < 2000 && ncores < 32; guard++) {
++		uint32_t v = erom_desc(&a, &d);
++		if (!(v & 1) || d != 0x1) {
++			continue;
++		}
++		uint16_t id = (v >> 8) & 0xfff;
++		v = erom_desc(&a, &d);
++		if ((v & 0xf) != 0x1) {
++			break;
++		}
++		uint8_t nmw = (v >> 14) & 0x1f, nsw = (v >> 19) & 0x1f, rev = (uint8_t)(v >> 24);
++		if (nmw + nsw == 0 && id != 0x827 && id != 0x840) {     /* PMU, GCI */
++			continue;
++		}
++		uint32_t base, wrap;
++		if (erom_regaddr(&a, &base, &wrap) != 0) {
++			continue;
++		}
++		cores[ncores++] = (struct bcm_core){ id, rev, base, wrap };
++	}
++}
++
++static struct bcm_core *
++core_find(uint16_t id, unsigned n)
++{
++	for (unsigned i = 0; i < ncores; i++) {
++		if (cores[i].id == id && n-- == 0) {
++			return &cores[i];
++		}
++	}
++	return NULL;
++}
++
++static void
++core_disable(struct bcm_core *c, uint32_t prereset, uint32_t reset)
++{
++	if (!(bp_rd(c->wrap + BCMA_RESET_CTL) & 1)) {
++		bp_wr(c->wrap + BCMA_IOCTL, prereset | BCMA_IOCTL_FGC | BCMA_IOCTL_CLK);
++		(void)bp_rd(c->wrap + BCMA_IOCTL);
++		bp_wr(c->wrap + BCMA_RESET_CTL, 1);
++		delay(20);
++		for (int i = 0; i < 300 && bp_rd(c->wrap + BCMA_RESET_CTL) != 1; i++) {
++			delay(1);
++		}
++	}
++	bp_wr(c->wrap + BCMA_IOCTL, reset | BCMA_IOCTL_FGC | BCMA_IOCTL_CLK);
++	(void)bp_rd(c->wrap + BCMA_IOCTL);
++}
++
++static void
++core_reset(struct bcm_core *c, uint32_t prereset, uint32_t reset, uint32_t postreset)
++{
++	core_disable(c, prereset, reset);
++	for (int i = 0; i < 50 && (bp_rd(c->wrap + BCMA_RESET_CTL) & 1); i++) {
++		bp_wr(c->wrap + BCMA_RESET_CTL, 0);
++		delay(50);
++	}
++	bp_wr(c->wrap + BCMA_IOCTL, postreset | BCMA_IOCTL_CLK);
++	(void)bp_rd(c->wrap + BCMA_IOCTL);
++}
++
++static uint32_t wlan_ramsize, wlan_shared;
++
++static int
++step_firmware(void)
++{
++	erom_scan();
++	for (unsigned i = 0; i < ncores; i++) {
++		LOG("6: core %#x rev %u base %#x wrap %#x", cores[i].id, cores[i].rev, cores[i].base, cores[i].wrap);
++	}
++	struct bcm_core *cr4 = core_find(CORE_ARM_CR4, 0);
++	if (cr4 == NULL) {
++		LOG("6: no ARM CR4 core");
++		return ENODEV;
++	}
++	/* halt the ARM (brcmf_chip_disable_arm), disable the D11 cores */
++	uint32_t ioctl = bp_rd(cr4->wrap + BCMA_IOCTL) & CR4_CPUHALT;
++	core_reset(cr4, ioctl, CR4_CPUHALT, CR4_CPUHALT);
++	for (unsigned n = 0; core_find(CORE_80211, n) != NULL; n++) {
++		core_disable(core_find(CORE_80211, n), D11_PHYRESET | D11_PHYCLOCKEN, D11_PHYCLOCKEN);
++	}
++	/* TCM size (brcmf_chip_tcm_ramsize) */
++	uint32_t cap = bp_rd(cr4->base + 0x04), banks = (cap & 0xf) + ((cap >> 4) & 0xf);
++	wlan_ramsize = 0;
++	for (uint32_t b = 0; b < banks; b++) {
++		bp_wr(cr4->base + 0x40, b);
++		uint32_t info = bp_rd(cr4->base + 0x44);
++		wlan_ramsize += ((info & 0x7f) + 1) * ((info & 0x200) ? 1024 : 8192);
++	}
++	LOG("6: ARM halted; TCM %u KiB (cap %#x, %u banks), rambase %#x", wlan_ramsize >> 10, cap, banks, WLAN_RAMBASE);
++#if HAVE_WLAN_FW
++	if (wlan_ramsize == 0 || WLAN_RAMBASE + wlan_ramsize > (BAR2_LIMIT - BAR2_CPU + 1) ||
++	    s8_wlan_fw_size + s8_wlan_nvram_size > wlan_ramsize) {
++		LOG("6: RAM layout does not fit BAR2 (%u bytes)", wlan_ramsize);
++		return EFBIG;
++	}
++	for (uint32_t o = 0; o < s8_wlan_fw_size; o += 4) {
++		uint32_t w;
++		memcpy(&w, s8_wlan_fw + o, 4);
++		tcm_wr(WLAN_RAMBASE + o, w);
++	}
++	uint32_t resetintr;
++	memcpy(&resetintr, s8_wlan_fw, 4);
++	tcm_wr(WLAN_RAMBASE + wlan_ramsize - 4, 0);
++	uint32_t nv = WLAN_RAMBASE + wlan_ramsize - s8_wlan_nvram_size;
++	for (uint32_t o = 0; o < s8_wlan_nvram_size; o += 4) {
++		uint32_t w;
++		memcpy(&w, s8_wlan_nvram + o, 4);
++		tcm_wr(nv + o, w);
++	}
++	__asm__ volatile ("dsb sy" ::: "memory");
++	uint32_t check = tcm_rd(WLAN_RAMBASE + 0x100), want;
++	memcpy(&want, s8_wlan_fw + 0x100, 4);
++	LOG("6: %u bytes firmware, %u NVRAM at %#x; readback %s; reset vector %#x", s8_wlan_fw_size,
++	    s8_wlan_nvram_size, nv, check == want ? "ok" : "MISMATCH", resetintr);
++	uint32_t before = tcm_rd(WLAN_RAMBASE + wlan_ramsize - 4);
++	/* activate: reset vector at TCM 0, release the ARM (brcmf_chip_cr4_set_active) */
++	tcm_wr(0, resetintr);
++	core_reset(cr4, CR4_CPUHALT, 0, 0);
++	for (int i = 0; i < 100; i++) {                 /* 5 s */
++		IOSleep(50);
++		wlan_shared = tcm_rd(WLAN_RAMBASE + wlan_ramsize - 4);
++		if (wlan_shared != before) {
++			break;
++		}
++	}
++	if (wlan_shared == before || wlan_shared < WLAN_RAMBASE || wlan_shared >= WLAN_RAMBASE + wlan_ramsize) {
++		LOG("6: firmware did not start (shared %#x)", wlan_shared);
++		return ETIMEDOUT;
++	}
++	uint32_t flags = tcm_rd(wlan_shared);           /* struct brcmf_pcie_shared_info: flags first */
++	LOG("6: FIRMWARE RUNNING: shared RAM at %#x, flags %#x (protocol version %u)", wlan_shared, flags,
++	    flags & 0xff);
++	return 0;
++#else
++	LOG("6: no firmware in this build (s8_wlan_fw.h)");
++	return ENOENT;
++#endif
++}
++
 +static void
 +s8_wlan_thread(__unused void *arg, __unused wait_result_t wr_)
 +{
-+	static int (*const steps[])(void) = { step_survey, step_power, step_link, step_config, step_bars };
-+	static const char *const names[] = { "survey", "power", "link", "config", "bars" };
++	static int (*const steps[])(void) = { step_survey, step_power, step_link, step_config, step_bars, step_firmware };
++	static const char *const names[] = { "survey", "power", "link", "config", "bars", "firmware" };
 +
 +	elbi = (volatile uint8_t *)ml_io_map(ELBI_PA, 0x1000);
 +	pcs = (volatile uint8_t *)ml_io_map(PCS_PA, 0x1000);
