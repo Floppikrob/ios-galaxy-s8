@@ -1,0 +1,36 @@
+From fb363e8b9f399448e6579e4da9ee1e3608ef749b Mon Sep 17 00:00:00 2001
+From: local <local@s8>
+Date: Wed, 21 Oct 2026 09:11:16 +0300
+Subject: [PATCH] dreamlte: clutch steal_thread drops the pset lock (two
+ clusters: A53 + Mongoose)
+
+---
+ osfmk/kern/sched_clutch.c | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/osfmk/kern/sched_clutch.c b/osfmk/kern/sched_clutch.c
+index 3657d83..ed0b396 100644
+--- a/osfmk/kern/sched_clutch.c
++++ b/osfmk/kern/sched_clutch.c
+@@ -3105,9 +3105,16 @@ sched_clutch_processor_queue_remove(
+ }
+ 
+ static thread_t
+-sched_clutch_steal_thread(__unused processor_set_t pset)
++sched_clutch_steal_thread(processor_set_t pset)
+ {
+-	/* Thread stealing is not enabled for single cluster clutch scheduler platforms */
++	/*
++	 * Thread stealing is not enabled for single cluster clutch scheduler
++	 * platforms. With two clusters (Galaxy S8: A53 + Mongoose)
++	 * sched_steal_thread_enabled() is true and thread_select() calls this
++	 * expecting the pset lock dropped ("returns with pset lock dropped"):
++	 * returning it held made thread_select re-take it and panic.
++	 */
++	pset_unlock(pset);
+ 	return THREAD_NULL;
+ }
+ 
+-- 
+2.54.0 (Apple Git-157)
+

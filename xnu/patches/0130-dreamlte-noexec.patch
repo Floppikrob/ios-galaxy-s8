@@ -1,0 +1,61 @@
+From 34a57453285f605d24994462434a3300bf3522ed Mon Sep 17 00:00:00 2001
+From: local <local@s8>
+Date: Wed, 21 Oct 2026 07:34:47 +0300
+Subject: [PATCH] dreamlte: s8noexec=NAMES refuses crash-looping daemons
+
+---
+ bsd/kern/kern_exec.c | 38 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 38 insertions(+)
+
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index deccec2..82c96a9 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -7414,6 +7414,44 @@ process_signature(proc_t p, struct image_params *imgp)
+ #if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_A5XELTE)
+ 			/* A short line keeps the persistent console ring useful. */
+ 			printf("exec %s\n", p->p_name);
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++			/*
++			 * Boot-arg s8noexec=NAME,NAME,...: refuse these programs. Daemons
++			 * that crash on this hardware (bluetoothd, fairplayd.H2, ...) were
++			 * respawned more than a thousand times a session: every launch is a
++			 * full dyld start, page faults and a crash report, on four A53s.
++			 */
++			{
++				static char s8noexec[256];
++				static int s8noexec_read = 0;
++				if (!s8noexec_read) {
++					if (!PE_parse_boot_argn("s8noexec", s8noexec, sizeof(s8noexec))) {
++						s8noexec[0] = '\0';
++					}
++					s8noexec_read = 1;
++				}
++				size_t nl = strlen(p->p_name);
++				for (const char *t = s8noexec; nl && *t;) {
++					const char *e = strchr(t, ',');
++					size_t tl = e ? (size_t)(e - t) : strlen(t);
++					if (tl == nl && strncmp(t, p->p_name, nl) == 0) {
++						printf("exec %s refused (s8noexec)\n", p->p_name);
++						signature_failure_reason = os_reason_create(OS_REASON_EXEC,
++						    EXEC_EXIT_REASON_WRONG_PLATFORM);
++						if (signature_failure_reason != OS_REASON_NULL) {
++							/* no ReportCrash run per refused launch */
++							signature_failure_reason->osr_flags |= OS_REASON_FLAG_NO_CRASH_REPORT;
++						}
++						error = EACCES;
++						goto done;
++					}
++					if (!e) {
++						break;
++					}
++					t = e + 1;
++				}
++			}
++#endif
+ #else
+ 			printf("Allowing spawn of iOS binary %s since it has "
+ 			    "com.apple.private.security.no-sandbox entitlement or unentitled_ios_sim_launch "
+-- 
+2.54.0 (Apple Git-157)
+

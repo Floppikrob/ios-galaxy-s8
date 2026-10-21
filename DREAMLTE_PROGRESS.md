@@ -123,3 +123,35 @@ Phone result (photo), all 5 steps:
 
 Next: firmware + NVRAM download to TCM (rambase 0x170000), wait for the
 shared-RAM address, then msgbuf rings.
+
+## Speed work (2026-10-21, patches 0127-0133, local Mac builds)
+
+Measured with patch 0128 (S8FPS: present rate and copy cost) and 0129
+(S8LOAD per-CPU user/system/idle every 10 s, S8TOP top tasks, S8VM):
+- The panel copy is cheap (5-8 ms per frame); backboardd itself submits
+  only ~0.6-1.5 frames per second.
+- With 4 A53s all CPUs were 100% busy: crash loops (xpcproxy 4862,
+  fairplayd.H2 1296, bluetoothd 1291, nanotimekitcompaniond 1263 launches in
+  one session, each a dyld start + crash report), `vmd` spinning a whole core,
+  launchd ~0.35 core. **0130 `s8noexec=NAME,...`** refuses such programs at
+  exec (no crash report). Used: `s8noexec=vmd,bluetoothd,fairplayd.H2,
+  nanotimekitcompaniond,locationd,WirelessRadioManagerd,CommCenterMobileHelper`.
+- **Mongoose cluster runs: `cpus=8` brings up all eight cores** (plain PSCI
+  CPU_ON + the existing PMU power-up, with the loader's mngs_probe not run).
+  Needed: 0131 (SweetCPU matches `samsung,mongoose-m2`), 0132 (the
+  single-cluster clutch scheduler's steal_thread returned with the pset lock
+  held: thread_select re-took it and panicked), 0133 (both clusters in one
+  pset: the clutch scheduler enqueued under the wrong pset lock with two).
+  The loader's mngs_probe must not run before (it was disabled locally for
+  these boots; it powers the cluster itself).
+- With 8 cores the CPUs are no longer saturated (idle 15-65% while touching),
+  yet backboardd spends ~1.6 CPU-seconds per frame: something per frame is
+  pathologically expensive. Next: profile backboardd.
+- 0127: ACPM. The DVFS plugin is not resident; Samsung's kernel loads
+  exynos8895_acpm_dvfs.fw (from its firmware/ dir) into APM SRAM and
+  attaches it. Loading + detach of plugin 2 + attach of plugin 3 over channel
+  4 works (acknowledged), but FREQ_REQ on the buffer-type channels (3 by owner
+  mask, 5 by DT) is not answered and the PLLs do not change (A53 1053 MHz,
+  Mongoose 1066 MHz). The firmware binary is not in this repository: a local
+  `bsd/dev/s8_acpm_dvfs_fw.h` supplies it.
+- RAM: `S8_DRAM_MIB=1024 make-boot.sh ...` gives XNU 1 GiB (boots fine).

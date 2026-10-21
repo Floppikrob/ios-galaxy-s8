@@ -1,0 +1,215 @@
+From b2d1dc1c9203854067cc0f6af8d1392fe3ee40e7 Mon Sep 17 00:00:00 2001
+From: local <local@s8>
+Date: Wed, 21 Oct 2026 03:19:49 +0300
+Subject: [PATCH] dreamlte: per-CPU load log (S8LOAD)
+
+---
+ bsd/dev/sweet_ufs.c  |   4 +-
+ osfmk/conf/files     |   1 +
+ osfmk/kern/s8_load.c | 167 +++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 171 insertions(+), 1 deletion(-)
+ create mode 100644 osfmk/kern/s8_load.c
+
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index cf26359..f07f5b4 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -880,7 +880,9 @@ sweet_ufs_rootdev(dev_t *dev)
+ 	/* boot-arg s8wlan=N (bsd/dev/s8_wlan.c): started once, whether or not a root is found */
+ 	extern void s8_wlan_start(void);
+ 	extern void s8_cpufreq_start(void);
+-	s8_cpufreq_start();             /* boot-arg s8cpufreq=KHZ (bsd/dev/s8_cpufreq.c) */
++	extern void s8_load_start(void);
++	s8_cpufreq_start();
++	s8_load_start();                /* per-CPU load every 10 s (osfmk/kern/s8_load.c) */             /* boot-arg s8cpufreq=KHZ (bsd/dev/s8_cpufreq.c) */
+ 	s8_wlan_start();
+ #endif
+ 	if (!su.ready) {
+diff --git a/osfmk/conf/files b/osfmk/conf/files
+index 9d98c50..12ae060 100644
+--- a/osfmk/conf/files
++++ b/osfmk/conf/files
+@@ -152,6 +152,7 @@ osfmk/kern/page_decrypt.c	standard bound-checks
+ osfmk/kern/printf.c			standard
+ osfmk/kern/priority.c			standard
+ osfmk/kern/processor.c		standard
++osfmk/kern/s8_load.c		standard
+ osfmk/kern/recount.c		standard
+ osfmk/kern/restartable.c		standard
+ osfmk/kern/sched_average.c		standard
+diff --git a/osfmk/kern/s8_load.c b/osfmk/kern/s8_load.c
+new file mode 100644
+index 0000000..b7c5a0b
+--- /dev/null
++++ b/osfmk/kern/s8_load.c
+@@ -0,0 +1,167 @@
++/*
++ * Galaxy S8 (dreamlte) diagnostics: every 10 s, how each CPU spent the
++ * interval (user / system / idle, from processor_info CPU_LOAD_INFO ticks).
++ * Boot-arg s8load=0 turns it off.
++ */
++#include <kern/processor.h>
++#include <kern/thread.h>
++#include <kern/clock.h>
++#include <kern/task.h>
++#include <kern/recount.h>
++#include <kern/host.h>
++#include <mach/host_info.h>
++#include <mach/processor_info.h>
++#include <pexpert/pexpert.h>
++#include <pexpert/arm64/board_config.h>
++
++#if defined(ARM64_BOARD_CONFIG_A5XELTE) && defined(DREAMLTE)
++
++extern void IOSleep(unsigned int milliseconds);
++
++#define S8_LOAD_CPUS 8
++#define S8_LOAD_TASKS 400
++
++extern void proc_name(int pid, char *buf, int size);
++extern unsigned long vm_cs_validates;
++extern kern_return_t host_statistics64(host_t host, host_flavor_t flavor, host_info64_t info, mach_msg_type_number_t *count);
++
++/* VM activity in the interval: faults, zero fills, copy-on-write, code-signing page validations. */
++static void
++s8_vm_stats(void)
++{
++	static uint64_t last[5];
++	vm_statistics64_data_t vs = {};
++	mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
++	if (host_statistics64(host_self(), HOST_VM_INFO64, (host_info64_t)&vs, &count) != KERN_SUCCESS) {
++		return;
++	}
++	uint64_t now[5] = { vs.faults, vs.zero_fill_count, vs.cow_faults, vs.pageins, vm_cs_validates };
++	printf("S8VM: faults %llu zero-fill %llu cow %llu pageins %llu cs-validates %llu, free %u pages compressor %u\n",
++	    now[0] - last[0], now[1] - last[1], now[2] - last[2], now[3] - last[3], now[4] - last[4],
++	    vs.free_count, vs.compressor_page_count);
++	memcpy(last, now, sizeof(last));
++}
++
++static struct { int pid; uint64_t t; } s8_prev[S8_LOAD_TASKS], s8_cur[S8_LOAD_TASKS];
++static unsigned s8_nprev;
++
++/* The five tasks that used the most CPU since the last call, and how many tasks are new. */
++static void
++s8_top_tasks(void)
++{
++	unsigned n = 0, fresh = 0;
++	task_t task;
++
++	lck_mtx_lock(&tasks_threads_lock);
++	queue_iterate(&tasks, task, task_t, tasks) {
++		if (n >= S8_LOAD_TASKS) {
++			break;
++		}
++		struct recount_usage u = {};
++		recount_task_usage(task, &u);
++		s8_cur[n].pid = task_pid(task);
++		s8_cur[n].t = u.ru_user_time_mach + u.ru_system_time_mach;
++		n++;
++	}
++	lck_mtx_unlock(&tasks_threads_lock);
++
++	struct { int pid; uint64_t d; } top[5] = {};
++	for (unsigned i = 0; i < n; i++) {
++		uint64_t before = 0;
++		bool seen = false;
++		for (unsigned j = 0; j < s8_nprev; j++) {
++			if (s8_prev[j].pid == s8_cur[i].pid) {
++				before = s8_prev[j].t;
++				seen = true;
++				break;
++			}
++		}
++		if (!seen) {
++			fresh++;
++		}
++		uint64_t d = s8_cur[i].t > before ? s8_cur[i].t - before : 0;
++		for (int k = 0; k < 5; k++) {
++			if (d > top[k].d) {
++				for (int m = 4; m > k; m--) {
++					top[m] = top[m - 1];
++				}
++				top[k].pid = s8_cur[i].pid;
++				top[k].d = d;
++				break;
++			}
++		}
++	}
++	memcpy(s8_prev, s8_cur, sizeof(s8_cur[0]) * n);
++	s8_nprev = n;
++
++	char line[256];
++	int len = snprintf(line, sizeof(line), "S8TOP: %u tasks, %u new:", n, fresh);
++	for (int k = 0; k < 5 && top[k].d; k++) {
++		char name[24] = "?";
++		proc_name(top[k].pid, name, sizeof(name));
++		len += snprintf(line + len, sizeof(line) - (size_t)len, " %s(%d) %llums", name, top[k].pid,
++		    top[k].d / 26000);
++		if (len >= (int)sizeof(line)) {
++			break;
++		}
++	}
++	printf("%s\n", line);
++}
++
++static void
++s8_load_thread(__unused void *arg, __unused wait_result_t wr)
++{
++	natural_t last[S8_LOAD_CPUS][CPU_STATE_MAX] = {};
++
++	for (;;) {
++		IOSleep(10000);
++		char line[200];
++		int n = snprintf(line, sizeof(line), "S8LOAD:");
++		int cpu = 0;
++		for (processor_t p = processor_list; p != NULL && cpu < S8_LOAD_CPUS; p = p->processor_list, cpu++) {
++			struct processor_cpu_load_info li = {};
++			processor_cpu_load_info(p, li.cpu_ticks);
++			int id = p->cpu_id;
++			natural_t u = li.cpu_ticks[CPU_STATE_USER] - last[cpu][CPU_STATE_USER];
++			natural_t s = li.cpu_ticks[CPU_STATE_SYSTEM] - last[cpu][CPU_STATE_SYSTEM];
++			natural_t i = li.cpu_ticks[CPU_STATE_IDLE] - last[cpu][CPU_STATE_IDLE];
++			natural_t t = u + s + i;
++			for (int k = 0; k < CPU_STATE_MAX; k++) {
++				last[cpu][k] = li.cpu_ticks[k];
++			}
++			if (t == 0) {
++				t = 1;
++			}
++			n += snprintf(line + n, sizeof(line) - (size_t)n, " cpu%d u%u%% s%u%% i%u%%", id,
++			    u * 100 / t, s * 100 / t, i * 100 / t);
++			if (n >= (int)sizeof(line)) {
++				break;
++			}
++		}
++		printf("%s\n", line);
++		s8_top_tasks();
++		s8_vm_stats();
++	}
++}
++
++void s8_load_start(void);
++
++void
++s8_load_start(void)
++{
++	uint32_t on = 1;
++	thread_t thread;
++
++	PE_parse_boot_argn("s8load", &on, sizeof(on));
++	if (on && kernel_thread_start(s8_load_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	}
++}
++
++#elif defined(ARM64_BOARD_CONFIG_A5XELTE)
++void s8_load_start(void);
++void
++s8_load_start(void)
++{
++}
++#endif
+-- 
+2.54.0 (Apple Git-157)
+

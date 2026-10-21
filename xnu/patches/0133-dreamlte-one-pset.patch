@@ -1,0 +1,32 @@
+From 429ff1941d5c87d471152ad376a621cd1e71b7be Mon Sep 17 00:00:00 2001
+From: local <local@s8>
+Date: Wed, 21 Oct 2026 09:34:13 +0300
+Subject: [PATCH] dreamlte: one pset for both clusters (single-cluster clutch)
+
+---
+ osfmk/arm64/machine_routines.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/osfmk/arm64/machine_routines.c b/osfmk/arm64/machine_routines.c
+index 6d56a33..0107913 100644
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -1050,7 +1050,14 @@ ml_parse_cpu_topology(void)
+ 		 * on the value provided by EDT. Instead, use the MPIDR value to see if we have
+ 		 * seen this exact cluster before. If so, then reuse that cluster ID for this CPU.
+ 		 */
+-#if HAS_CLUSTER || defined(A5XELTE)
++#if defined(DREAMLTE)
++		/*
++		 * Galaxy S8: the A53 (Aff1 1) and Mongoose (Aff1 0) clusters share one
++		 * pset. The clutch scheduler compiled here is the single-cluster one:
++		 * with two psets it enqueues under the wrong pset lock (cpus=8 panics).
++		 */
++		uint32_t phys_cluster_id = 0;
++#elif HAS_CLUSTER || defined(A5XELTE)
+ 		uint32_t phys_cluster_id = MPIDR_CLUSTER_ID(cpu->phys_id);
+ #else
+ 		uint32_t phys_cluster_id = (cpu->cluster_type == CLUSTER_TYPE_P);
+-- 
+2.54.0 (Apple Git-157)
+

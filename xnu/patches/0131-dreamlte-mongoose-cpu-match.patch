@@ -1,0 +1,25 @@
+From 39b7b80d31325a320afb22ae6d403d852e992dea Mon Sep 17 00:00:00 2001
+From: local <local@s8>
+Date: Wed, 21 Oct 2026 08:12:26 +0300
+Subject: [PATCH] dreamlte: SweetCPU also matches the Mongoose M2 cpu nodes
+
+---
+ iokit/KernelConfigTables.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
+index 9a35982..eeaa219 100644
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -49,7 +49,7 @@ const char * gIOKernelConfigTables =
+     "     'IOClass'         = SweetCPU;"
+     "     'IOProviderClass' = IOPlatformDevice;"
+ #if defined(ARM64_BOARD_CONFIG_A5XELTE)
+-    "     'IONameMatch'     = 'arm,cortex-a53';"
++    "     'IONameMatch'     = ('arm,cortex-a53', 'samsung,mongoose-m2');"
+ #else
+     "     'IONameMatch'     = 'qcom,kryo470';"
+ #endif
+-- 
+2.54.0 (Apple Git-157)
+
