@@ -158,7 +158,8 @@ CPUSEQUENCER_OPTION `0x2488` bit 0 := 0), `core0n_on` = CONFIGURATION 0xF +
   right after a frame-done, copies, and unmasks it.
 - **Boot 33** (CI run 39638299592, BOOT `36a04df1…ac37f16`, PLL relock +
   trigger masking, `sweetfb_hz` still 10): user reports no smoother motion
-  (expected at 10 Hz). Probe after the core power edge: CPUSEQUENCER_STATUS
+  (expected at 10 Hz); tearing "almost gone" (user) with the trigger
+  masking. Probe after the core power edge: CPUSEQUENCER_STATUS
   `0x60000`, **NONCPU status `0x5140000` and L2 status `0x10050000`: both
   off**; PLL relock `0x81ec0302`, LOCKTIME `0x1c2`, not stable. The cluster
   itself never powers, so neither its PLL nor a core can run. Again capped
