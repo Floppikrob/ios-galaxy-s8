@@ -327,3 +327,30 @@ IOSurface (DECON IDMA base, probe in progress).
   toggling PLL_CON0 bit 31 on these CPU PLLs does not relock under our
   loader. `s8boost=1` must not be used; the boot-42 command line is the
   working baseline.
+
+## Boot 44 (prepared, not yet run): iOS programs on the Mali
+
+Goal: the first step of iOS rendering on the GPU. An iOS user process, not
+the kernel, must get GPU memory and run Mali jobs.
+
+- Kernel (CI run 39666116520, commit d2f572a): `/dev/s8mali` (cloning
+  cdev, `bsd/dev/dreamlte_s8.c`; ioctls in `tools/dreamlte/s8mali_ioctl.h`,
+  served in `s8_gpu_present.inc`). GPU memory comes from a 512 MiB pool at
+  0x8b0000000 (outside XNU's RAM), mapped GPU VA = PA and write-combined
+  in the process. Jobs run on any slot, serialised with the kernel's frame
+  presentation by one IOLock. Mali page-table pool grown to 512 pages.
+- Boot overlay: `tools/dreamlte/mkoverlay.py` archive in the payload
+  (`mkpayload.py --overlay`, ADT `/chosen/memory-map` `S8Overlay`), written
+  to the root before launchd (`dreamlte_bsd_late` in `bsd_init`).
+- iOS program `tools/dreamlte/ios/s8gputest.c` (clang + ld64.lld, ad-hoc
+  signed) installed as `/usr/appleinternal/sbin/launchd.s8`; with
+  `launchdsuffix=s8` it runs as pid 1, logs `S8 MALI| ...`: WRITE_VALUE on
+  slot 1, a full-screen 1440x2960 clear on slot 0 checked by sampling, 60
+  timed frames; then execs `/sbin/launchd`.
+- Image: boot-42 command line + `launchdsuffix=s8`, no `s8boost`; sha256
+  ebee2ff293cde19f65e7750dc3c0ed9c45bdaaf71120b6bc15dfb5706ec717ee.
+  Result on the device: pending. Expected log lines: `S8 MALI: /dev/s8mali
+  major`, `S8 OVERLAY: ... written`, `S8 MALI| ... USER GPU JOB WORKS`,
+  `USER GPU DRAW WORKS`, `60 full-screen GPU frames: avg ...`.
+- If pid 1 dies before the exec the kernel panics ("init died"); then
+  boot 42 is the fallback.
