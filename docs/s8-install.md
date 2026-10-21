@@ -127,6 +127,7 @@ Restore BOOT and Data from the TWRP backup (or `dd` the saved `BOOT.img` back to
 | `s8mngsdbg=1` | Loader logs the CPU cluster PLLs during the Mongoose probe |
 | `rd=ufsroot0 ufsroot=USERDATA` | Root is the HFS+ volume in USERDATA |
 | `ufsrw=1 rootrw=1` | Root mounted read/write |
+| `sweetfb_hz=N` | Most frames per second copied to the panel (default 10; 30 or 60 for smoother motion, costs CPU) |
 | `sweetfb_native=1` | Present the 1440×2960 panel to iOS (1125×2436 hangs for now) |
 | `a5fb_noconsole=1` | Do not draw the kernel console over iOS |
 | `a5touchprobe=0` | Disable the Galaxy A5 touch probe (it aborts on the S8) |

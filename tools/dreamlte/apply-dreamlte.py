@@ -506,7 +506,9 @@ edit('iokit/Kernel/arm/SweetFramebuffer.cpp', [
      '\t}\n', 1),
     ('\tuint32_t mask = get32(rec, 0x104);\n',
      '\tuint32_t mask = get32(rec, 0x104);\n\tIOLockLock(fPresentLock);\n'
-     '#if defined(DREAMLTE)\n\tsweet_fb_wait_frame_done();\n\tsweet_fb_trigger(false);\n#endif\n', 1),
+     '#if defined(DREAMLTE)\n\tuint64_t t0 = mach_absolute_time();\n'
+     '\tsweet_fb_wait_frame_done();\n\tsweet_fb_trigger(false);\n'
+     '\tuint64_t t1 = mach_absolute_time();\n#endif\n', 1),
     ('static uint32_t sweet_fb_swaps_logged;\n',
      '#if defined(DREAMLTE)\n'
      '/*\n'
@@ -561,8 +563,47 @@ edit('iokit/Kernel/arm/SweetFramebuffer.cpp', [
      'static uint32_t sweet_fb_swaps_logged;\n', 1),
     ('\t\ts->release();\n\t}\n}\n',
      '\t\ts->release();\n\t}\n'
-     '#if defined(DREAMLTE)\n\tsweet_fb_trigger(true);\n#endif\n'
+     '#if defined(DREAMLTE)\n\tsweet_fb_trigger(true);\n'
+     '\tsweet_fb_stat(t0, t1, mach_absolute_time());\n#endif\n'
      '\tIOLockUnlock(fPresentLock);\n}\n', 1),
+    # Frame statistics: how many frames iOS draws (SwapEnd) and the panel
+    # shows (copies) per 10 s, and where a copy's time goes (waiting for
+    # the DECON frame-done vs the memcpy), to steer the 30-60 fps work.
+    ('static uint32_t sweet_fb_swaps_logged;\n',
+     '#if defined(DREAMLTE)\n'
+     'static uint64_t sweet_fb_stat_start, sweet_fb_stat_swaps, sweet_fb_stat_copies;\n'
+     'static uint64_t sweet_fb_stat_wait, sweet_fb_stat_copy, sweet_fb_stat_copy_max;\n'
+     '\n'
+     '/* Under fPresentLock; timebase 26 MHz, 26 ticks = 1 us. */\n'
+     'static void\n'
+     'sweet_fb_stat(uint64_t t0, uint64_t t1, uint64_t t2)\n'
+     '{\n'
+     '\tsweet_fb_stat_copies++;\n'
+     '\tsweet_fb_stat_wait += t1 - t0;\n'
+     '\tsweet_fb_stat_copy += t2 - t1;\n'
+     '\tif (t2 - t1 > sweet_fb_stat_copy_max) {\n'
+     '\t\tsweet_fb_stat_copy_max = t2 - t1;\n'
+     '\t}\n'
+     '\tif (sweet_fb_stat_start == 0) {\n'
+     '\t\tsweet_fb_stat_start = t2;\n'
+     '\t} else if (t2 - sweet_fb_stat_start >= 10ULL * 26000000ULL) {\n'
+     '\t\tuint64_t n = sweet_fb_stat_copies;\n'
+     '\t\tIOLog("SWEET FB: 10s: %llu swaps, %llu shown; per frame wait %llu us, copy %llu us (max %llu)\\n",\n'
+     '\t\t    __atomic_load_n(&sweet_fb_stat_swaps, __ATOMIC_RELAXED), n,\n'
+     '\t\t    sweet_fb_stat_wait / n / 26, sweet_fb_stat_copy / n / 26, sweet_fb_stat_copy_max / 26);\n'
+     '\t\tsweet_fb_stat_start = t2;\n'
+     '\t\t__atomic_store_n(&sweet_fb_stat_swaps, 0, __ATOMIC_RELAXED);\n'
+     '\t\tsweet_fb_stat_copies = sweet_fb_stat_wait = sweet_fb_stat_copy = sweet_fb_stat_copy_max = 0;\n'
+     '\t}\n'
+     '}\n'
+     '#endif\n'
+     '\n'
+     'static uint32_t sweet_fb_swaps_logged;\n', 1),
+    ('\tif ((++sweet_fb_swap_count % 1000) == 0) {\n',
+     '#if defined(DREAMLTE)\n'
+     '\t__atomic_add_fetch(&sweet_fb_stat_swaps, 1, __ATOMIC_RELAXED);\n'
+     '#endif\n'
+     '\tif ((++sweet_fb_swap_count % 1000) == 0) {\n', 1),
 ])
 
 # Battery: the A5XELTE config had no power source, so iOS showed a wrong
