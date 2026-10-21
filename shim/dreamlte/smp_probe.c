@@ -80,8 +80,55 @@ static int wait_bit(uintptr_t a, uint32_t bit, unsigned ms)
 #define DD(n)		(0x16840000UL + (n) * 0x400)	/* DDn_DD_DA_INPUT_0 */
 #define CMU_CPUCL0	0x16800000UL	/* Mongoose cluster CMU (inside CL0) */
 #define CMU_CPUCL1	0x16900000UL	/* A53 cluster CMU */
+#define PLL_LOCKTIME	0x0000
 #define PLL_CON0	0x0120		/* bit 31 enable, bit 29 stable */
+#define PLL_EN		(1u << 31)
+#define PLL_STABLE	(1u << 29)
+#define PLL_MUX_SEL	(1u << 4)	/* 1 = PLL output, 0 = 26 MHz FIN */
+#define PLL_MUX_BUSY	(1u << 7)
 #define MUX_CLK_PLL	0x1000		/* bit 0 select, bit 16 busy */
+
+/*
+ * Boot 32: after cluster0_on the Mongoose PLL read 0x81ec0312: enabled,
+ * M/P/S = 492/3/2 (1066 MHz, an entry of Samsung's pll_cpucl0_rate_table),
+ * output selected, but STABLE (bit 29) clear; the A53 PLL had it set. A
+ * core without a locked clock cannot run its entry. Re-lock it the way
+ * Samsung's cal-if ra.c does (ra_enable_pll off/on, ra_pll_set_pmsk): mux
+ * to FIN and wait for its busy bit, disable, LOCKTIME = P * 150, enable,
+ * wait for STABLE, mux back to the PLL. M/P/S stay as S-Boot set them.
+ * Returns 1 when the PLL reports STABLE.
+ */
+static int mngs_pll_lock(void (*kv)(const char *, uint64_t), void (*out)(const char *))
+{
+	uintptr_t con = CMU_CPUCL0 + PLL_CON0;
+	uint64_t end = ticks() + TIMER_HZ / 100;
+	while (ticks() < end && !(rd(con) & PLL_STABLE))
+		;
+	if (rd(con) & PLL_STABLE) {
+		kv("cl0 pll stable", rd(con));
+		out("\n");
+		return 1;
+	}
+	uint32_t v = rd(con);
+	wr(con, v & ~PLL_MUX_SEL);
+	end = ticks() + TIMER_HZ / 1000;
+	while (ticks() < end && (rd(con) & PLL_MUX_BUSY))
+		;
+	wr(con, rd(con) & ~PLL_EN);
+	wr(CMU_CPUCL0 + PLL_LOCKTIME, ((v >> 8) & 0x3f) * 150);
+	wr(con, rd(con) | PLL_EN);
+	end = ticks() + TIMER_HZ / 100;
+	while (ticks() < end && !(rd(con) & PLL_STABLE))
+		;
+	int ok = (rd(con) & PLL_STABLE) != 0;
+	if (ok)
+		wr(con, rd(con) | PLL_MUX_SEL);
+	kv("cl0 pll relock", rd(con));
+	kv("locktime", rd(CMU_CPUCL0 + PLL_LOCKTIME));
+	kv("ok", ok);
+	out("\n");
+	return ok;
+}
 
 /*
  * Mongoose (CLUSTER0, MPIDR 0x0-0x3) cluster power-up, in the order of
@@ -132,6 +179,14 @@ static int mngs_core_start(unsigned n, void (*kv)(const char *, uint64_t), void 
 	while (ticks() < end && (rd(CPU_STAT(m)) & 0xf) != 0xf)
 		;
 	wr(DD(n), rd(DD(n)) | 1);
+	if (n == 0) {
+		/* Samsung's cluster state: L2 (0x2604) & 7 and NONCPU (0x2404) & 0xF. */
+		kv("seq st", rd(CL_CPUSEQ(0) - 4));
+		kv("noncpu", rd(CL_NONCPU(0)));
+		kv("l2", rd(CL_L2(0)));
+		out("\n");
+		mngs_pll_lock(kv, out);
+	}
 	int up = wait_flag(n, 100);
 	int64_t rc = 0;
 	if (!up) {

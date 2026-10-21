@@ -753,7 +753,7 @@ index 9969739..0535b28 100644
  	poll();
  	if (fReal) {
 diff --git iokit/Kernel/arm/SweetCPU.cpp iokit/Kernel/arm/SweetCPU.cpp
-index 55d0057..4b68c19 100644
+index 55d0057..614b271 100644
 --- a/iokit/Kernel/arm/SweetCPU.cpp
 +++ b/iokit/Kernel/arm/SweetCPU.cpp
 @@ -17,6 +17,9 @@
@@ -807,7 +807,7 @@ index 55d0057..4b68c19 100644
  	}
  	for (unsigned int i = 0; i < topology->num_cpus; i++) {
  		SweetCPU *cpu = __atomic_load_n(&sweet_cpus[i], __ATOMIC_ACQUIRE);
-@@ -279,13 +292,98 @@ SweetCPU::startCPU(vm_offset_t start_paddr, vm_offset_t arg_paddr)
+@@ -279,13 +292,129 @@ SweetCPU::startCPU(vm_offset_t start_paddr, vm_offset_t arg_paddr)
  {
  	const ml_topology_cpu_t *cpu = &ml_get_topology_info()->cpus[getCPUNumber()];
  	/* cpu_start() passes NULL,NULL: x20/x21 are set by LowResetVectorBase. */
@@ -899,6 +899,37 @@ index 55d0057..4b68c19 100644
 +		}
 +		if (ddn != NULL) {
 +			*ddn |= 1;
++			/*
++			 * Boot 32: the Mongoose PLL (CMU_CPUCL0 PLL_CON0) was enabled
++			 * at 1066 MHz but not STABLE (bit 29). Re-lock it as Samsung's
++			 * cal-if ra.c does: mux (bit 4) to FIN, wait busy (bit 7),
++			 * disable, LOCKTIME = P * 150, enable, wait STABLE, mux back.
++			 */
++			static vm_offset_t cmu;
++			if (cmu == 0) {
++				cmu = ml_io_map(0x16800000, 0x1000);
++			}
++			volatile uint32_t *con = (volatile uint32_t *)(cmu + 0x120);
++			for (int i = 0; i < 10000 && !(*con & (1u << 29)); i++) {
++				IODelay(1);
++			}
++			if (!(*con & (1u << 29))) {
++				uint32_t v = *con;
++				*con = v & ~(1u << 4);
++				for (int i = 0; i < 1000 && (*con & (1u << 7)); i++) {
++					IODelay(1);
++				}
++				*con &= ~(1u << 31);
++				*(volatile uint32_t *)cmu = ((v >> 8) & 0x3f) * 150;
++				*con |= 1u << 31;
++				for (int i = 0; i < 10000 && !(*con & (1u << 29)); i++) {
++					IODelay(1);
++				}
++				if (*con & (1u << 29)) {
++					*con |= 1u << 4;
++				}
++			}
++			IOLog(CPU_PORT_NAME " CPU: cpu=%u Mongoose PLL con0=0x%x\n", getCPUNumber(), *con);
 +		}
 +		IOLog(CPU_PORT_NAME " CPU: cpu=%u first CPU_ON rc=%d, PMU power-up cfg=0x%x status=0x%x\n",
 +		    getCPUNumber(), rc0, cfg[0], cfg[1]);

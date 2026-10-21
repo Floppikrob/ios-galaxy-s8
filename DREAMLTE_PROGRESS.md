@@ -138,6 +138,20 @@ CPUSEQUENCER_OPTION `0x2488` bit 0 := 0), `core0n_on` = CONFIGURATION 0xF +
   `MONGOOSE STARTED=` and `cpus capped to` (if any), then in the kernel log
   `Mongoose cluster on`, `cpu=4..7 came alive` and `8/8 CPUs initialized`.
 
+- **Boot 32** (CI run 39634152445, kernel SHA-256 `9bca4568…a230c4`,
+  BOOT `8bb46c4d…54d4c7`, `cpus=8 s8mngsdbg=1`): Mongoose core 0x000 again
+  did not run its entry (CPU_ON rc 0, status `0x10070f0f`), so the loader
+  logged `cpus capped to=0x4` and the system booted on the four A53s
+  (`4/4 CPUs initialized`, SpringBoard, display on): the cap works.
+  Probe readings (pmsg has bit flips): CPUSEQUENCER_STATUS `0x2484` =
+  `0x60000` before and after `cluster0_on` (bit 0, Samsung's
+  `cluster0_status`, stays 0); CPUCL1 PLL_CON0 `0xa0e?0311` with STABLE set
+  (970 MHz entry of the A53 table); **CPUCL0 PLL_CON0 `0x81ec0312`: enabled,
+  1066 MHz (492/3/2), output selected, STABLE clear.**
+- Next probe: logs NONCPU/L2 status after the core's power edge and
+  re-locks the Mongoose PLL as Samsung's `ra.c` does (mux to FIN, disable,
+  LOCKTIME = P * 150, enable, wait STABLE, mux back); XNU repeats it.
+
 GPU: iOS draws through Metal on Apple's GPU only (AGX); the Mali-G71 runs
 under Linux (Panfrost, see LinuxS8) but no iOS driver can use it. Graphics
 stays CPU-rendered; the speed levers are more cores, the A53 clock (S-Boot
