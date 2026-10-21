@@ -171,6 +171,23 @@ CPUSEQUENCER_OPTION `0x2488` bit 0 := 0), `core0n_on` = CONFIGURATION 0xF +
   registers (`0x2400` = 0xF, `0x2600` = 0x7; names from the 8890 pmusfr).
   Frame statistics every 10 s and `sweetfb_hz=30` for the 30-60 fps work.
 
+## Hardware graphics through the DPU (plan, 2026-10-21)
+
+The Mali-G71 cannot serve iOS (Metal/AGX). The display processor can do
+the work the CPU does now: scan out a frame without the copy, blend up to
+six layers (DPP channels, IOMobileFramebuffer layers) and scale in hardware.
+1. Prove a flip: the loader's display probe now compares the DECON output
+   CRC (`CRC_CONTROL 0x288`, `CRC_DATA 0x280`) before and after moving the
+   IDMA base; `FLIP WORKS=1` means the DECON fetches from the new address.
+2. IDMA addresses are 32-bit (`IDMA_IN_BASE_ADDR_Y 0x40`, no high word) and
+   XNU's RAM is at `0x880000000`: iOS surfaces are out of reach unless the
+   DPU SYSMMU maps them or full-screen surfaces come from a pool below
+   4 GiB. Needs the free low RAM from TWRP's `/proc/iomem`.
+3. Zero-copy present: SwapEnd points the IDMA at the surface (trigger
+   masked, shadow update, unmask) instead of copying 17 MB.
+4. Hardware layers and scaling: map up to four swap layers to DPP channels;
+   a smaller iOS canvas scaled up by the DPP.
+
 GPU: iOS draws through Metal on Apple's GPU only (AGX); the Mali-G71 runs
 under Linux (Panfrost, see LinuxS8) but no iOS driver can use it. Graphics
 stays CPU-rendered; the speed levers are more cores, the A53 clock (S-Boot

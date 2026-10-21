@@ -72,6 +72,26 @@ static uint64_t frames(void)
 	return n;
 }
 
+/*
+ * DECON output CRC (Samsung decon_reg.c decon_reg_set_start_crc /
+ * get_crc_data: CRC_CONTROL 0x288 bit 0 start, CRC_DATA 0x280). A CRC
+ * that changes when only the IDMA base moves proves the DECON fetches
+ * from the new address: the zero-copy flip works without anyone watching
+ * the screen. Two frames per sample so the CRC covers a whole new frame.
+ */
+static uint32_t crc(void)
+{
+	wr(DECON + 0x288, rd(DECON + 0x288) | 1u);
+	wr(DECON + 0x4c, 1u << 13);
+	for (unsigned f = 0; f < 3; f++) {
+		uint64_t end = ticks() + TIMER_HZ / 20;
+		while (ticks() < end && !(rd(DECON + 0x4c) & (1u << 13)))
+			;
+		wr(DECON + 0x4c, 1u << 13);
+	}
+	return rd(DECON + 0x280);
+}
+
 /* IDMA_ENABLE / DPP_ENABLE bit 4: SFR_UPDATE_FORCE (dpp_reg.c). */
 static void force(unsigned n)
 {
@@ -120,6 +140,12 @@ void display_probe(void (*kv)(const char *, uint64_t), void (*out)(const char *)
 		(void)force;
 		kv("flip test on idma", (uint64_t)scan);
 		kv("frames/0.5s", frames());
+		uint32_t en40 = rd(DECON + 0x40);
+		wr(DECON + 0x40, en40 | (1u << 13) | 1u);
+		uint32_t c0 = crc(), c0b = crc();
+		kv("crc", c0);
+		kv("crc again", c0b);
+		wr(DECON + 0x40, en40);
 		out("\n");
 		uintptr_t y = idma[scan] + 0x40;
 		out("TEST: base +800 lines. PICTURE JUMPS UP NOW?\n");
@@ -129,6 +155,12 @@ void display_probe(void (*kv)(const char *, uint64_t), void (*out)(const char *)
 		kv("frames/0.5s", frames());
 		kv("req", rd(DECON + SHADOW_REQ));
 		kv("Y", rd(y));
+		wr(DECON + 0x40, en40 | (1u << 13) | 1u);
+		uint32_t c1 = crc();
+		wr(DECON + 0x40, en40);
+		kv("crc moved", c1);
+		/* Stable CRC before, a different one after: the flip works. */
+		kv("FLIP WORKS", c0 == c0b && c1 != c0);
 		out("\n");
 		delay_ms(2500);
 		wr(y, FB_PHYS);
