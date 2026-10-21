@@ -438,10 +438,10 @@ index 7ba309b..5317426 100644
  	vm_offset_t alive;
 diff --git a/bsd/dev/dreamlte_s8.c b/bsd/dev/dreamlte_s8.c
 new file mode 100644
-index 0000000..a0b7f11
+index 0000000..4206f2e
 --- /dev/null
 +++ b/bsd/dev/dreamlte_s8.c
-@@ -0,0 +1,245 @@
+@@ -0,0 +1,276 @@
 +/*
 + * Galaxy S8 (DREAMLTE) BSD pieces, run once from bsd_init just before
 + * launchd (tools/dreamlte/apply-dreamlte.py pastes this file into the xnu
@@ -469,6 +469,8 @@ index 0000000..a0b7f11
 +#include <sys/uio.h>
 +#include <miscfs/devfs/devfs.h>
 +#include <kern/locks.h>
++#include <kern/thread.h>
++#include <kern/kern_types.h>
 +#include <pexpert/pexpert.h>
 +#include <pexpert/device_tree.h>
 +#include <pexpert/arm64/board_config.h>
@@ -480,6 +482,8 @@ index 0000000..a0b7f11
 +extern void s8gpu_user_close(int client);
 +extern int s8_kernel_mkdir(const char *path, int mode);
 +extern vm_offset_t ml_static_ptovirt(vm_offset_t paddr);
++extern vnode_t rootvnode;
++extern void IOSleep(unsigned int milliseconds);
 +
 +#define S8MALI_CLIENTS 16
 +
@@ -672,11 +676,38 @@ index 0000000..a0b7f11
 +	printf("S8 OVERLAY: %u written, %u failed\n", written, failed);
 +}
 +
++/*
++ * Boot 44: before launchd the root is read-only (EROFS), and boot 45, which
++ * mounted it read-write from the start, stopped right after the kernel
++ * banner. So a kernel thread waits until launchd's mount_hfs has made the
++ * root writable and installs the overlay then. A program it installs as
++ * /usr/appleinternal/sbin/launchd.s8 therefore runs from the next boot on.
++ */
++static void
++s8ovl_thread(__unused void *arg, __unused wait_result_t wr)
++{
++	for (unsigned s = 0; s < 600; s++) {
++		vnode_t root = rootvnode;
++		if (root != NULLVP && !vfs_isrdonly(vnode_mount(root))) {
++			printf("S8 OVERLAY: root writable after %u s\n", s);
++			s8ovl_install();
++			return;
++		}
++		IOSleep(1000);
++	}
++	printf("S8 OVERLAY: root stayed read-only, nothing installed\n");
++}
++
 +void
 +dreamlte_bsd_late(void)
 +{
++	thread_t t;
 +	s8mali_dev_init();
-+	s8ovl_install();
++	if (kernel_thread_start(s8ovl_thread, NULL, &t) == KERN_SUCCESS) {
++		thread_deallocate(t);
++	} else {
++		printf("S8 OVERLAY: no thread\n");
++	}
 +}
 +
 +#else
@@ -899,26 +930,6 @@ index d26e1ee..7fcbca8 100644
  	load_init_program(p);
  	lock_trace = 1;
  }
-diff --git a/bsd/vfs/vfs_subr.c b/bsd/vfs/vfs_subr.c
-index 125d3ee..23ea4e9 100644
---- a/bsd/vfs/vfs_subr.c
-+++ b/bsd/vfs/vfs_subr.c
-@@ -1257,6 +1257,15 @@ vfs_mountroot(void)
- 
- 		mp = vfs_rootmountalloc_internal(vfsp, "root_device");
- 		mp->mnt_devvp = rootvp;
-+#if defined(ARM64_BOARD_CONFIG_A5XELTE)
-+		{
-+			extern boolean_t PE_parse_boot_argn(const char *, void *, int);
-+			uint32_t rootrw = 0;
-+			if (PE_parse_boot_argn("rootrw", &rootrw, sizeof(rootrw)) && rootrw) {
-+				mp->mnt_flag &= ~MNT_RDONLY;
-+			}
-+		}
-+#endif
- 
- 		if (vfsp->vfc_mountroot) {
- 			error = (*vfsp->vfc_mountroot)(mp, rootvp, ctx);
 diff --git a/bsd/vfs/vfs_syscalls.c b/bsd/vfs/vfs_syscalls.c
 index 90e68bb..5d0d3f9 100644
 --- a/bsd/vfs/vfs_syscalls.c

@@ -25,6 +25,8 @@
 #include <sys/uio.h>
 #include <miscfs/devfs/devfs.h>
 #include <kern/locks.h>
+#include <kern/thread.h>
+#include <kern/kern_types.h>
 #include <pexpert/pexpert.h>
 #include <pexpert/device_tree.h>
 #include <pexpert/arm64/board_config.h>
@@ -36,6 +38,8 @@ extern int s8gpu_user_ioctl(int client, unsigned long cmd, void *data);
 extern void s8gpu_user_close(int client);
 extern int s8_kernel_mkdir(const char *path, int mode);
 extern vm_offset_t ml_static_ptovirt(vm_offset_t paddr);
+extern vnode_t rootvnode;
+extern void IOSleep(unsigned int milliseconds);
 
 #define S8MALI_CLIENTS 16
 
@@ -228,11 +232,38 @@ s8ovl_install(void)
 	printf("S8 OVERLAY: %u written, %u failed\n", written, failed);
 }
 
+/*
+ * Boot 44: before launchd the root is read-only (EROFS), and boot 45, which
+ * mounted it read-write from the start, stopped right after the kernel
+ * banner. So a kernel thread waits until launchd's mount_hfs has made the
+ * root writable and installs the overlay then. A program it installs as
+ * /usr/appleinternal/sbin/launchd.s8 therefore runs from the next boot on.
+ */
+static void
+s8ovl_thread(__unused void *arg, __unused wait_result_t wr)
+{
+	for (unsigned s = 0; s < 600; s++) {
+		vnode_t root = rootvnode;
+		if (root != NULLVP && !vfs_isrdonly(vnode_mount(root))) {
+			printf("S8 OVERLAY: root writable after %u s\n", s);
+			s8ovl_install();
+			return;
+		}
+		IOSleep(1000);
+	}
+	printf("S8 OVERLAY: root stayed read-only, nothing installed\n");
+}
+
 void
 dreamlte_bsd_late(void)
 {
+	thread_t t;
 	s8mali_dev_init();
-	s8ovl_install();
+	if (kernel_thread_start(s8ovl_thread, NULL, &t) == KERN_SUCCESS) {
+		thread_deallocate(t);
+	} else {
+		printf("S8 OVERLAY: no thread\n");
+	}
 }
 
 #else
