@@ -189,3 +189,15 @@ ACPM tables read on the phone: MIF (id 0) 2093/2002 (voltage 0: disabled)
 1794 1540 1352 1014 845 676 546 421 286 208 MHz; INT (id 1) 667 533 400 333
 267 178 107 MHz (667 works); G3D (id 4) 839/764/683 (disabled) 572 546 455
 385 338 260 MHz. The MIF freeze above asked for 2093 MHz, a disabled level.
+
+## GPU runs its first job (patch 0135, s8gpu=3)
+
+Soft reset, L2 + 20 shader cores + tiler powered (ready 0x1 / 0x17771777 /
+0x1). Address space 0 with Mali LPAE page tables (4 levels; table = pa | 3,
+leaf = pa | 1 (block) | HAP read 1<<6 | HAP write 2<<6 | SH_OS 2<<8, attr
+index 0; Mali LPAE has stage-1 attributes but stage-2 permissions: the first
+try with AP_UNPRIV/nG faulted 0xC8 on the write), MEMATTR 0x88/0x8d/0x88,
+TRANSCFG legacy. A WRITE_VALUE job (v6 header type 2, Immediate 32) on slot 1
+stores 0xCAFEBABE: job IRQ 0x2, no MMU fault, header exception 0x1, the CPU
+reads 0xcafebabe back. Next: a kernel interface for userspace (panfrost
+ioctls: BO create/mmap, submit, wait) and Mesa panfrost for iOS.

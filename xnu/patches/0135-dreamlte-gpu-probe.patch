@@ -1,4 +1,4 @@
-From fb86ada9af5575edc5d9767aa17a5a8f084a9585 Mon Sep 17 00:00:00 2001
+From 1d2d01822617e59d3ff5a24f17f2d89c42bd68d8 Mon Sep 17 00:00:00 2001
 From: local <local@s8>
 Date: Wed, 21 Oct 2026 11:06:00 +0300
 Subject: [PATCH] dreamlte: GPU step 1 (s8gpu=1: Mali-G71 ids; s8g3d=kHz via
@@ -6,10 +6,10 @@ Subject: [PATCH] dreamlte: GPU step 1 (s8gpu=1: Mali-G71 ids; s8g3d=kHz via
 
 ---
  bsd/conf/files       |   1 +
- bsd/dev/s8_cpufreq.c |  21 ++++--
- bsd/dev/s8_gpu.c     | 155 +++++++++++++++++++++++++++++++++++++++++++
+ bsd/dev/s8_cpufreq.c |  21 ++--
+ bsd/dev/s8_gpu.c     | 291 +++++++++++++++++++++++++++++++++++++++++++
  bsd/dev/sweet_ufs.c  |   2 +
- 4 files changed, 172 insertions(+), 7 deletions(-)
+ 4 files changed, 308 insertions(+), 7 deletions(-)
  create mode 100644 bsd/dev/s8_gpu.c
 
 diff --git a/bsd/conf/files b/bsd/conf/files
@@ -67,10 +67,10 @@ index 5b7db85..ed5db0b 100644
  		}
 diff --git a/bsd/dev/s8_gpu.c b/bsd/dev/s8_gpu.c
 new file mode 100644
-index 0000000..b206ba3
+index 0000000..ceeb3bd
 --- /dev/null
 +++ b/bsd/dev/s8_gpu.c
-@@ -0,0 +1,155 @@
+@@ -0,0 +1,291 @@
 +/* SPDX-License-Identifier: GPL-2.0-only
 + *
 + * Galaxy S8 (dreamlte) GPU, step 1: the Mali-G71 MP20 (Bifrost) at 0x13900000.
@@ -80,12 +80,17 @@ index 0000000..b206ba3
 + *
 + * Boot-arg s8gpu=N: 1 logs the G3D power domain, CMU_G3D and the GPU's
 + * identification registers; 2 also soft-resets the GPU and powers its L2,
-+ * shader cores and tiler up (panfrost_gpu_init / panfrost_gpu_power_on). The clock comes from ACPM (dvfs_g3d, boot-arg
++ * shader cores and tiler up (panfrost_gpu_init / panfrost_gpu_power_on); 3 also
++ * sets up address space 0 (Mali LPAE page tables, as io-pgtable-arm.c
++ * ARM_MALI_LPAE and panfrost_mmu.c) and runs one WRITE_VALUE job (Mesa
++ * genxml v6) that stores 0xCAFEBABE into a page the CPU then reads. The clock comes from ACPM (dvfs_g3d, boot-arg
 + * s8g3d=kHz in s8_cpufreq.c), which also sets the voltage.
 + */
 +#include <sys/param.h>
 +#include <sys/systm.h>
 +#include <kern/clock.h>
++#include <vm/vm_kern.h>
++#include <vm/pmap.h>
 +#include <pexpert/pexpert.h>
 +#include <libkern/libkern.h>
 +#include <pexpert/arm64/board_config.h>
@@ -93,6 +98,7 @@ index 0000000..b206ba3
 +#if defined(ARM64_BOARD_CONFIG_A5XELTE) && defined(DREAMLTE)
 +
 +extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++extern ppnum_t pmap_find_phys(pmap_t map, addr64_t va);
 +
 +#define LOG(fmt, ...)   printf("S8GPU: " fmt "\n", ##__VA_ARGS__)
 +
@@ -144,6 +150,133 @@ index 0000000..b206ba3
 +		delay(10);
 +	}
 +	return false;
++}
++
++/* Clean (and invalidate) the CPU caches over [va, va+len): the GPU is not coherent. */
++static void
++dcache_civac(vm_offset_t va, size_t len)
++{
++	__asm__ volatile ("dsb sy" ::: "memory");
++	for (vm_offset_t a = va & ~63UL; a < va + len; a += 64) {
++		__asm__ volatile ("dc civac, %0" :: "r"(a) : "memory");
++	}
++	__asm__ volatile ("dsb sy" ::: "memory");
++}
++
++#define MMU_AS0                 0x2400
++#define AS_TRANSTAB_LO          0x00
++#define AS_TRANSTAB_HI          0x04
++#define AS_MEMATTR_LO           0x08
++#define AS_MEMATTR_HI           0x0c
++#define AS_COMMAND              0x18
++#define AS_FAULTSTATUS          0x1c
++#define AS_FAULTADDRESS_LO      0x20
++#define AS_FAULTADDRESS_HI      0x24
++#define AS_STATUS               0x28
++#define AS_TRANSCFG_LO          0x30
++#define AS_TRANSCFG_HI          0x34
++#define AS_COMMAND_UPDATE       0x01
++#define AS_COMMAND_FLUSH_MEM    0x05
++#define MMU_INT_RAWSTAT         0x2000
++#define MMU_INT_CLEAR           0x2004
++#define JOB_INT_RAWSTAT         0x1000
++#define JOB_INT_CLEAR           0x1004
++#define JS(n, o)                (0x1800 + (n) * 0x80 + (o))
++#define JS_STATUS               0x24
++#define JS_HEAD_LO              0x00
++#define JS_HEAD_NEXT_LO         0x40
++#define JS_HEAD_NEXT_HI         0x44
++#define JS_AFFINITY_NEXT_LO     0x50
++#define JS_AFFINITY_NEXT_HI     0x54
++#define JS_CONFIG_NEXT          0x58
++#define JS_COMMAND_NEXT         0x60
++
++/* Mali LPAE descriptors */
++#define PTE_TABLE               3ULL
++#define PTE_LEAF                (1ULL | (3ULL << 6) | (2ULL << 8))  /* block type, HAP read+write (Mali LPAE: stage-2-like permissions), SH_OS; attr 0 */
++#define JOB_VA                  0x1000000ULL
++#define TARGET_VA               0x1001000ULL
++
++static void
++as_wait(vm_offset_t gpu)
++{
++	for (int i = 0; i < 1000 && (rd(gpu, MMU_AS0 + AS_STATUS) & 1); i++) {
++		delay(10);
++	}
++}
++
++static void
++gpu_first_job(vm_offset_t gpu)
++{
++	vm_offset_t mem = 0;
++	const size_t pages = 6;
++	if (kmem_alloc_contig(kernel_map, &mem, pages * PAGE_SIZE, PAGE_MASK, 0, 0,
++	    KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
++		LOG("job: no contiguous memory");
++		return;
++	}
++	uint64_t pa = ptoa_64(pmap_find_phys(kernel_pmap, (addr64_t)mem));
++	uint64_t *l0 = (uint64_t *)mem, *l1 = l0 + 512, *l2 = l1 + 512, *l3 = l2 + 512;
++	uint32_t *job = (uint32_t *)(mem + 4 * PAGE_SIZE);
++	volatile uint32_t *target = (volatile uint32_t *)(mem + 5 * PAGE_SIZE);
++	/* VA 0x1000000: L0 0, L1 0, L2 8, L3 0 (job) and 1 (target) */
++	l0[0] = (pa + 1 * PAGE_SIZE) | PTE_TABLE;
++	l1[0] = (pa + 2 * PAGE_SIZE) | PTE_TABLE;
++	l2[(JOB_VA >> 21) & 511] = (pa + 3 * PAGE_SIZE) | PTE_TABLE;
++	l3[(JOB_VA >> 12) & 511] = (pa + 4 * PAGE_SIZE) | PTE_LEAF;
++	l3[(TARGET_VA >> 12) & 511] = (pa + 5 * PAGE_SIZE) | PTE_LEAF;
++	/* Write Value Job: header (Is 64b, Type 2 = write value, Index 1), payload at +32 */
++	job[4] = 1u | (2u << 1) | (1u << 16);
++	job[8] = (uint32_t)TARGET_VA;
++	job[9] = (uint32_t)(TARGET_VA >> 32);
++	job[10] = 6;                    /* Immediate 32 */
++	job[12] = 0xcafebabe;
++	target[0] = 0x11111111;
++	dcache_civac(mem, pages * PAGE_SIZE);
++
++	/* address space 0, as panfrost_mmu_enable() with the Mali LPAE config */
++	as_wait(gpu);
++	wr(gpu, MMU_AS0 + AS_COMMAND, AS_COMMAND_FLUSH_MEM);
++	as_wait(gpu);
++	uint64_t transtab = pa | (1u << 2) | 3u;        /* READ_INNER | ADRMODE_TABLE */
++	uint64_t memattr = 0x88ULL | (0x8dULL << 8) | (0x88ULL << 16);
++	wr(gpu, MMU_AS0 + AS_TRANSTAB_LO, (uint32_t)transtab);
++	wr(gpu, MMU_AS0 + AS_TRANSTAB_HI, (uint32_t)(transtab >> 32));
++	wr(gpu, MMU_AS0 + AS_MEMATTR_LO, (uint32_t)memattr);
++	wr(gpu, MMU_AS0 + AS_MEMATTR_HI, (uint32_t)(memattr >> 32));
++	wr(gpu, MMU_AS0 + AS_TRANSCFG_LO, 0);           /* ADRMODE_LEGACY */
++	wr(gpu, MMU_AS0 + AS_TRANSCFG_HI, 0);
++	wr(gpu, MMU_AS0 + AS_COMMAND, AS_COMMAND_UPDATE);
++	as_wait(gpu);
++	wr(gpu, MMU_INT_CLEAR, 0xffffffffu);
++	wr(gpu, JOB_INT_CLEAR, 0xffffffffu);
++	LOG("job: AS0 transtab %#llx status %#x; tables at %#llx", transtab, rd(gpu, MMU_AS0 + AS_STATUS), pa);
++
++	/* slot 1, AS 0, medium priority, flush+invalidate at start and end */
++	const int js = 1;
++	wr(gpu, JS(js, JS_HEAD_NEXT_LO), (uint32_t)JOB_VA);
++	wr(gpu, JS(js, JS_HEAD_NEXT_HI), (uint32_t)(JOB_VA >> 32));
++	wr(gpu, JS(js, JS_AFFINITY_NEXT_LO), rd(gpu, GPU_SHADER_PRESENT_LO));
++	wr(gpu, JS(js, JS_AFFINITY_NEXT_HI), 0);
++	wr(gpu, JS(js, JS_CONFIG_NEXT), 0u | (8u << 16) | (3u << 8) | (3u << 12));
++	wr(gpu, JS(js, JS_COMMAND_NEXT), 1);            /* START */
++	uint32_t raw = 0;
++	for (int i = 0; i < 10000; i++) {               /* 100 ms */
++		raw = rd(gpu, JOB_INT_RAWSTAT);
++		if (raw & ((1u << js) | (1u << (js + 16)))) {
++			break;
++		}
++		delay(10);
++	}
++	dcache_civac((vm_offset_t)target, 64);
++	dcache_civac((vm_offset_t)job, 64);
++	LOG("job: job irq raw %#x, JS%d status %#x head %#x, mmu irq raw %#x, AS0 fault %#x at %#x%08x, "
++	    "header exception %#x, target %#x (%s)", raw, js, rd(gpu, JS(js, JS_STATUS)), rd(gpu, JS(js, JS_HEAD_LO)),
++	    rd(gpu, MMU_INT_RAWSTAT), rd(gpu, MMU_AS0 + AS_FAULTSTATUS), rd(gpu, MMU_AS0 + AS_FAULTADDRESS_HI),
++	    rd(gpu, MMU_AS0 + AS_FAULTADDRESS_LO), job[0], target[0],
++	    target[0] == 0xcafebabe ? "THE GPU WROTE IT" : "not written");
++	wr(gpu, JOB_INT_CLEAR, 0xffffffffu);
++	wr(gpu, MMU_INT_CLEAR, 0xffffffffu);
 +}
 +
 +static void
@@ -216,6 +349,9 @@ index 0000000..b206ba3
 +	    rd(gpu, GPU_L2_PRESENT_LO), rd(gpu, GPU_L2_READY_LO), rd(gpu, GPU_STATUS), rd(gpu, GPU_IRQ_RAWSTAT));
 +	if (on >= 2) {
 +		gpu_power_up(gpu);
++	}
++	if (on >= 3) {
++		gpu_first_job(gpu);
 +	}
 +}
 +
