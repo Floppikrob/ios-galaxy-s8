@@ -317,4 +317,13 @@ IOSurface (DECON IDMA base, probe in progress).
   `A53 boost ok|FAILED` and `cpu MHz` (echoed as `S8 LOADER|`).
 - Image: boot-42 kernel (run 39660815102) + new loader, sha256
   1faee463fc1b8c5efd81d8ed989b11b9bd0e51e5f7d86868d508a6dca15275fa.
-  Result on the device: pending.
+- Result (boot 43 logs): `A53 boost FAILED, restored`, `cpu MHz=0x1a`
+  (26 MHz). The S-Boot CL1 PLL was 0xa0f30311 (M/P/S 243/3/1, stable).
+  After disable/LOCKTIME/enable neither the new PMS (223/4/0) nor the
+  restored old PMS set STABLE within 10 ms; the PLL read 0x80f30301
+  (enabled, not stable) and the mux stayed on the 26 MHz input, so iOS
+  ran on the oscillator: 3 swaps per 10 s, GPU copy 115 ms. BUCK3 did go
+  to 0x68. This is the same failure as the CL0 relock in boots 33-34:
+  toggling PLL_CON0 bit 31 on these CPU PLLs does not relock under our
+  loader. `s8boost=1` must not be used; the boot-42 command line is the
+  working baseline.

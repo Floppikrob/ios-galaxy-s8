@@ -203,7 +203,8 @@ void pmic_g3d_rail(void)
 }
 
 /*
- * "s8boost=1": raise the A53 cluster from S-Boot's 970.67 MHz to 1449.5 MHz,
+ * "s8boost=1": raise the A53 (BROKEN, see boot 43:
+ * the PLL never relocks and the CPU is left on 26 MHz) cluster from S-Boot's 970.67 MHz to 1449.5 MHz,
  * an entry of Samsung's pll_cpucl1_rate_table (M/P/S 223/4/0). Boot 42
  * showed iOS bound by CoreAnimation's CPU renderer. Voltage first: BUCK3
  * read 0x49 (756 mV); 1456 MHz needs at most ~0.9 V in the 8895 ASV
