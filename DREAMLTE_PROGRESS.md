@@ -201,6 +201,13 @@ six layers (DPP channels, IOMobileFramebuffer layers) and scale in hardware.
    tables, the Android "screen resolution" setting): fewer pixels for iOS to
    draw.
 
+- **Boot 35** (BOOT `ef8e775f…d6a871`, `s8gpu=1`): iOS booted as before
+  (capped to 4 CPUs, frame statistics similar), so the GPU probe did not hang
+  the loader, but TWRP kept no `pmsg-ramoops-0` this time and the probe
+  results were lost. XNU now copies the loader's probe lines (from the first
+  DISPLAY/rail/GPU/MNGS line to JUMP TO XNU) into its USERDATA log as
+  `S8 LOADER| ...` at AppleCLCD start.
+
 ## Mali-G71 for iOS (started 2026-10-21)
 
 Step 1, loader `gpu_probe.c` with `s8gpu=1`: log/enable S2MPS17 BUCK6

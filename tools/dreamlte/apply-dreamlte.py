@@ -606,6 +606,62 @@ edit('iokit/Kernel/arm/SweetFramebuffer.cpp', [
      '\tif ((++sweet_fb_swap_count % 1000) == 0) {\n', 1),
 ])
 
+# Boot 35: TWRP did not keep the pmsg zone, so the loader's probe results
+# (display flip CRC, Mongoose rail/cluster, Mali ID) were lost although the
+# kernel's own log on USERDATA was fine. Copy the loader's text from its
+# DISPLAY probe up to JUMP TO XNU into the kernel log once, at AppleCLCD
+# start (IOLog reaches the USERDATA ring by then).
+edit('iokit/Kernel/arm/SweetFramebuffer.cpp', [
+    ('bool\nAppleCLCD::start(IOService *provider)\n{\n',
+     '#if defined(DREAMLTE)\n'
+     'extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);\n'
+     '\n'
+     'static void\n'
+     'sweet_fb_echo_loader(void)\n'
+     '{\n'
+     '\tconst volatile uint32_t *hdr = (const volatile uint32_t *)ml_io_map(A5_KLOG_PHYS, A5_KLOG_SIZE);\n'
+     '\tif (hdr == NULL || hdr[0] != 0x43474244u) {\n'
+     '\t\treturn;\n'
+     '\t}\n'
+     '\tconst volatile char *t = (const volatile char *)(hdr + 3);\n'
+     '\tuint32_t n = A5_KLOG_SIZE - 12, i = 0, start = UINT32_MAX;\n'
+     '\tchar line[160];\n'
+     '\tfor (uint32_t lines = 0; i < n && lines < 120; ) {\n'
+     '\t\tuint32_t len = 0;\n'
+     '\t\twhile (i < n && t[i] != \'\\n\' && t[i] != 0) {\n'
+     '\t\t\tif (len < sizeof(line) - 1) {\n'
+     '\t\t\t\tchar c = t[i];\n'
+     '\t\t\t\tline[len++] = (c >= 0x20 && c < 0x7f) ? c : \'?\';\n'
+     '\t\t\t}\n'
+     '\t\t\ti++;\n'
+     '\t\t}\n'
+     '\t\tline[len] = 0;\n'
+     '\t\tif (i < n && t[i] == 0) {\n'
+     '\t\t\tbreak;\n'
+     '\t\t}\n'
+     '\t\ti++;\n'
+     '\t\t/* pmsg cells lose bits: accept any of the probes\' first lines. */\n'
+     '\t\tif (start == UINT32_MAX && (strstr(line, "DISPLAY") || strstr(line, "rail") ||\n'
+     '\t\t    strstr(line, "GPU") || strstr(line, "MNGS"))) {\n'
+     '\t\t\tstart = i;\n'
+     '\t\t}\n'
+     '\t\tif (start != UINT32_MAX) {\n'
+     '\t\t\tIOLog("S8 LOADER| %s\\n", line);\n'
+     '\t\t\tlines++;\n'
+     '\t\t\tif (strncmp(line, "JUMP TO XNU", 11) == 0) {\n'
+     '\t\t\t\tbreak;\n'
+     '\t\t\t}\n'
+     '\t\t}\n'
+     '\t}\n'
+     '}\n'
+     '#endif\n'
+     '\n'
+     'bool\nAppleCLCD::start(IOService *provider)\n{\n'
+     '#if defined(DREAMLTE)\n'
+     '\tsweet_fb_echo_loader();\n'
+     '#endif\n', 1),
+])
+
 # Battery: the A5XELTE config had no power source, so iOS showed a wrong
 # battery. On the S8, SweetBattery reads the MAX77865 fuel gauge and charger
 # through dreamlte_battery_read() (dreamlte_touch.c). S8 battery: 3000 mAh.
