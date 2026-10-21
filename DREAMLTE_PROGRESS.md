@@ -305,3 +305,16 @@ IOSurface (DECON IDMA base, probe in progress).
    with CPUCL1, and try the cluster sequence with the core powered before the
    cluster (`cluster0_on` after `CONFIGURATION`).
 3. Zero-copy scanout: make DECON fetch from a moved IDMA base.
+
+## Boot 43 (prepared, not yet run): A53 boost
+
+- Boot 42 confirmed Mali presentation but only 1–17 swaps per 10 s; the
+  limit is CoreAnimation's CPU renderer on four A53 cores at 970.67 MHz
+  (BUCK3 0x49 = 756 mV).
+- New loader flag `s8boost=1` (`pmic_cpu_boost`): BUCK3 to 0.95 V, then
+  PLL_CPUCL1 to 1449.5 MHz (M/P/S 223/4/0, Samsung table entry) using the
+  ra_pll_set_pmsk order; restores the old PMS on lock timeout. Logs
+  `A53 boost ok|FAILED` and `cpu MHz` (echoed as `S8 LOADER|`).
+- Image: boot-42 kernel (run 39660815102) + new loader, sha256
+  1faee463fc1b8c5efd81d8ed989b11b9bd0e51e5f7d86868d508a6dca15275fa.
+  Result on the device: pending.

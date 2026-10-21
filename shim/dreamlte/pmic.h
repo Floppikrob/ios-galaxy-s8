@@ -11,3 +11,6 @@ void pmic_mngs_rail(void);
 
 /* Logs the Mali rail (BUCK6); enables it at 0.8 V if it is off. */
 void pmic_g3d_rail(void);
+
+/* "s8boost=1": BUCK3 to 0.95 V, A53 PLL to 1449.5 MHz; logs the result. */
+void pmic_cpu_boost(void);

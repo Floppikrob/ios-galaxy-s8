@@ -449,6 +449,8 @@ uint64_t dl_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 	out("\n");
 	ufs_probe(kv, out, UFS_PROBE_DMA);
 	rtc_bootarg(ba, pmic_init(kv, out));
+	if (arg_at(ba, "s8boost=1") >= 0)
+		pmic_cpu_boost();
 	clean(ba_pa, ba_pa + PAGE_SIZE);
 	touch_probe(kv, out);
 	battery_probe(kv, out);

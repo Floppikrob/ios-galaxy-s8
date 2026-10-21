@@ -201,3 +201,68 @@ void pmic_g3d_rail(void)
 	show("b6out1", SLAVE_PMIC, B6OUT1);
 	out("\n");
 }
+
+/*
+ * "s8boost=1": raise the A53 cluster from S-Boot's 970.67 MHz to 1449.5 MHz,
+ * an entry of Samsung's pll_cpucl1_rate_table (M/P/S 223/4/0). Boot 42
+ * showed iOS bound by CoreAnimation's CPU renderer. Voltage first: BUCK3
+ * read 0x49 (756 mV); 1456 MHz needs at most ~0.9 V in the 8895 ASV
+ * table, so set 0.95 V. Then Samsung's ra_pll_set_pmsk order: mux to the
+ * 26 MHz input, disable, LOCKTIME = P * 150, new PMS + enable, wait for
+ * STABLE, mux back. On a lock timeout the old PMS is restored.
+ */
+#define CMU_CPUCL1		0x16900000UL
+#define PLL_LOCKTIME		0x0000
+#define PLL_CON0		0x0120
+#define PLL_EN			(1u << 31)
+#define PLL_STABLE		(1u << 29)
+#define PLL_MUX_BUSY		(1u << 7)
+#define PLL_MUX_SEL		(1u << 4)
+#define PLL_PMS_MASK		((0x3ffu << 16) | (0x3fu << 8) | 7u)
+#define PLL_PMS(m, p, s)	((m) << 16 | (p) << 8 | (s))
+
+static int pll_set(uint32_t pms)
+{
+	uintptr_t con = CMU_CPUCL1 + PLL_CON0;
+	uint32_t v = rd(con);
+	wr(con, v & ~PLL_MUX_SEL);
+	uint64_t end = ticks() + TIMER_HZ / 100;
+	while (ticks() < end && (rd(con) & PLL_MUX_BUSY))
+		;
+	wr(con, rd(con) & ~PLL_EN);
+	wr(CMU_CPUCL1 + PLL_LOCKTIME, ((pms >> 8) & 0x3f) * 150);
+	wr(con, (rd(con) & ~PLL_PMS_MASK) | pms | PLL_EN);
+	end = ticks() + TIMER_HZ / 100;
+	while (ticks() < end && !(rd(con) & PLL_STABLE))
+		;
+	int ok = (rd(con) & PLL_STABLE) != 0;
+	if (ok)
+		wr(con, rd(con) | PLL_MUX_SEL);
+	return ok;
+}
+
+void pmic_cpu_boost(void)
+{
+	out("A53 boost");
+	show(" b3out", SLAVE_PMIC, B3OUT);
+	kv("cl1 pll", rd(CMU_CPUCL1 + PLL_CON0));
+	out("\n");
+	int vsel = speedy(SLAVE_PMIC, B3OUT, 0, 0);
+	if (vsel < 0 || vsel > BUCK_VSEL(1000000)) {
+		out("A53 boost skipped: BUCK3 unreadable or already high\n");
+		return;
+	}
+	uint32_t old = rd(CMU_CPUCL1 + PLL_CON0) & PLL_PMS_MASK;
+	if (vsel < BUCK_VSEL(950000)) {
+		speedy(SLAVE_PMIC, B3OUT, 1, BUCK_VSEL(950000));
+		delay_us(1000);
+	}
+	int ok = pll_set(PLL_PMS(223, 4, 0));
+	if (!ok)
+		pll_set(old);
+	out(ok ? "A53 boost ok" : "A53 boost FAILED, restored");
+	show(" b3out", SLAVE_PMIC, B3OUT);
+	kv("cl1 pll", rd(CMU_CPUCL1 + PLL_CON0));
+	out("\n");
+	cpu_freq();
+}
