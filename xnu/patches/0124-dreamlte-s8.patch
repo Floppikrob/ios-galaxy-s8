@@ -438,10 +438,10 @@ index 7ba309b..5317426 100644
  	vm_offset_t alive;
 diff --git a/bsd/dev/dreamlte_s8.c b/bsd/dev/dreamlte_s8.c
 new file mode 100644
-index 0000000..4206f2e
+index 0000000..2ce5a5c
 --- /dev/null
 +++ b/bsd/dev/dreamlte_s8.c
-@@ -0,0 +1,276 @@
+@@ -0,0 +1,277 @@
 +/*
 + * Galaxy S8 (DREAMLTE) BSD pieces, run once from bsd_init just before
 + * launchd (tools/dreamlte/apply-dreamlte.py pastes this file into the xnu
@@ -465,6 +465,7 @@ index 0000000..4206f2e
 +#include <sys/fcntl.h>
 +#include <sys/proc.h>
 +#include <sys/vnode.h>
++#include <sys/mount.h>
 +#include <sys/kauth.h>
 +#include <sys/uio.h>
 +#include <miscfs/devfs/devfs.h>

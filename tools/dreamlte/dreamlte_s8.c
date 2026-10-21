@@ -21,6 +21,7 @@
 #include <sys/fcntl.h>
 #include <sys/proc.h>
 #include <sys/vnode.h>
+#include <sys/mount.h>
 #include <sys/kauth.h>
 #include <sys/uio.h>
 #include <miscfs/devfs/devfs.h>
