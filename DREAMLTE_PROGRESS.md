@@ -155,3 +155,24 @@ Measured with patch 0128 (S8FPS: present rate and copy cost) and 0129
   Mongoose 1066 MHz). The firmware binary is not in this repository: a local
   `bsd/dev/s8_acpm_dvfs_fw.h` supplies it.
 - RAM: `S8_DRAM_MIB=1024 make-boot.sh ...` gives XNU 1 GiB (boots fine).
+
+## CPU clocks through ACPM work (2026-10-21, patch 0127)
+
+The DVFS plugin answers on **channel 0** (a queue channel), not on the
+buffer-type channels 3/5: Samsung's acpm_dvfs.ch_num stays 0 when its channel
+lookup runs before the cal-if probe, so the vendor kernel itself uses index 0.
+Rates must be levels of the plugin's fvmap (rate/voltage tables right after
+the plugin in SRAM; header o_ratevolt at +0x14). Read from the phone:
+- A53 (id 3): 2002 1898 1794 **1690** 1456 1248 1053 949 832 715 598 455 MHz
+- Mongoose (id 2): 2808 2704 2652 2574 2496 **2314** 2158 2002 1937 1807 1703
+  1469 1261 1170 1066 962 850 741 MHz
+With `s8cpufreq=1690000 s8cpufreq_big=2314000` the PLLs read back 1690 and
+2314 MHz (from 1053 / 1066). The firmware sets the voltages.
+Raising MIF (id 0) to its top level froze the phone with a display underrun
+stripe: Samsung coordinates MIF switches with DECON. MIF/INT are now only
+touched with explicit `s8mif=`/`s8int=`.
+
+Profile (0134 `s8prof=backboardd`): the remaining frame cost is CoreAnimation's
+software renderer (CA::OGL::SW image_sampler, vAlpha_Blend, memset_pattern16);
+note the sampler also counts parked workqueue threads (workq_kernreturn,
+start_wqthread), which are idle, not busy (S8WQ: ~70 creations per session).

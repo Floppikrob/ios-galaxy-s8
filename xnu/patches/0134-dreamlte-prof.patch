@@ -1,0 +1,238 @@
+From 5ad5e4214a7fe204e3133ecf4f4b18b09b30af09 Mon Sep 17 00:00:00 2001
+From: local <local@s8>
+Date: Wed, 21 Oct 2026 09:47:40 +0300
+Subject: [PATCH] dreamlte: user pc sampling profiler (s8prof=NAME)
+
+---
+ bsd/dev/sweet_ufs.c             |   4 +-
+ bsd/pthread/pthread_workqueue.c |  21 +++++
+ osfmk/conf/files                |   1 +
+ osfmk/kern/s8_prof.c            | 160 ++++++++++++++++++++++++++++++++
+ 4 files changed, 185 insertions(+), 1 deletion(-)
+ create mode 100644 osfmk/kern/s8_prof.c
+
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index f07f5b4..96c9ed0 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -882,7 +882,9 @@ sweet_ufs_rootdev(dev_t *dev)
+ 	extern void s8_cpufreq_start(void);
+ 	extern void s8_load_start(void);
+ 	s8_cpufreq_start();
+-	s8_load_start();                /* per-CPU load every 10 s (osfmk/kern/s8_load.c) */             /* boot-arg s8cpufreq=KHZ (bsd/dev/s8_cpufreq.c) */
++	s8_load_start();
++	extern void s8_prof_start(void);
++	s8_prof_start();                /* boot-arg s8prof=NAME (osfmk/kern/s8_prof.c) */                /* per-CPU load every 10 s (osfmk/kern/s8_load.c) */             /* boot-arg s8cpufreq=KHZ (bsd/dev/s8_cpufreq.c) */
+ 	s8_wlan_start();
+ #endif
+ 	if (!su.ready) {
+diff --git a/bsd/pthread/pthread_workqueue.c b/bsd/pthread/pthread_workqueue.c
+index 0fc2bce..f6cb3de 100644
+--- a/bsd/pthread/pthread_workqueue.c
++++ b/bsd/pthread/pthread_workqueue.c
+@@ -4783,3 +4783,24 @@ workq_init(void)
+ 	thread_deallocate_daemon_register_queue(&workq_deallocate_queue,
+ 	    workq_deallocate_queue_invoke);
+ }
++
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++/* Galaxy S8 diagnostics (osfmk/kern/s8_prof.c): this process's workqueue counters. */
++void s8_workq_report(void *procp);
++
++void
++s8_workq_report(void *procp)
++{
++	struct workqueue *wq = proc_get_wqptr_fast((struct proc *)procp);
++	if (wq == NULL) {
++		printf("S8WQ: no workqueue\n");
++		return;
++	}
++	printf("S8WQ: creations %u nthreads %u idle %u scheduled %u constrained %u reqcount %u timer %u flags %#x "
++	    "max_threads %u max_constrained %u max_par %u/%u/%u\n",
++	    wq->wq_creations, wq->wq_nthreads, wq->wq_thidlecount, wq->wq_threads_scheduled,
++	    wq->wq_constrained_threads_scheduled, wq->wq_reqcount, wq->wq_timer_interval,
++	    (unsigned)os_atomic_load(&wq->wq_flags, relaxed), wq_max_threads, wq_max_constrained_threads,
++	    wq_max_parallelism[0], wq_max_parallelism[2], wq_max_parallelism[4]);
++}
++#endif
+diff --git a/osfmk/conf/files b/osfmk/conf/files
+index 12ae060..8808aaa 100644
+--- a/osfmk/conf/files
++++ b/osfmk/conf/files
+@@ -153,6 +153,7 @@ osfmk/kern/printf.c			standard
+ osfmk/kern/priority.c			standard
+ osfmk/kern/processor.c		standard
+ osfmk/kern/s8_load.c		standard
++osfmk/kern/s8_prof.c		standard
+ osfmk/kern/recount.c		standard
+ osfmk/kern/restartable.c		standard
+ osfmk/kern/sched_average.c		standard
+diff --git a/osfmk/kern/s8_prof.c b/osfmk/kern/s8_prof.c
+new file mode 100644
+index 0000000..07e6926
+--- /dev/null
++++ b/osfmk/kern/s8_prof.c
+@@ -0,0 +1,160 @@
++/*
++ * Galaxy S8 (dreamlte) diagnostics: a sampling profiler for one process.
++ * Boot-arg s8prof=NAME: every 2 ms, for each runnable thread of NAME, take the
++ * user pc saved at its last interrupt or trap (the 100 Hz timer interrupts a
++ * running thread, so this samples where it runs; a thread inside the kernel
++ * shows its trap stub). Every 20 s the 40 most frequent pcs are logged as
++ * "S8PROF pc count", with the shared cache slide to symbolicate them.
++ */
++#include <kern/processor.h>
++#include <kern/thread.h>
++#include <kern/task.h>
++#include <kern/clock.h>
++#include <vm/vm_shared_region.h>
++#include <mach/arm/thread_status.h>
++#include <pexpert/pexpert.h>
++#include <pexpert/arm64/board_config.h>
++
++#if defined(ARM64_BOARD_CONFIG_A5XELTE) && defined(DREAMLTE)
++
++extern void IOSleep(unsigned int milliseconds);
++extern void proc_name(int pid, char *buf, int size);
++extern arm_saved_state_t *get_user_regs(thread_t thread);
++extern void s8_workq_report(void *procp);
++extern void *get_bsdtask_info(task_t);
++
++#define S8P_SLOTS 4096
++static struct { uint64_t pc; uint32_t n; } s8p_hist[S8P_SLOTS];
++static char s8p_name[32];
++static uint32_t s8p_total, s8p_kernel;
++
++static void
++s8p_add(uint64_t pc)
++{
++	uint32_t h = (uint32_t)((pc >> 2) * 2654435761u) % S8P_SLOTS;
++	for (int i = 0; i < 32; i++, h = (h + 1) % S8P_SLOTS) {
++		if (s8p_hist[h].pc == pc) {
++			s8p_hist[h].n++;
++			return;
++		}
++		if (s8p_hist[h].pc == 0) {
++			s8p_hist[h].pc = pc;
++			s8p_hist[h].n = 1;
++			return;
++		}
++	}
++}
++
++static task_t
++s8p_find(void)
++{
++	task_t task, found = TASK_NULL;
++	lck_mtx_lock(&tasks_threads_lock);
++	queue_iterate(&tasks, task, task_t, tasks) {
++		char n[32];
++		proc_name(task_pid(task), n, sizeof(n));
++		if (strncmp(n, s8p_name, sizeof(n)) == 0) {
++			task_reference(task);
++			found = task;
++			break;
++		}
++	}
++	lck_mtx_unlock(&tasks_threads_lock);
++	return found;
++}
++
++static void
++s8p_report(task_t task)
++{
++	uint64_t slide = 0;
++	vm_shared_region_t sr = vm_shared_region_get(task);
++	if (sr != NULL) {
++		slide = sr->sr_slide;
++		vm_shared_region_deallocate(sr);
++	}
++	printf("S8PROF %s[%d] %u samples (%u in kernel traps) slide 0x%llx mh 0x%llx\n", s8p_name, task_pid(task),
++	    s8p_total, s8p_kernel, slide, task->mach_header_vm_address);
++	for (int k = 0; k < 40; k++) {
++		int best = -1;
++		for (int i = 0; i < S8P_SLOTS; i++) {
++			if (s8p_hist[i].n && (best < 0 || s8p_hist[i].n > s8p_hist[best].n)) {
++				best = i;
++			}
++		}
++		if (best < 0) {
++			break;
++		}
++		printf("S8PROF %llx %u\n", s8p_hist[best].pc, s8p_hist[best].n);
++		s8p_hist[best].n = 0;
++	}
++	if (get_bsdtask_info(task) != NULL) {
++		s8_workq_report(get_bsdtask_info(task));
++	}
++	bzero(s8p_hist, sizeof(s8p_hist));
++	s8p_total = s8p_kernel = 0;
++}
++
++static void
++s8p_thread(__unused void *arg, __unused wait_result_t wr)
++{
++	task_t task = TASK_NULL;
++	uint64_t last = mach_absolute_time();
++
++	for (;;) {
++		IOSleep(2);
++		if (task == TASK_NULL || task->active == 0) {
++			if (task != TASK_NULL) {
++				task_deallocate(task);
++			}
++			task = s8p_find();
++			if (task == TASK_NULL) {
++				IOSleep(1000);
++				continue;
++			}
++		}
++		thread_t th;
++		task_lock(task);
++		queue_iterate(&task->threads, th, thread_t, task_threads) {
++			if ((th->state & (TH_RUN | TH_WAIT)) != TH_RUN) {
++				continue;
++			}
++			arm_saved_state_t *ss = get_user_regs(th);
++			if (ss == NULL || !is_saved_state64(ss)) {
++				continue;
++			}
++			uint64_t pc = get_saved_state_pc(ss);
++			if (pc == 0) {
++				continue;
++			}
++			s8p_total++;
++			s8p_add(pc);
++		}
++		task_unlock(task);
++		if (mach_absolute_time() - last > 20ULL * 26000000) {
++			s8p_report(task);
++			last = mach_absolute_time();
++		}
++	}
++}
++
++void s8_prof_start(void);
++
++void
++s8_prof_start(void)
++{
++	thread_t thread;
++	if (!PE_parse_boot_argn("s8prof", s8p_name, sizeof(s8p_name)) || s8p_name[0] == '\0') {
++		return;
++	}
++	if (kernel_thread_start(s8p_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	}
++}
++
++#elif defined(ARM64_BOARD_CONFIG_A5XELTE)
++void s8_prof_start(void);
++void
++s8_prof_start(void)
++{
++}
++#endif
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,13 +1,13 @@
-From b19a95839c9041a0f15db1a9225ca27eb71dd0d9 Mon Sep 17 00:00:00 2001
+From a6bc832d2e0ae80b55465c8e7ce1603aee74f36a Mon Sep 17 00:00:00 2001
 From: local <local@s8>
-Date: Wed, 21 Oct 2026 01:58:40 +0300
-Subject: [PATCH] dreamlte: CPU frequency through ACPM (s8cpufreq=KHZ)
+Date: Wed, 21 Oct 2026 09:45:36 +0300
+Subject: [PATCH] 0127-dreamlte-acpm-cpufreq.patch
 
 ---
  bsd/conf/files       |   1 +
- bsd/dev/s8_cpufreq.c | 401 +++++++++++++++++++++++++++++++++++++++++++
+ bsd/dev/s8_cpufreq.c | 471 +++++++++++++++++++++++++++++++++++++++++++
  bsd/dev/sweet_ufs.c  |   2 +
- 3 files changed, 404 insertions(+)
+ 3 files changed, 474 insertions(+)
  create mode 100644 bsd/dev/s8_cpufreq.c
 
 diff --git a/bsd/conf/files b/bsd/conf/files
@@ -24,10 +24,10 @@ index 6824ddf..3b349a9 100644
  bsd/dev/a5xelte_touch.c			standard
 diff --git a/bsd/dev/s8_cpufreq.c b/bsd/dev/s8_cpufreq.c
 new file mode 100644
-index 0000000..4f7c646
+index 0000000..5b7db85
 --- /dev/null
 +++ b/bsd/dev/s8_cpufreq.c
-@@ -0,0 +1,401 @@
+@@ -0,0 +1,471 @@
 +/* SPDX-License-Identifier: GPL-2.0-only
 + *
 + * Galaxy S8 (dreamlte) CPU frequency through ACPM, the power-management
@@ -244,6 +244,7 @@ index 0000000..4f7c646
 +}
 +
 +static uint32_t chans_off, chans_count;
++static uint32_t fvmap_off;          /* DVFS plugin rate tables, set when it is attached */
 +static unsigned dvfs_channel = DVFS_CHANNEL;
 +
 +static void
@@ -308,6 +309,7 @@ index 0000000..4f7c646
 +		int e = acpm_call(cmd);
 +		LOG("plugin %u: %u bytes loaded at %#x, attach: %d (reply %#x %#x), attached now %u", i,
 +		    (unsigned)sizeof(s8_acpm_dvfs_fw), at, e, cmd[0], cmd[1], sram[b + 28]);
++		fvmap_off = at + size;  /* cal-if fvmap_init(base + size) */
 +		/* its channel: the one whose owner mask names this plugin (the DT's 5 is not it here) */
 +		for (unsigned c = 0; c < chans_count; c++) {
 +			if (sr(chans_off + (c * CH_WORDS + 2) * 4) == (1u << id)) {
@@ -341,6 +343,35 @@ index 0000000..4f7c646
 +	}
 +	uint32_t mb = pll_mhz(big, &rb), ml = pll_mhz(little, &rl);
 +	LOG("%s: PLL A53 %u MHz (%#x), PLL Mongoose %u MHz (%#x)", when, ml, rl, mb, rb);
++}
++
++/*
++ * fvmap: the DVFS plugin's rate/voltage tables right after its code in SRAM
++ * (cal-if/fvmap.c): one 24-byte header per ACPM domain (num_of_lv at +1,
++ * init_lv at +8, o_ratevolt at +0x14), rate/volt pairs (kHz, uV) at
++ * fvmap + o_ratevolt. Logs a domain's table; returns its highest rate <= limit.
++ */
++
++
++static uint32_t
++fvmap_pick(uint32_t id, uint32_t limit)
++{
++	if (fvmap_off == 0 || fvmap_off + 24 * (id + 1) > SRAM_SIZE) {
++		return 0;
++	}
++	uint32_t h = fvmap_off + 24 * id;
++	uint32_t lv = sram[h + 1], init = sram[h + 8];
++	uint32_t o_rv = sram[h + 0x14] | (uint32_t)sram[h + 0x15] << 8;      /* o_ratevolt */
++	uint32_t best = 0;
++	LOG("fvmap id %u: %u levels, init level %u, table at +%#x", id, lv, init, o_rv);
++	for (uint32_t i = 0; i < lv && i < 32 && fvmap_off + o_rv + 8 * i + 8 <= SRAM_SIZE; i++) {
++		uint32_t rate = sr(fvmap_off + o_rv + 8 * i), volt = sr(fvmap_off + o_rv + 8 * i + 4);
++		LOG("fvmap id %u lv %u: %u kHz %u uV", id, i, rate, volt);
++		if (rate <= limit && rate > best) {
++			best = rate;
++		}
++	}
++	return best;
 +}
 +
 +static uint32_t
@@ -410,13 +441,52 @@ index 0000000..4f7c646
 +	seq = (sr(ch[CH_RX_BASE] + ch[CH_Q_ELEM] * ((sr(ch[CH_RX_FRONT]) + ch[CH_Q_LEN] - 1) % ch[CH_Q_LEN])) >> SEQ_SHIFT) & 0x3f;
 +	LOG("ACPM get: Mongoose %u kHz, A53 %u kHz", get_rate(2), get_rate(3));
 +	log_plls("before");
-+	if (want) {
-+		/* ACPM ids: dvfs_cpucl0 = 2 is the Mongoose cluster (CPUCL0), dvfs_cpucl1 = 3 the A53s */
-+		uint32_t id = cl ? 2 : 3;
-+		uint32_t cmd[4] = { id, want, FREQ_REQ, 0 };
++	uint32_t want_big = 0, chan = 0;
++	PE_parse_boot_argn("s8cpufreq_big", &want_big, sizeof(want_big));
++	PE_parse_boot_argn("s8cpufreq_ch", &chan, sizeof(chan));
++	if (want == 0 && want_big == 0) {
++		return;
++	}
++	/*
++	 * Requests go to channel 0 by default: Samsung's acpm_dvfs.ch_num stays 0
++	 * when its channel lookup runs before the cal-if probe, so the vendor
++	 * kernel's DVFS requests use channel index 0 (a queue channel).
++	 */
++	if (chan >= chans_count) {
++		chan = 0;
++	}
++	load_channel(chan);
++	LOG("requests on channel %u (q_len %u type %u)", chan, ch[CH_Q_LEN], ch[3]);
++	/* ACPM ids: dvfs_cpucl0 = 2 is the Mongoose cluster (CPUCL0), dvfs_cpucl1 = 3 the A53s */
++	/*
++	 * Memory (MIF, id 0) and internal bus (INT, id 1) clocks: s8mif / s8int =
++	 * kHz limits, off by default. Raising MIF to its top level froze the phone
++	 * with a display underrun stripe (Samsung coordinates MIF changes with
++	 * DECON; we do not).
++	 */
++	uint32_t want_mif = 0, want_int = 0;
++	PE_parse_boot_argn("s8mif", &want_mif, sizeof(want_mif));
++	PE_parse_boot_argn("s8int", &want_int, sizeof(want_int));
++	static const struct { uint32_t id; const char *name; } dom[4] = {
++		{ 3, "A53" }, { 2, "Mongoose" }, { 0, "MIF" }, { 1, "INT" } };
++	for (int d = 0; d < 4; d++) {
++		uint32_t limit = d == 0 ? want : d == 1 ? want_big : d == 2 ? want_mif : want_int;
++		if (limit == 0) {
++			continue;
++		}
++		uint32_t rate = fvmap_pick(dom[d].id, limit);
++		if (rate == 0) {
++			if (d >= 2) {
++				LOG("%s: no fvmap rate, skipped", dom[d].name);
++				continue;
++			}
++			LOG("%s: no fvmap rate <= %u kHz, asking %u as given", dom[d].name, limit, limit);
++			rate = limit;
++		}
++		LOG("%s: ACPM rate before %u kHz", dom[d].name, get_rate(dom[d].id));
++		uint32_t cmd[4] = { dom[d].id, rate, FREQ_REQ, 0 };
 +		int e = acpm_call(cmd);
-+		LOG("%s -> %u kHz: %d (reply %#x %#x %#x %#x)", cl ? "Mongoose" : "A53", want, e, cmd[0], cmd[1],
-+		    cmd[2], cmd[3]);
++		LOG("%s -> %u kHz: %d (reply %#x %#x %#x %#x)", dom[d].name, rate, e, cmd[0], cmd[1], cmd[2], cmd[3]);
 +		delay(100000);
 +		log_plls("after");
 +	}
