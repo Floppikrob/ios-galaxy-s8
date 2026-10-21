@@ -21,6 +21,7 @@
  * rebuilt only when a slot is reused for another surface.
  */
 extern "C" void clean_dcache(vm_offset_t addr, unsigned count, int phys);
+extern "C" void flush_dcache(vm_offset_t addr, unsigned count, int phys);
 
 #define S8GPU_MALI_PA           0x13900000UL
 #define S8GPU_PMU_G3D_STAT      0x164840e4UL    /* pd-g3d status, 0xF = on */
@@ -29,8 +30,8 @@ extern "C" void clean_dcache(vm_offset_t addr, unsigned count, int phys);
 #define S8GPU_JS0               0x1800
 #define S8GPU_AS0               0x2400
 #define S8GPU_PT_PA             (S8_BLIT_BASE_PA + 0x10000)     /* page-table pool */
-#define S8GPU_PT_PAGES          512                             /* 2 MiB pool */
-#define S8GPU_SLOTS             4
+#define S8GPU_PT_PAGES          1024                            /* 4 MiB pool */
+#define S8GPU_SLOTS             16
 #define S8GPU_SLOT_VA           0x100000000ULL
 #define S8GPU_SLOT_SIZE         0x2000000ULL                    /* 32 MiB */
 #define S8GPU_PANEL_PA          0xcc000000ULL
@@ -484,6 +485,38 @@ s8gpu_user_submit(struct s8mali_submit *s)
 	return 0;
 }
 
+static int
+s8gpu_user_map_surface(struct s8mali_map_surface *m)
+{
+	SweetSurface *s = sweet_surface_copy(m->id);
+	if (s == NULL) {
+		return ENOENT;
+	}
+	int err = 0;
+	uint64_t total = s->memory ? s->memory->getLength() : 0;
+	uint64_t size = m->size ? m->size : total - m->offset;
+	if (s->memory == NULL || m->offset > total || size > total - m->offset) {
+		err = EINVAL;
+	} else {
+		if (m->flags & S8MALI_MAP_FLUSH) {
+			uintptr_t kva = s->kernelAddress();
+			if (kva != 0) {
+				flush_dcache((vm_offset_t)(kva + m->offset), (unsigned)size, 0);
+			}
+		}
+		m->gpu_va = s8gpu_surface_va(s->memory, s->id, m->offset, size);
+		m->width = s->width;
+		m->height = s->height;
+		m->bytes_per_row = s->bytesPerRow;
+		m->pixel_format = s->pixelFormat;
+		if (m->gpu_va == 0) {
+			err = ENOMEM;
+		}
+	}
+	s->release();
+	return err;
+}
+
 extern "C" int
 s8gpu_user_ioctl(int client, unsigned long cmd, void *data)
 {
@@ -525,6 +558,9 @@ s8gpu_user_ioctl(int client, unsigned long cmd, void *data)
 		} else {
 			((struct s8mali_submit *)data)->result = 3;
 		}
+		break;
+	case S8MALI_MAP_SURFACE:
+		err = s8gpu_ready ? s8gpu_user_map_surface((struct s8mali_map_surface *)data) : ENODEV;
 		break;
 	case S8MALI_LOG: {
 		struct s8mali_log *l = (struct s8mali_log *)data;

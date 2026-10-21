@@ -10,6 +10,11 @@
  * needs cache maintenance. Allocations are freed by S8MALI_FREE or when the
  * descriptor is closed.
  *
+ * Surfaces: S8MALI_MAP_SURFACE maps an IOSurface's pages into one of the
+ * kernel's GPU windows (least recently mapped is reused) so job chains can
+ * sample or render to it. A window stays valid until 16 other surfaces
+ * have been mapped; map again before each command buffer that uses it.
+ *
  * Jobs: S8MALI_SUBMIT starts a job chain (GPU address of the first job
  * header) on a job slot -- 0 fragment, 1 vertex/tiler/compute -- and waits
  * for it. The kernel serialises it with the frame presentation it does
@@ -52,6 +57,16 @@ struct s8mali_submit {
 	uint64_t elapsed_us;            /* out */
 };
 
+struct s8mali_map_surface {
+	uint32_t id;                    /* in: IOSurface id */
+	uint32_t flags;                 /* in: S8MALI_MAP_* */
+	uint64_t offset, size;          /* in: byte range (size 0 = whole surface) */
+	uint64_t gpu_va;                /* out: GPU address of byte `offset` */
+	uint32_t width, height;         /* out: surface geometry */
+	uint32_t bytes_per_row, pixel_format;
+};
+#define S8MALI_MAP_FLUSH        1       /* clean+invalidate the CPU caches first */
+
 struct s8mali_log {
 	char text[120];                 /* NUL-terminated; printed as "S8 MALI| ..." */
 };
@@ -61,5 +76,6 @@ struct s8mali_log {
 #define S8MALI_FREE     _IOW('M', 3, struct s8mali_free)
 #define S8MALI_SUBMIT   _IOWR('M', 4, struct s8mali_submit)
 #define S8MALI_LOG      _IOW('M', 5, struct s8mali_log)
+#define S8MALI_MAP_SURFACE _IOWR('M', 6, struct s8mali_map_surface)
 
 #endif

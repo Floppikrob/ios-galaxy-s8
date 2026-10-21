@@ -1305,7 +1305,7 @@ index 55d0057..dee6635 100644
  	int32_t rc = sweet_psci_cpu_on(cpu->phys_id, entry, getCPUNumber());
  	IOLog(CPU_PORT_NAME " CPU: cpu=%u PSCI CPU_ON rc=%d\n", getCPUNumber(), rc);
 diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
-index 356ff51..12dbb7a 100644
+index 356ff51..7bb5f08 100644
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
 @@ -48,6 +48,7 @@ extern "C" int sweet_console_muted;     /* osfmk/console/serial_console.c */
@@ -1469,7 +1469,7 @@ index 356ff51..12dbb7a 100644
  	setProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");
  	setProperty("external", false);
  	setProperty("DisplayPipePlaneBaseAlignment", 64ULL, 32);
-@@ -302,6 +392,1335 @@ get32(const uint8_t *p, uint32_t off)
+@@ -302,6 +392,1387 @@ get32(const uint8_t *p, uint32_t off)
  	return v;
  }
  
@@ -2136,6 +2136,11 @@ index 356ff51..12dbb7a 100644
 + * needs cache maintenance. Allocations are freed by S8MALI_FREE or when the
 + * descriptor is closed.
 + *
++ * Surfaces: S8MALI_MAP_SURFACE maps an IOSurface's pages into one of the
++ * kernel's GPU windows (least recently mapped is reused) so job chains can
++ * sample or render to it. A window stays valid until 16 other surfaces
++ * have been mapped; map again before each command buffer that uses it.
++ *
 + * Jobs: S8MALI_SUBMIT starts a job chain (GPU address of the first job
 + * header) on a job slot -- 0 fragment, 1 vertex/tiler/compute -- and waits
 + * for it. The kernel serialises it with the frame presentation it does
@@ -2178,6 +2183,16 @@ index 356ff51..12dbb7a 100644
 +	uint64_t elapsed_us;            /* out */
 +};
 +
++struct s8mali_map_surface {
++	uint32_t id;                    /* in: IOSurface id */
++	uint32_t flags;                 /* in: S8MALI_MAP_* */
++	uint64_t offset, size;          /* in: byte range (size 0 = whole surface) */
++	uint64_t gpu_va;                /* out: GPU address of byte `offset` */
++	uint32_t width, height;         /* out: surface geometry */
++	uint32_t bytes_per_row, pixel_format;
++};
++#define S8MALI_MAP_FLUSH        1       /* clean+invalidate the CPU caches first */
++
 +struct s8mali_log {
 +	char text[120];                 /* NUL-terminated; printed as "S8 MALI| ..." */
 +};
@@ -2187,6 +2202,7 @@ index 356ff51..12dbb7a 100644
 +#define S8MALI_FREE     _IOW('M', 3, struct s8mali_free)
 +#define S8MALI_SUBMIT   _IOWR('M', 4, struct s8mali_submit)
 +#define S8MALI_LOG      _IOW('M', 5, struct s8mali_log)
++#define S8MALI_MAP_SURFACE _IOWR('M', 6, struct s8mali_map_surface)
 +
 +#endif
 +
@@ -2213,6 +2229,7 @@ index 356ff51..12dbb7a 100644
 + * rebuilt only when a slot is reused for another surface.
 + */
 +extern "C" void clean_dcache(vm_offset_t addr, unsigned count, int phys);
++extern "C" void flush_dcache(vm_offset_t addr, unsigned count, int phys);
 +
 +#define S8GPU_MALI_PA           0x13900000UL
 +#define S8GPU_PMU_G3D_STAT      0x164840e4UL    /* pd-g3d status, 0xF = on */
@@ -2221,8 +2238,8 @@ index 356ff51..12dbb7a 100644
 +#define S8GPU_JS0               0x1800
 +#define S8GPU_AS0               0x2400
 +#define S8GPU_PT_PA             (S8_BLIT_BASE_PA + 0x10000)     /* page-table pool */
-+#define S8GPU_PT_PAGES          512                             /* 2 MiB pool */
-+#define S8GPU_SLOTS             4
++#define S8GPU_PT_PAGES          1024                            /* 4 MiB pool */
++#define S8GPU_SLOTS             16
 +#define S8GPU_SLOT_VA           0x100000000ULL
 +#define S8GPU_SLOT_SIZE         0x2000000ULL                    /* 32 MiB */
 +#define S8GPU_PANEL_PA          0xcc000000ULL
@@ -2676,6 +2693,38 @@ index 356ff51..12dbb7a 100644
 +	return 0;
 +}
 +
++static int
++s8gpu_user_map_surface(struct s8mali_map_surface *m)
++{
++	SweetSurface *s = sweet_surface_copy(m->id);
++	if (s == NULL) {
++		return ENOENT;
++	}
++	int err = 0;
++	uint64_t total = s->memory ? s->memory->getLength() : 0;
++	uint64_t size = m->size ? m->size : total - m->offset;
++	if (s->memory == NULL || m->offset > total || size > total - m->offset) {
++		err = EINVAL;
++	} else {
++		if (m->flags & S8MALI_MAP_FLUSH) {
++			uintptr_t kva = s->kernelAddress();
++			if (kva != 0) {
++				flush_dcache((vm_offset_t)(kva + m->offset), (unsigned)size, 0);
++			}
++		}
++		m->gpu_va = s8gpu_surface_va(s->memory, s->id, m->offset, size);
++		m->width = s->width;
++		m->height = s->height;
++		m->bytes_per_row = s->bytesPerRow;
++		m->pixel_format = s->pixelFormat;
++		if (m->gpu_va == 0) {
++			err = ENOMEM;
++		}
++	}
++	s->release();
++	return err;
++}
++
 +extern "C" int
 +s8gpu_user_ioctl(int client, unsigned long cmd, void *data)
 +{
@@ -2717,6 +2766,9 @@ index 356ff51..12dbb7a 100644
 +		} else {
 +			((struct s8mali_submit *)data)->result = 3;
 +		}
++		break;
++	case S8MALI_MAP_SURFACE:
++		err = s8gpu_ready ? s8gpu_user_map_surface((struct s8mali_map_surface *)data) : ENODEV;
 +		break;
 +	case S8MALI_LOG: {
 +		struct s8mali_log *l = (struct s8mali_log *)data;
@@ -2805,7 +2857,7 @@ index 356ff51..12dbb7a 100644
  static uint32_t sweet_fb_swaps_logged;
  static uint64_t sweet_fb_swap_count;
  
-@@ -318,7 +1737,19 @@ AppleCLCD::swap(const uint8_t *rec)
+@@ -318,7 +1789,19 @@ AppleCLCD::swap(const uint8_t *rec)
  	IOLockLock(fLock);
  	memcpy(fPending, rec, SWEET_FB_SWAP_REC_SIZE);
  	fDirty = true;
@@ -2825,7 +2877,7 @@ index 356ff51..12dbb7a 100644
  	if ((++sweet_fb_swap_count % 1000) == 0) {
  		IOLog("SWEET FB: %llu swaps\n", sweet_fb_swap_count);
  	}
-@@ -328,6 +1759,13 @@ void
+@@ -328,6 +1811,13 @@ void
  AppleCLCD::present(const uint8_t *rec)
  {
  	uint32_t mask = get32(rec, 0x104);
@@ -2839,7 +2891,7 @@ index 356ff51..12dbb7a 100644
  
  
  	if (!fConsolePaused) {
-@@ -369,6 +1807,50 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -369,6 +1859,50 @@ AppleCLCD::present(const uint8_t *rec)
  		}
  		uintptr_t src = s->kernelAddress();
  		uint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;
@@ -2890,7 +2942,7 @@ index 356ff51..12dbb7a 100644
  		if (w <= 0 || h <= 0) {
  			w = (int32_t)s->width;
  			h = (int32_t)s->height;
-@@ -410,6 +1892,19 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -410,6 +1944,19 @@ AppleCLCD::present(const uint8_t *rec)
  		    s->memory == NULL || last > s->memory->getLength()) {
  			src = 0;
  		}
@@ -2910,7 +2962,7 @@ index 356ff51..12dbb7a 100644
  		if (src != 0 && bpe == 4) {
  			for (int32_t y = 0; y < h; y++) {
  				memcpy((void *)(fPixels + (uint64_t)(dy + y) * fRowBytes + (uint64_t)dx * 4),
-@@ -419,6 +1914,11 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -419,6 +1966,11 @@ AppleCLCD::present(const uint8_t *rec)
  		}
  		s->release();
  	}
