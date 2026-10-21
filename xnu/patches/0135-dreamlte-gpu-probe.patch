@@ -1,15 +1,15 @@
-From c95803a1e4931a5e64194352361f33cde615e18e Mon Sep 17 00:00:00 2001
+From fb86ada9af5575edc5d9767aa17a5a8f084a9585 Mon Sep 17 00:00:00 2001
 From: local <local@s8>
 Date: Wed, 21 Oct 2026 11:06:00 +0300
 Subject: [PATCH] dreamlte: GPU step 1 (s8gpu=1: Mali-G71 ids; s8g3d=kHz via
  ACPM)
 
 ---
- bsd/conf/files       |  1 +
- bsd/dev/s8_cpufreq.c | 21 ++++++----
- bsd/dev/s8_gpu.c     | 98 ++++++++++++++++++++++++++++++++++++++++++++
- bsd/dev/sweet_ufs.c  |  2 +
- 4 files changed, 115 insertions(+), 7 deletions(-)
+ bsd/conf/files       |   1 +
+ bsd/dev/s8_cpufreq.c |  21 ++++--
+ bsd/dev/s8_gpu.c     | 155 +++++++++++++++++++++++++++++++++++++++++++
+ bsd/dev/sweet_ufs.c  |   2 +
+ 4 files changed, 172 insertions(+), 7 deletions(-)
  create mode 100644 bsd/dev/s8_gpu.c
 
 diff --git a/bsd/conf/files b/bsd/conf/files
@@ -67,10 +67,10 @@ index 5b7db85..ed5db0b 100644
  		}
 diff --git a/bsd/dev/s8_gpu.c b/bsd/dev/s8_gpu.c
 new file mode 100644
-index 0000000..9e5dd7d
+index 0000000..b206ba3
 --- /dev/null
 +++ b/bsd/dev/s8_gpu.c
-@@ -0,0 +1,98 @@
+@@ -0,0 +1,155 @@
 +/* SPDX-License-Identifier: GPL-2.0-only
 + *
 + * Galaxy S8 (dreamlte) GPU, step 1: the Mali-G71 MP20 (Bifrost) at 0x13900000.
@@ -78,8 +78,9 @@ index 0000000..9e5dd7d
 + * 0x60a00001, 20 shader cores) and mainline panfrost (register layout).
 + * GPL-2.0 like those.
 + *
-+ * Boot-arg s8gpu=1: log the G3D power domain, CMU_G3D and the GPU's
-+ * identification registers. The clock comes from ACPM (dvfs_g3d, boot-arg
++ * Boot-arg s8gpu=N: 1 logs the G3D power domain, CMU_G3D and the GPU's
++ * identification registers; 2 also soft-resets the GPU and powers its L2,
++ * shader cores and tiler up (panfrost_gpu_init / panfrost_gpu_power_on). The clock comes from ACPM (dvfs_g3d, boot-arg
 + * s8g3d=kHz in s8_cpufreq.c), which also sets the voltage.
 + */
 +#include <sys/param.h>
@@ -118,8 +119,61 @@ index 0000000..9e5dd7d
 +#define GPU_L2_PRESENT_LO       0x120
 +#define GPU_SHADER_READY_LO     0x140
 +#define GPU_L2_READY_LO         0x160
++#define GPU_TILER_READY_LO      0x150
++#define GPU_INT_CLEAR           0x024
++#define GPU_INT_MASK            0x028
++#define GPU_CMD                 0x030
++#define GPU_CMD_SOFT_RESET      0x01
++#define GPU_CMD_HARD_RESET      0x02
++#define GPU_IRQ_RESET_COMPLETED (1u << 8)
++#define GPU_SHADER_PWRON_LO     0x180
++#define GPU_TILER_PWRON_LO      0x190
++#define GPU_L2_PWRON_LO         0x1a0
 +
 +static inline uint32_t rd(vm_offset_t b, uint32_t o) { return *(volatile uint32_t *)(b + o); }
++static inline void wr(vm_offset_t b, uint32_t o, uint32_t v) { *(volatile uint32_t *)(b + o) = v; __asm__ volatile ("dsb sy" ::: "memory"); }
++
++/* Poll until (reg & mask) == want, up to ms milliseconds; true if reached. */
++static bool
++poll(vm_offset_t b, uint32_t o, uint32_t mask, uint32_t want, unsigned ms)
++{
++	for (unsigned i = 0; i < ms * 100; i++) {
++		if ((*(volatile uint32_t *)(b + o) & mask) == want) {
++			return true;
++		}
++		delay(10);
++	}
++	return false;
++}
++
++static void
++gpu_power_up(vm_offset_t gpu)
++{
++	wr(gpu, GPU_INT_MASK, 0);
++	wr(gpu, GPU_INT_CLEAR, GPU_IRQ_RESET_COMPLETED);
++	wr(gpu, GPU_CMD, GPU_CMD_SOFT_RESET);
++	if (!poll(gpu, 0x020, GPU_IRQ_RESET_COMPLETED, GPU_IRQ_RESET_COMPLETED, 10)) {
++		LOG("soft reset timed out (raw %#x), hard reset", rd(gpu, 0x020));
++		wr(gpu, GPU_CMD, GPU_CMD_HARD_RESET);
++		if (!poll(gpu, 0x020, GPU_IRQ_RESET_COMPLETED, GPU_IRQ_RESET_COMPLETED, 100)) {
++			LOG("hard reset timed out (raw %#x), stopping", rd(gpu, 0x020));
++			return;
++		}
++	}
++	wr(gpu, GPU_INT_CLEAR, 0xffffffffu);
++	LOG("reset done");
++	uint32_t l2 = rd(gpu, GPU_L2_PRESENT_LO), sh = rd(gpu, GPU_SHADER_PRESENT_LO), ti = rd(gpu, GPU_TILER_PRESENT_LO);
++	wr(gpu, GPU_L2_PWRON_LO, l2);
++	bool ok_l2 = poll(gpu, GPU_L2_READY_LO, 0xffffffffu, l2, 20);
++	wr(gpu, GPU_SHADER_PWRON_LO, sh);
++	bool ok_sh = poll(gpu, GPU_SHADER_READY_LO, 0xffffffffu, sh, 20);
++	wr(gpu, GPU_TILER_PWRON_LO, ti);
++	bool ok_ti = poll(gpu, GPU_TILER_READY_LO, 0xffffffffu, ti, 10);
++	LOG("power up: L2 %s (ready %#x), shaders %s (ready %#x), tiler %s (ready %#x), status %#x irq raw %#x",
++	    ok_l2 ? "ok" : "TIMEOUT", rd(gpu, GPU_L2_READY_LO), ok_sh ? "ok" : "TIMEOUT", rd(gpu, GPU_SHADER_READY_LO),
++	    ok_ti ? "ok" : "TIMEOUT", rd(gpu, GPU_TILER_READY_LO), rd(gpu, GPU_STATUS), rd(gpu, 0x020));
++}
++
 +
 +void s8_gpu_start(void);
 +
@@ -160,6 +214,9 @@ index 0000000..9e5dd7d
 +	LOG("shader present %#x ready %#x, tiler %#x, l2 present %#x ready %#x, status %#x irq raw %#x",
 +	    rd(gpu, GPU_SHADER_PRESENT_LO), rd(gpu, GPU_SHADER_READY_LO), rd(gpu, GPU_TILER_PRESENT_LO),
 +	    rd(gpu, GPU_L2_PRESENT_LO), rd(gpu, GPU_L2_READY_LO), rd(gpu, GPU_STATUS), rd(gpu, GPU_IRQ_RAWSTAT));
++	if (on >= 2) {
++		gpu_power_up(gpu);
++	}
 +}
 +
 +#elif defined(ARM64_BOARD_CONFIG_A5XELTE)
