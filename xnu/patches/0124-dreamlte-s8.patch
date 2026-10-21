@@ -81,7 +81,7 @@ index 3ba2fd4..dcbd143 100644
  		return;
  	}
 diff --git bsd/dev/a5xelte_touch.c bsd/dev/a5xelte_touch.c
-index 7ba309b..ba647a8 100644
+index 7ba309b..dbae017 100644
 --- a/bsd/dev/a5xelte_touch.c
 +++ b/bsd/dev/a5xelte_touch.c
 @@ -12,6 +12,7 @@
@@ -92,7 +92,7 @@ index 7ba309b..ba647a8 100644
  
  extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
  extern void thread_terminate_self(void);
-@@ -615,10 +616,317 @@ a5touch_start_early(vm_offset_t nfc, vm_offset_t alive)
+@@ -615,10 +616,320 @@ a5touch_start_early(vm_offset_t nfc, vm_offset_t alive)
  	}
  }
  
@@ -124,6 +124,7 @@ index 7ba309b..ba647a8 100644
 +static vm_offset_t s8ts_i2c, s8ts_alive, s8bat_i2c;
 +static int s8ts_sleep;
 +static int s8ts_native;         /* sweetfb_native: iOS sees the whole panel */
++static int s8ts_scale;          /* sweetfb_scale: canvas stretched over the panel */
 +static bool s8ts_down[S8TS_FINGERS];
 +static uint16_t s8ts_x[S8TS_FINGERS], s8ts_y[S8TS_FINGERS];
 +
@@ -229,7 +230,8 @@ index 7ba309b..ba647a8 100644
 +	}
 +	unsigned x = ((unsigned)ev[1] << 4) | (ev[3] >> 4);
 +	unsigned y = ((unsigned)ev[2] << 4) | (ev[3] & 0xf);
-+	if (s8ts_native) {
++	if (s8ts_native || s8ts_scale) {
++		/* The canvas covers the whole panel. */
 +		x = x * 1080 / 4096;
 +		y = y * 1920 / 4096;
 +	} else {
@@ -367,6 +369,7 @@ index 7ba309b..ba647a8 100644
 +	int enabled = 1;
 +	(void)PE_parse_boot_argn("s8touch", &enabled, sizeof(enabled));
 +	(void)PE_parse_boot_argn("sweetfb_native", &s8ts_native, sizeof(s8ts_native));
++	(void)PE_parse_boot_argn("sweetfb_scale", &s8ts_scale, sizeof(s8ts_scale));
 +	if (!enabled) {
 +		printf("S8 TOUCH: disabled\n");
 +		return;
@@ -958,7 +961,7 @@ index 55d0057..dee6635 100644
  	int32_t rc = sweet_psci_cpu_on(cpu->phys_id, entry, getCPUNumber());
  	IOLog(CPU_PORT_NAME " CPU: cpu=%u PSCI CPU_ON rc=%d\n", getCPUNumber(), rc);
 diff --git iokit/Kernel/arm/SweetFramebuffer.cpp iokit/Kernel/arm/SweetFramebuffer.cpp
-index 356ff51..39f474b 100644
+index 356ff51..a43a4d6 100644
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
 @@ -48,6 +48,7 @@ extern "C" int sweet_console_muted;     /* osfmk/console/serial_console.c */
@@ -969,17 +972,26 @@ index 356ff51..39f474b 100644
  #include <kern/clock.h>
  #include <sys/proc.h>
  
-@@ -120,6 +121,9 @@ public:
+@@ -85,6 +86,7 @@ enum {
+ #define SWEET_FB_LOGICAL_W              1125
+ #define SWEET_FB_LOGICAL_H              2436
+ #define SWEET_FB_FORMAT_BGRA            0x42475241
++#define SWEET_FB_ROW_MAX                1440u   /* widest panel row we stretch to */
+ 
+ class IOMobileFramebuffer : public IOService {
+ 	OSDeclareDefaultStructors(IOMobileFramebuffer);
+@@ -120,6 +122,10 @@ public:
  	uint32_t      fFlushTicks;    /* vsync ticks between panel copies */
  	bool          fPowerOff;      /* RequestPowerChange(0) */
  	uint32_t      fFadeStep;      /* fade-out steps done while off */
 +	IOLock       *fPresentLock;   /* one panel copy at a time */
 +	uint64_t      fLastPresent;   /* mach_absolute_time of the last copy */
 +	uint64_t      fMinGap;        /* 1/hz in timebase ticks */
++	bool          fScale;         /* sweetfb_scale: canvas stretched to the panel */
  
  	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
  	void addClient(IOMobileFramebufferUserClient *client);
-@@ -153,9 +157,68 @@ public:
+@@ -153,9 +159,68 @@ public:
  
  OSDefineMetaClassAndStructors(IOMobileFramebufferUserClient, IOUserClient);
  
@@ -1048,7 +1060,7 @@ index 356ff51..39f474b 100644
  	PE_Video video;
  
  	if (!IOService::start(provider)) {
-@@ -166,10 +229,10 @@ AppleCLCD::start(IOService *provider)
+@@ -166,10 +231,10 @@ AppleCLCD::start(IOService *provider)
  	/* The loader's DECON handoff scans out this physical XRGB8888 buffer.
  	 * It does not fill boot_args.Video, so PE_current_console is empty.
  	 * Keep the physical address out of the donor path. */
@@ -1063,7 +1075,7 @@ index 356ff51..39f474b 100644
  #else
  	fPhys = video.v_baseAddr;
  	fWidth = (uint32_t)video.v_width;
-@@ -184,7 +247,12 @@ AppleCLCD::start(IOService *provider)
+@@ -184,7 +249,12 @@ AppleCLCD::start(IOService *provider)
  	PE_parse_boot_argn("sweetfb_native", &native, sizeof(native));
  	fLogicalW = fWidth;
  	fLogicalH = fHeight;
@@ -1077,7 +1089,22 @@ index 356ff51..39f474b 100644
  	if (!native && fWidth <= SWEET_FB_LOGICAL_W && fHeight <= SWEET_FB_LOGICAL_H) {
  		fLogicalW = SWEET_FB_LOGICAL_W;
  		fLogicalH = SWEET_FB_LOGICAL_H;
-@@ -211,6 +279,11 @@ AppleCLCD::start(IOService *provider)
+@@ -192,6 +262,14 @@ AppleCLCD::start(IOService *provider)
+ #endif
+ 	fOffX = (int32_t)(fLogicalW - fWidth) / 2;
+ 	fOffY = (int32_t)(fLogicalH - fHeight) / 2;
++#if defined(DREAMLTE)
++	int scale = 0;
++	PE_parse_boot_argn("sweetfb_scale", &scale, sizeof(scale));
++	fScale = scale != 0 && !native && fWidth <= SWEET_FB_ROW_MAX;
++	if (fScale) {
++		fOffX = fOffY = 0;
++	}
++#endif
+ 	fLock = IOLockAlloc();
+ 	fClients = OSArray::withCapacity(4);
+ 	fSurface = sweet_surface_create_physical(fPhys, fWidth, fHeight, fRowBytes, SWEET_FB_FORMAT_BGRA);
+@@ -211,6 +289,11 @@ AppleCLCD::start(IOService *provider)
  	uint32_t hz = 10;
  	PE_parse_boot_argn("sweetfb_hz", &hz, sizeof(hz));
  	fFlushTicks = (hz == 0 || hz >= 60) ? 1 : 60 / hz;
@@ -1089,7 +1116,7 @@ index 356ff51..39f474b 100644
  	fVsync->setTimeoutUS(SWEET_FB_VSYNC_US);
  
  	setProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");
-@@ -302,6 +375,84 @@ get32(const uint8_t *p, uint32_t off)
+@@ -302,6 +385,131 @@ get32(const uint8_t *p, uint32_t off)
  	return v;
  }
  
@@ -1171,10 +1198,57 @@ index 356ff51..39f474b 100644
 +}
 +#endif
 +
++#if defined(DREAMLTE)
++static uint32_t sweet_fb_row[SWEET_FB_ROW_MAX];   /* under fPresentLock */
++static uint16_t sweet_fb_xmap[SWEET_FB_ROW_MAX];
++
++/*
++ * Stretch the canvas rectangle (dx, dy, w, h) of a layer, whose first
++ * pixel is at src with stride bpr, over the panel: panel pixel (px, py)
++ * shows canvas pixel (px * lw / pw, py * lh / ph).
++ */
++static void
++sweet_fb_scaled_copy(uintptr_t fb, uint32_t fbBpr, uint32_t pw, uint32_t ph,
++    uint32_t lw, uint32_t lh, uintptr_t src, uint32_t bpr,
++    int32_t dx, int32_t dy, int32_t w, int32_t h)
++{
++	uint32_t px0 = (uint32_t)dx * pw / lw, px1 = (uint32_t)(dx + w) * pw / lw;
++	uint32_t py0 = (uint32_t)dy * ph / lh, py1 = (uint32_t)(dy + h) * ph / lh;
++	if (px1 > pw) {
++		px1 = pw;
++	}
++	if (py1 > ph) {
++		py1 = ph;
++	}
++	if (px1 <= px0 || py1 <= py0) {
++		return;
++	}
++	uint32_t n = px1 - px0;
++	for (uint32_t i = 0; i < n; i++) {
++		uint32_t lx = (px0 + i) * lw / pw;
++		int32_t cx = (int32_t)lx - dx;
++		sweet_fb_xmap[i] = (uint16_t)(cx < 0 ? 0 : (cx >= w ? w - 1 : cx));
++	}
++	int32_t built = -1;
++	for (uint32_t py = py0; py < py1; py++) {
++		int32_t cy = (int32_t)(py * lh / ph) - dy;
++		cy = cy < 0 ? 0 : (cy >= h ? h - 1 : cy);
++		if (cy != built) {
++			const uint32_t *row = (const uint32_t *)(src + (uint64_t)cy * bpr);
++			for (uint32_t i = 0; i < n; i++) {
++				sweet_fb_row[i] = row[sweet_fb_xmap[i]];
++			}
++			built = cy;
++		}
++		memcpy((void *)(fb + (uint64_t)py * fbBpr + (uint64_t)px0 * 4), sweet_fb_row, (size_t)n * 4);
++	}
++}
++#endif
++
  static uint32_t sweet_fb_swaps_logged;
  static uint64_t sweet_fb_swap_count;
  
-@@ -318,7 +469,19 @@ AppleCLCD::swap(const uint8_t *rec)
+@@ -318,7 +526,19 @@ AppleCLCD::swap(const uint8_t *rec)
  	IOLockLock(fLock);
  	memcpy(fPending, rec, SWEET_FB_SWAP_REC_SIZE);
  	fDirty = true;
@@ -1194,7 +1268,7 @@ index 356ff51..39f474b 100644
  	if ((++sweet_fb_swap_count % 1000) == 0) {
  		IOLog("SWEET FB: %llu swaps\n", sweet_fb_swap_count);
  	}
-@@ -328,6 +491,13 @@ void
+@@ -328,6 +548,13 @@ void
  AppleCLCD::present(const uint8_t *rec)
  {
  	uint32_t mask = get32(rec, 0x104);
@@ -1208,7 +1282,50 @@ index 356ff51..39f474b 100644
  
  
  	if (!fConsolePaused) {
-@@ -419,6 +589,11 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -369,6 +596,42 @@ AppleCLCD::present(const uint8_t *rec)
+ 		}
+ 		uintptr_t src = s->kernelAddress();
+ 		uint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;
++#if defined(DREAMLTE)
++		if (fScale) {
++			if (w <= 0 || h <= 0) {
++				w = (int32_t)s->width;
++				h = (int32_t)s->height;
++			}
++			if (sx < 0 || sy < 0) {
++				sx = sy = 0;
++			}
++			if (dx < 0 || dy < 0) {
++				dx = dy = 0;
++			}
++			if (w > (int32_t)s->width - sx) {
++				w = (int32_t)s->width - sx;
++			}
++			if (h > (int32_t)s->height - sy) {
++				h = (int32_t)s->height - sy;
++			}
++			if (w > (int32_t)fLogicalW - dx) {
++				w = (int32_t)fLogicalW - dx;
++			}
++			if (h > (int32_t)fLogicalH - dy) {
++				h = (int32_t)fLogicalH - dy;
++			}
++			uint64_t end = (uint64_t)s->offset + (uint64_t)(sy + h - 1) * s->bytesPerRow +
++			    (uint64_t)(sx + w) * 4;
++			if (src != 0 && bpe == 4 && w > 0 && h > 0 && s->elementWidth == 1 &&
++			    s->elementHeight == 1 && s->memory != NULL && end <= s->memory->getLength()) {
++				sweet_fb_scaled_copy(fPixels, fRowBytes, fWidth, fHeight, fLogicalW, fLogicalH,
++				    src + s->offset + (uint64_t)sy * s->bytesPerRow + (uint64_t)sx * 4,
++				    s->bytesPerRow, dx, dy, w, h);
++			}
++			s->release();
++			continue;
++		}
++#endif
+ 		if (w <= 0 || h <= 0) {
+ 			w = (int32_t)s->width;
+ 			h = (int32_t)s->height;
+@@ -419,6 +682,11 @@ AppleCLCD::present(const uint8_t *rec)
  		}
  		s->release();
  	}

@@ -232,6 +232,17 @@ six layers (DPP channels, IOMobileFramebuffer layers) and scale in hardware.
   writeback; descriptors per Mesa 25.2.8 `genxml/v6.xml` and Panfrost's
   clear-only `pan_emit_fbd`/`pan_emit_rt`; logs `GPU DRAW WORKS`.
 
+- **Boot 38** (BOOT `71701cb4…cb21d7`): **the GPU draws.** The fragment
+  job completed without fault and all 256 sampled pixels of the 256x256
+  square read `0xffc0c0c0`: `GPU DRAW WORKS=1`.
+- Frame rate, `sweetfb_scale=1`: iOS renders the iPhone X canvas
+  (1125x2436, 36 % fewer pixels) and each copy stretches it over the whole
+  panel (nearest pixel, cached row buffer reused for repeated rows); touches
+  use the full-panel mapping.
+- GPU for iOS, plan: XNU Mali driver (power, reset, address space, job
+  slot), a Bifrost blit shader built with Mesa's compiler, then iOS frames
+  composed and stretched by the GPU instead of the CPU copy.
+
 Step 1, loader `gpu_probe.c` with `s8gpu=1`: log/enable S2MPS17 BUCK6
 (`vdd_g3d`), run Samsung's `g3d_on` (CMU_G3D `0x13800000`, PMU `0x40E0`/
 `0x40E4`) and, only if the domain reports on, read `GPU_ID`/`L2_FEATURES`/

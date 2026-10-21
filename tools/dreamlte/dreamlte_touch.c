@@ -26,6 +26,7 @@
 static vm_offset_t s8ts_i2c, s8ts_alive, s8bat_i2c;
 static int s8ts_sleep;
 static int s8ts_native;         /* sweetfb_native: iOS sees the whole panel */
+static int s8ts_scale;          /* sweetfb_scale: canvas stretched over the panel */
 static bool s8ts_down[S8TS_FINGERS];
 static uint16_t s8ts_x[S8TS_FINGERS], s8ts_y[S8TS_FINGERS];
 
@@ -131,7 +132,8 @@ s8ts_report(const uint8_t *ev)
 	}
 	unsigned x = ((unsigned)ev[1] << 4) | (ev[3] >> 4);
 	unsigned y = ((unsigned)ev[2] << 4) | (ev[3] & 0xf);
-	if (s8ts_native) {
+	if (s8ts_native || s8ts_scale) {
+		/* The canvas covers the whole panel. */
 		x = x * 1080 / 4096;
 		y = y * 1920 / 4096;
 	} else {
@@ -269,6 +271,7 @@ dreamlte_touch_start(void)
 	int enabled = 1;
 	(void)PE_parse_boot_argn("s8touch", &enabled, sizeof(enabled));
 	(void)PE_parse_boot_argn("sweetfb_native", &s8ts_native, sizeof(s8ts_native));
+	(void)PE_parse_boot_argn("sweetfb_scale", &s8ts_scale, sizeof(s8ts_scale));
 	if (!enabled) {
 		printf("S8 TOUCH: disabled\n");
 		return;

@@ -675,6 +675,119 @@ edit('iokit/Kernel/arm/SweetFramebuffer.cpp', [
      '#endif\n', 1),
 ])
 
+# Frame rate (boot 34 statistics: iOS draws 1-10 frames/s, CoreAnimation's
+# CPU renderer is the limit, the copy takes ~8 ms). sweetfb_scale=1: iOS
+# renders the iPhone X canvas (1125x2436, 36 % fewer pixels than the panel,
+# a layout iOS has data for) and each copy stretches it over the whole
+# 1440x2960 panel (nearest pixel, no borders). A panel row is built once in
+# a cached row buffer and copied to every panel row that maps to the same
+# canvas row.
+edit('iokit/Kernel/arm/SweetFramebuffer.cpp', [
+    ('#define SWEET_FB_FORMAT_BGRA            0x42475241\n',
+     '#define SWEET_FB_FORMAT_BGRA            0x42475241\n'
+     '#define SWEET_FB_ROW_MAX                1440u   /* widest panel row we stretch to */\n', 1),
+    ('\tuint64_t      fMinGap;        /* 1/hz in timebase ticks */\n',
+     '\tuint64_t      fMinGap;        /* 1/hz in timebase ticks */\n'
+     '\tbool          fScale;         /* sweetfb_scale: canvas stretched to the panel */\n', 1),
+    ('\tfOffY = (int32_t)(fLogicalH - fHeight) / 2;\n',
+     '\tfOffY = (int32_t)(fLogicalH - fHeight) / 2;\n'
+     '#if defined(DREAMLTE)\n'
+     '\tint scale = 0;\n'
+     '\tPE_parse_boot_argn("sweetfb_scale", &scale, sizeof(scale));\n'
+     '\tfScale = scale != 0 && !native && fWidth <= SWEET_FB_ROW_MAX;\n'
+     '\tif (fScale) {\n'
+     '\t\tfOffX = fOffY = 0;\n'
+     '\t}\n'
+     '#endif\n', 1),
+    ('\t\tuint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;\n',
+     '\t\tuint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;\n'
+     '#if defined(DREAMLTE)\n'
+     '\t\tif (fScale) {\n'
+     '\t\t\tif (w <= 0 || h <= 0) {\n'
+     '\t\t\t\tw = (int32_t)s->width;\n'
+     '\t\t\t\th = (int32_t)s->height;\n'
+     '\t\t\t}\n'
+     '\t\t\tif (sx < 0 || sy < 0) {\n'
+     '\t\t\t\tsx = sy = 0;\n'
+     '\t\t\t}\n'
+     '\t\t\tif (dx < 0 || dy < 0) {\n'
+     '\t\t\t\tdx = dy = 0;\n'
+     '\t\t\t}\n'
+     '\t\t\tif (w > (int32_t)s->width - sx) {\n'
+     '\t\t\t\tw = (int32_t)s->width - sx;\n'
+     '\t\t\t}\n'
+     '\t\t\tif (h > (int32_t)s->height - sy) {\n'
+     '\t\t\t\th = (int32_t)s->height - sy;\n'
+     '\t\t\t}\n'
+     '\t\t\tif (w > (int32_t)fLogicalW - dx) {\n'
+     '\t\t\t\tw = (int32_t)fLogicalW - dx;\n'
+     '\t\t\t}\n'
+     '\t\t\tif (h > (int32_t)fLogicalH - dy) {\n'
+     '\t\t\t\th = (int32_t)fLogicalH - dy;\n'
+     '\t\t\t}\n'
+     '\t\t\tuint64_t end = (uint64_t)s->offset + (uint64_t)(sy + h - 1) * s->bytesPerRow +\n'
+     '\t\t\t    (uint64_t)(sx + w) * 4;\n'
+     '\t\t\tif (src != 0 && bpe == 4 && w > 0 && h > 0 && s->elementWidth == 1 &&\n'
+     '\t\t\t    s->elementHeight == 1 && s->memory != NULL && end <= s->memory->getLength()) {\n'
+     '\t\t\t\tsweet_fb_scaled_copy(fPixels, fRowBytes, fWidth, fHeight, fLogicalW, fLogicalH,\n'
+     '\t\t\t\t    src + s->offset + (uint64_t)sy * s->bytesPerRow + (uint64_t)sx * 4,\n'
+     '\t\t\t\t    s->bytesPerRow, dx, dy, w, h);\n'
+     '\t\t\t}\n'
+     '\t\t\ts->release();\n'
+     '\t\t\tcontinue;\n'
+     '\t\t}\n'
+     '#endif\n', 1),
+    ('static uint32_t sweet_fb_swaps_logged;\n',
+     '#if defined(DREAMLTE)\n'
+     'static uint32_t sweet_fb_row[SWEET_FB_ROW_MAX];   /* under fPresentLock */\n'
+     'static uint16_t sweet_fb_xmap[SWEET_FB_ROW_MAX];\n'
+     '\n'
+     '/*\n'
+     ' * Stretch the canvas rectangle (dx, dy, w, h) of a layer, whose first\n'
+     ' * pixel is at src with stride bpr, over the panel: panel pixel (px, py)\n'
+     ' * shows canvas pixel (px * lw / pw, py * lh / ph).\n'
+     ' */\n'
+     'static void\n'
+     'sweet_fb_scaled_copy(uintptr_t fb, uint32_t fbBpr, uint32_t pw, uint32_t ph,\n'
+     '    uint32_t lw, uint32_t lh, uintptr_t src, uint32_t bpr,\n'
+     '    int32_t dx, int32_t dy, int32_t w, int32_t h)\n'
+     '{\n'
+     '\tuint32_t px0 = (uint32_t)dx * pw / lw, px1 = (uint32_t)(dx + w) * pw / lw;\n'
+     '\tuint32_t py0 = (uint32_t)dy * ph / lh, py1 = (uint32_t)(dy + h) * ph / lh;\n'
+     '\tif (px1 > pw) {\n'
+     '\t\tpx1 = pw;\n'
+     '\t}\n'
+     '\tif (py1 > ph) {\n'
+     '\t\tpy1 = ph;\n'
+     '\t}\n'
+     '\tif (px1 <= px0 || py1 <= py0) {\n'
+     '\t\treturn;\n'
+     '\t}\n'
+     '\tuint32_t n = px1 - px0;\n'
+     '\tfor (uint32_t i = 0; i < n; i++) {\n'
+     '\t\tuint32_t lx = (px0 + i) * lw / pw;\n'
+     '\t\tint32_t cx = (int32_t)lx - dx;\n'
+     '\t\tsweet_fb_xmap[i] = (uint16_t)(cx < 0 ? 0 : (cx >= w ? w - 1 : cx));\n'
+     '\t}\n'
+     '\tint32_t built = -1;\n'
+     '\tfor (uint32_t py = py0; py < py1; py++) {\n'
+     '\t\tint32_t cy = (int32_t)(py * lh / ph) - dy;\n'
+     '\t\tcy = cy < 0 ? 0 : (cy >= h ? h - 1 : cy);\n'
+     '\t\tif (cy != built) {\n'
+     '\t\t\tconst uint32_t *row = (const uint32_t *)(src + (uint64_t)cy * bpr);\n'
+     '\t\t\tfor (uint32_t i = 0; i < n; i++) {\n'
+     '\t\t\t\tsweet_fb_row[i] = row[sweet_fb_xmap[i]];\n'
+     '\t\t\t}\n'
+     '\t\t\tbuilt = cy;\n'
+     '\t\t}\n'
+     '\t\tmemcpy((void *)(fb + (uint64_t)py * fbBpr + (uint64_t)px0 * 4), sweet_fb_row, (size_t)n * 4);\n'
+     '\t}\n'
+     '}\n'
+     '#endif\n'
+     '\n'
+     'static uint32_t sweet_fb_swaps_logged;\n', 1),
+])
+
 # Battery: the A5XELTE config had no power source, so iOS showed a wrong
 # battery. On the S8, SweetBattery reads the MAX77865 fuel gauge and charger
 # through dreamlte_battery_read() (dreamlte_touch.c). S8 battery: 3000 mAh.
