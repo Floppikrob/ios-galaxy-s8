@@ -611,8 +611,10 @@ edit('bsd/dev/a5xelte_touch.c', [
 # Secondary CPUs. Loader probe (boot 19): PSCI CPU_ON alone never starts an
 # S8 core; after the PMU power-up that Samsung's kernel does itself
 # (drivers/soc/samsung/exynos-pmu.c: CPUn_CONFIGURATION |= LOCAL_PWR_CFG 0xF)
-# the A53 at MPIDR 0x101 started. The Mongoose cluster also needs its
-# cluster power (L2/non-CPU), not done yet: use cpus<=4 (the A53 cluster).
+# the A53 at MPIDR 0x101 started. Mongoose cores (MPIDR 0-3, logical 4-7)
+# also need Samsung's cluster0_on and their DDn bit (pmucal_cpu_exynos8895.h),
+# as the loader's mngs_probe does; the loader caps cpus= at 4 + the number
+# of Mongoose cores its probe started, so cpus=8 does not panic here.
 edit('iokit/Kernel/arm/SweetCPU.cpp', [
     ('#include <pexpert/pexpert.h>\n',
      '#include <pexpert/pexpert.h>\n'
@@ -652,6 +654,39 @@ edit('iokit/Kernel/arm/SweetCPU.cpp', [
      '\t\t    (cpu->phys_id & 0xf)) * 0x80);\n'
      '\t\tvolatile uint32_t *cfg = (volatile uint32_t *)(pmu + off);\n'
      '\t\t/*\n'
+     '\t\t * Mongoose M2 (MPIDR Aff1 0): Samsung\'s cluster0_on once, and\n'
+     '\t\t * core0n_off/core0n_on clear/set DDn_DD_DA_INPUT_0 (0x16840000 +\n'
+     '\t\t * n * 0x400) around the power edge. The loader probe turned its\n'
+     '\t\t * cores off again (CPU_OFF), so the cluster steps are redone here.\n'
+     '\t\t */\n'
+     '\t\tconst bool mngs = ((cpu->phys_id >> 8) & 0xf) == 0;\n'
+     '\t\tstatic vm_offset_t dd;\n'
+     '\t\tstatic bool mngs_cluster_on;\n'
+     '\t\tvolatile uint32_t *ddn = NULL;\n'
+     '\t\tif (mngs) {\n'
+     '\t\t\tvolatile uint32_t *p = (volatile uint32_t *)pmu;\n'
+     '\t\t\tif (dd == 0) {\n'
+     '\t\t\t\tdd = ml_io_map(0x16840000, 0x2000);\n'
+     '\t\t\t}\n'
+     '\t\t\tddn = (volatile uint32_t *)(dd + (cpu->phys_id & 3) * 0x400);\n'
+     '\t\t\tif (!mngs_cluster_on) {\n'
+     '\t\t\t\tp[0x3c20 / 4] |= 1;            /* CPU_QCH_EMBEDDED_CMU_CPUCL0 */\n'
+     '\t\t\t\tfor (int i = 0; i < 50000 && !(p[0x3c24 / 4] & 1); i++) {\n'
+     '\t\t\t\t\tIODelay(1);\n'
+     '\t\t\t\t}\n'
+     '\t\t\t\tp[0x45c0 / 4] |= 1;            /* CLKSTOP_CMU_EMBEDDED_CMU_CPUCL0 */\n'
+     '\t\t\t\tfor (int i = 0; i < 50000 && !(p[0x45c4 / 4] & 1); i++) {\n'
+     '\t\t\t\t\tIODelay(1);\n'
+     '\t\t\t\t}\n'
+     '\t\t\t\t*(volatile uint32_t *)(dd + 0x1000) |= 1;     /* DD4 */\n'
+     '\t\t\t\tp[0x2488 / 4] &= ~1u;          /* CLUSTER0_CPUSEQUENCER_OPTION */\n'
+     '\t\t\t\tmngs_cluster_on = true;\n'
+     '\t\t\t\tIOLog(CPU_PORT_NAME " CPU: Mongoose cluster on: qch=0x%x clkstop=0x%x seq=0x%x\\n",\n'
+     '\t\t\t\t    p[0x3c24 / 4], p[0x45c4 / 4], p[0x2484 / 4]);\n'
+     '\t\t\t}\n'
+     '\t\t\t*ddn &= ~1u;\n'
+     '\t\t}\n'
+     '\t\t/*\n'
      '\t\t * The sequence that started a core in the loader probe: PSCI\n'
      '\t\t * CPU_ON, then a PMU power-up (LOCAL_PWR_CFG 0 -> 0xF), then CPU_ON\n'
      '\t\t * again (below). Boot 20 skipped the 0 -> 0xF edge (cfg was left\n'
@@ -667,11 +702,38 @@ edit('iokit/Kernel/arm/SweetCPU.cpp', [
      '\t\tfor (int i = 0; i < 10000 && (cfg[1] & 0xf) != 0xf; i++) {\n'
      '\t\t\tIODelay(1);\n'
      '\t\t}\n'
+     '\t\tif (ddn != NULL) {\n'
+     '\t\t\t*ddn |= 1;\n'
+     '\t\t}\n'
      '\t\tIOLog(CPU_PORT_NAME " CPU: cpu=%u first CPU_ON rc=%d, PMU power-up cfg=0x%x status=0x%x\\n",\n'
      '\t\t    getCPUNumber(), rc0, cfg[0], cfg[1]);\n'
      '\t}\n'
      '#endif\n'
      '\t__builtin_arm_dsb(DSB_SY);\n\tint32_t rc = sweet_psci_cpu_on(cpu->phys_id, entry, getCPUNumber());\n', 1),
+])
+
+# One scheduler cluster for all eight cores. A5XELTE derives the logical
+# cluster from MPIDR Aff1, so cpus>4 would create a second processor set;
+# the A5's eight-core trial panicked on CPU0 ("Ticket lock ... unexpectedly
+# owned") right after that, while cpus=4 (one set) runs. XNU schedules the
+# clusters symmetrically anyway (cluster-type SMP); the ADT keeps the real
+# die-cluster-id / l2-cache-id. Only MPIDR-indexed PPL data would need the
+# physical split, and this build has no XNU_MONITOR.
+edit('osfmk/arm64/machine_routines.c', [
+    ('#if HAS_CLUSTER || defined(A5XELTE)\n\t\tuint32_t phys_cluster_id = MPIDR_CLUSTER_ID(cpu->phys_id);\n',
+     '#if defined(DREAMLTE)\n'
+     '\t\tuint32_t phys_cluster_id = 0;\n'
+     '#elif HAS_CLUSTER || defined(A5XELTE)\n'
+     '\t\tuint32_t phys_cluster_id = MPIDR_CLUSTER_ID(cpu->phys_id);\n', 1),
+])
+
+# IOKit CPU names: the S8 has two core types.
+edit('iokit/Kernel/arm/SweetCPU.cpp', [
+    ('#if defined(A5XELTE)\n\tcpuName = OSSymbol::withCStringNoCopy("Cortex-A53");\n',
+     '#if defined(DREAMLTE)\n'
+     '\tcpuName = OSSymbol::withCStringNoCopy(((cpu->phys_id >> 8) & 0xf) == 0 ?\n'
+     '\t    "Mongoose M2" : "Cortex-A53");\n'
+     '#elif defined(A5XELTE)\n\tcpuName = OSSymbol::withCStringNoCopy("Cortex-A53");\n', 1),
 ])
 
 edit('bsd/dev/a5xelte_keys.c', [

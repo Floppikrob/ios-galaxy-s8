@@ -753,7 +753,7 @@ index 9969739..0535b28 100644
  	poll();
  	if (fReal) {
 diff --git iokit/Kernel/arm/SweetCPU.cpp iokit/Kernel/arm/SweetCPU.cpp
-index 55d0057..5bd24a7 100644
+index 55d0057..4b68c19 100644
 --- a/iokit/Kernel/arm/SweetCPU.cpp
 +++ b/iokit/Kernel/arm/SweetCPU.cpp
 @@ -17,6 +17,9 @@
@@ -782,7 +782,19 @@ index 55d0057..5bd24a7 100644
  	if (cpu->phys_id != expected_mpidr ||
  	    topology->num_cpus > SWEET_SMP_MAX_CPUS) {
  		panic(CPU_PORT_NAME " CPU: unsupported topology cpu=%u mpidr=0x%x count=%u",
-@@ -168,9 +178,9 @@ SweetCPU::startAll(void *arg __unused, wait_result_t result __unused)
+@@ -102,7 +112,10 @@ SweetCPU::start(IOService *provider)
+ 	if (!IOCPU::start(provider)) {
+ 		return false;
+ 	}
+-#if defined(A5XELTE)
++#if defined(DREAMLTE)
++	cpuName = OSSymbol::withCStringNoCopy(((cpu->phys_id >> 8) & 0xf) == 0 ?
++	    "Mongoose M2" : "Cortex-A53");
++#elif defined(A5XELTE)
+ 	cpuName = OSSymbol::withCStringNoCopy("Cortex-A53");
+ #else
+ 	cpuName = OSSymbol::withCStringNoCopy("Kryo 470");
+@@ -168,9 +181,9 @@ SweetCPU::startAll(void *arg __unused, wait_result_t result __unused)
  		}
  		IOSleep(1);
  	}
@@ -795,7 +807,7 @@ index 55d0057..5bd24a7 100644
  	}
  	for (unsigned int i = 0; i < topology->num_cpus; i++) {
  		SweetCPU *cpu = __atomic_load_n(&sweet_cpus[i], __ATOMIC_ACQUIRE);
-@@ -279,13 +289,62 @@ SweetCPU::startCPU(vm_offset_t start_paddr, vm_offset_t arg_paddr)
+@@ -279,13 +292,98 @@ SweetCPU::startCPU(vm_offset_t start_paddr, vm_offset_t arg_paddr)
  {
  	const ml_topology_cpu_t *cpu = &ml_get_topology_info()->cpus[getCPUNumber()];
  	/* cpu_start() passes NULL,NULL: x20/x21 are set by LowResetVectorBase. */
@@ -837,6 +849,39 @@ index 55d0057..5bd24a7 100644
 +		    (cpu->phys_id & 0xf)) * 0x80);
 +		volatile uint32_t *cfg = (volatile uint32_t *)(pmu + off);
 +		/*
++		 * Mongoose M2 (MPIDR Aff1 0): Samsung's cluster0_on once, and
++		 * core0n_off/core0n_on clear/set DDn_DD_DA_INPUT_0 (0x16840000 +
++		 * n * 0x400) around the power edge. The loader probe turned its
++		 * cores off again (CPU_OFF), so the cluster steps are redone here.
++		 */
++		const bool mngs = ((cpu->phys_id >> 8) & 0xf) == 0;
++		static vm_offset_t dd;
++		static bool mngs_cluster_on;
++		volatile uint32_t *ddn = NULL;
++		if (mngs) {
++			volatile uint32_t *p = (volatile uint32_t *)pmu;
++			if (dd == 0) {
++				dd = ml_io_map(0x16840000, 0x2000);
++			}
++			ddn = (volatile uint32_t *)(dd + (cpu->phys_id & 3) * 0x400);
++			if (!mngs_cluster_on) {
++				p[0x3c20 / 4] |= 1;            /* CPU_QCH_EMBEDDED_CMU_CPUCL0 */
++				for (int i = 0; i < 50000 && !(p[0x3c24 / 4] & 1); i++) {
++					IODelay(1);
++				}
++				p[0x45c0 / 4] |= 1;            /* CLKSTOP_CMU_EMBEDDED_CMU_CPUCL0 */
++				for (int i = 0; i < 50000 && !(p[0x45c4 / 4] & 1); i++) {
++					IODelay(1);
++				}
++				*(volatile uint32_t *)(dd + 0x1000) |= 1;     /* DD4 */
++				p[0x2488 / 4] &= ~1u;          /* CLUSTER0_CPUSEQUENCER_OPTION */
++				mngs_cluster_on = true;
++				IOLog(CPU_PORT_NAME " CPU: Mongoose cluster on: qch=0x%x clkstop=0x%x seq=0x%x\n",
++				    p[0x3c24 / 4], p[0x45c4 / 4], p[0x2484 / 4]);
++			}
++			*ddn &= ~1u;
++		}
++		/*
 +		 * The sequence that started a core in the loader probe: PSCI
 +		 * CPU_ON, then a PMU power-up (LOCAL_PWR_CFG 0 -> 0xF), then CPU_ON
 +		 * again (below). Boot 20 skipped the 0 -> 0xF edge (cfg was left
@@ -851,6 +896,9 @@ index 55d0057..5bd24a7 100644
 +		cfg[0] |= 0xf;                  /* CPUn_CONFIGURATION: LOCAL_PWR_CFG */
 +		for (int i = 0; i < 10000 && (cfg[1] & 0xf) != 0xf; i++) {
 +			IODelay(1);
++		}
++		if (ddn != NULL) {
++			*ddn |= 1;
 +		}
 +		IOLog(CPU_PORT_NAME " CPU: cpu=%u first CPU_ON rc=%d, PMU power-up cfg=0x%x status=0x%x\n",
 +		    getCPUNumber(), rc0, cfg[0], cfg[1]);
@@ -1075,10 +1123,21 @@ index fbc383d..57e6096 100644
  
  	cpu_l1_tte = cpu_tte + ((va_l1 & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT);
 diff --git osfmk/arm64/machine_routines.c osfmk/arm64/machine_routines.c
-index c5b33bd..6d56a33 100644
+index c5b33bd..1ebc543 100644
 --- a/osfmk/arm64/machine_routines.c
 +++ b/osfmk/arm64/machine_routines.c
-@@ -2054,7 +2054,11 @@ ml_set_decrementer(uint32_t dec_value)
+@@ -1050,7 +1050,9 @@ ml_parse_cpu_topology(void)
+ 		 * on the value provided by EDT. Instead, use the MPIDR value to see if we have
+ 		 * seen this exact cluster before. If so, then reuse that cluster ID for this CPU.
+ 		 */
+-#if HAS_CLUSTER || defined(A5XELTE)
++#if defined(DREAMLTE)
++		uint32_t phys_cluster_id = 0;
++#elif HAS_CLUSTER || defined(A5XELTE)
+ 		uint32_t phys_cluster_id = MPIDR_CLUSTER_ID(cpu->phys_id);
+ #else
+ 		uint32_t phys_cluster_id = (cpu->cluster_type == CLUSTER_TYPE_P);
+@@ -2054,7 +2056,11 @@ ml_set_decrementer(uint32_t dec_value)
  	if (cdp->cpu_set_decrementer_func) {
  		cdp->cpu_set_decrementer_func(dec_value);
  	} else {
@@ -1090,7 +1149,7 @@ index c5b33bd..6d56a33 100644
  	}
  }
  
-@@ -2182,7 +2186,11 @@ ml_get_decrementer(void)
+@@ -2182,7 +2188,11 @@ ml_get_decrementer(void)
  	} else {
  		uint64_t wide_val;
  
@@ -1102,7 +1161,7 @@ index c5b33bd..6d56a33 100644
  		dec = (uint32_t)wide_val;
  		assert(wide_val == (uint64_t)dec);
  	}
-@@ -2205,7 +2213,11 @@ ml_enable_monitor(void)
+@@ -2205,7 +2215,11 @@ ml_enable_monitor(void)
  boolean_t
  ml_get_timer_pending(void)
  {
@@ -1114,7 +1173,7 @@ index c5b33bd..6d56a33 100644
  	return ((cntv_ctl & CNTV_CTL_EL0_ISTATUS) != 0) ? TRUE : FALSE;
  }
  
-@@ -2282,9 +2294,14 @@ _enable_virtual_timer(void)
+@@ -2282,9 +2296,14 @@ _enable_virtual_timer(void)
  {
  	uint64_t cntvctl = CNTV_CTL_EL0_ENABLE; /* One wants to use 32 bits, but "mrs" prefers it this way */
  

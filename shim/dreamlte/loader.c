@@ -293,6 +293,44 @@ static void rtc_bootarg(volatile struct boot_args *ba, uint64_t raw)
 	ba->CommandLine[at] = 0;
 }
 
+/* Position of the value of " key" (key ends in '=') in the command line,
+ * or -1. Keys are matched at the start or after a space. */
+static int arg_at(volatile struct boot_args *ba, const char *key)
+{
+	for (int at = 0; at < BOOT_LINE_LENGTH && ba->CommandLine[at]; at++) {
+		if (at && ba->CommandLine[at - 1] != ' ')
+			continue;
+		int i = 0;
+		while (key[i] && at + i < BOOT_LINE_LENGTH && ba->CommandLine[at + i] == key[i])
+			i++;
+		if (!key[i])
+			return at + i;
+	}
+	return -1;
+}
+
+/*
+ * cpus=N selects logical CPUs 0..N-1: 0-3 the A53s, 4-7 Mongoose MPIDR
+ * 0-3 (tools/mkadt_dreamlte.py). XNU panics when a selected core does not
+ * come alive, so cap N at 4 + the Mongoose cores mngs_probe started.
+ */
+static void cap_cpus(volatile struct boot_args *ba, int mngs_started)
+{
+	int at = arg_at(ba, "cpus=");
+	if (at < 0)
+		return;
+	char d = ba->CommandLine[at];
+	char next = at + 1 < BOOT_LINE_LENGTH ? ba->CommandLine[at + 1] : 0;
+	if (d < '5' || d > '8' || (next && next != ' '))
+		return;
+	char max = (char)('4' + mngs_started);
+	if (d > max) {
+		ba->CommandLine[at] = max;
+		kv("cpus capped to", (uint64_t)(max - '0'));
+		out("\n");
+	}
+}
+
 uint64_t dl_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 {
 	*(volatile uint32_t *)DECON_TRIG = DECON_TRIG_UNMASK;
@@ -414,7 +452,8 @@ uint64_t dl_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 	touch_probe(kv, out);
 	battery_probe(kv, out);
 	display_probe(kv, out);
-	mngs_probe(kv, out);
+	cap_cpus(ba, mngs_probe(kv, out, arg_at(ba, "s8mngsdbg=1") >= 0));
+	clean(ba_pa, ba_pa + PAGE_SIZE);
 	/* smp_probe(kv, out) proved the PMU power-up (boot 19); it leaves the
 	 * probed cores' PMU power on, which hid the 0 -> 0xF edge XNU needs. */
 	(void)smp_probe;

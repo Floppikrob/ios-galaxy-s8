@@ -90,8 +90,66 @@ to the pmsg zone and read from TWRP as `/sys/fs/pstore/pmsg-ramoops-0`.
   SwapBegin never completed. **Boot 19 (`sweetfb_native=1`, 1440x2960): iOS
   lock screen on the Galaxy S8**, one CPU, CPU rendering, ~15 min to reach it.
 
+## Boots 20-31 (2026-10-20/21, from the commit log)
+
+- Boots 20-22: the A53s start only with a PMU power edge around PSCI CPU_ON
+  (power down, CPU_ON, `CPUn_CONFIGURATION` 0 -> 0xF, CPU_ON again) and a
+  low CPU_ON entry (trampoline at `0x8f000000`: the firmware keeps the entry
+  in a 32-bit PMU INFORM register). Boot 22: 4/4 A53s up.
+- Boots 22-25: with 4 CPUs rendering stalled (timed wakeups failed off the
+  boot CPU). Fix: the physical EL1 timer (PPI 14, INTID 30), as Samsung's
+  DT says (`use-physical-timer`). Keys: GPA0/GPA2 ALIVE banks.
+- Boots 25-27: touch rails (S2MPS17 LDO34/35 over SPEEDY), S6SY761 driver;
+  77 taps/swipes reached SpringBoard. RTC date via `s8rtc=`.
+- Boots 28-29: MAX77865 fuel gauge (99 %, 4149 mV); DECON/IDMA probe: IDMA0
+  scans `0xcc000000`, moving its base changed nothing on screen yet.
+- Boot 30: full-screen 1440x2960 presentation kept (the user prefers it).
+- Boot 31 (video): lock screen, home screen, App Library, Control Center,
+  battery work; frames tear. MNGS probe: cluster and core 0x000 powered
+  (status 0xf), CPU_ON rc 0, the core never ran the entry.
+- `04b4172` (not yet booted): copy each frame right after a DECON frame-done;
+  probe core 0x000 in the A53 order.
+
+## Eight cores: Mongoose bring-up (2026-10-21, not yet booted)
+
+Reference: Samsung's universal8895 kernel (jcadduono/android_kernel_samsung_universal8895).
+There, `cal_cluster_enable`/`cal_cpu_enable` run on `CPU_STARTING`, i.e.
+after PSCI already started the core; on our S-Boot handoff PSCI alone never
+started any core, so we apply the PMU sequences of
+`cal-if/exynos8895/pmucal_cpu_exynos8895.h` ourselves:
+`cluster0_on` (CPU_QCH `0x3C20`/`0x3C24`, CLKSTOP `0x45C0`/`0x45C4`, DD4,
+CPUSEQUENCER_OPTION `0x2488` bit 0 := 0), `core0n_on` = CONFIGURATION 0xF +
+`DDn_DD_DA_INPUT_0` (`0x16840000 + n * 0x400`), `core0n_off` the reverse.
+
+- Loader `mngs_probe` starts Mongoose cores 0x000..0x003 one by one with the
+  A53 order and stops at the first that does not run `smp_entry`. It returns
+  the count; **the loader caps `cpus=N` to 4 + that count**, so a `cpus=8`
+  image still boots on the four A53s when the big cores stay off.
+  `s8mngsdbg=1` also logs the CPUCL0/CPUCL1 PLL_CON0 and PLL mux (the CL0
+  CMU is read only after the cluster is on).
+- XNU (`0124`): `SweetCPU::startCPU` runs `cluster0_on` once and the DDn
+  bit around each Mongoose core's power edge; the IOKit CPU name is
+  "Mongoose M2" for those. All eight cores form **one scheduler cluster**
+  (`phys_cluster_id = 0` on DREAMLTE): a second processor set is what the
+  A5's eight-core trial panicked on ("Ticket lock ... unexpectedly owned"),
+  while one set with 4 CPUs runs. The ADT keeps the real
+  `die-cluster-id`/`l2-cache-id`.
+- Test: boot args `cpus=8 s8mngsdbg=1`. Read in the loader log
+  `MONGOOSE STARTED=` and `cpus capped to` (if any), then in the kernel log
+  `Mongoose cluster on`, `cpu=4..7 came alive` and `8/8 CPUs initialized`.
+
+GPU: iOS draws through Metal on Apple's GPU only (AGX); the Mali-G71 runs
+under Linux (Panfrost, see LinuxS8) but no iOS driver can use it. Graphics
+stays CPU-rendered; the speed levers are more cores, the A53 clock (S-Boot
+leaves ~1050 of 1690 MHz; Linux sets it through the ACPM DVFS plugin, which
+Linux itself loads from firmware files) and zero-copy scanout from the
+IOSurface (DECON IDMA base, probe in progress).
+
 ## Next
 
-1. CI kernel build; first boot target: loader log + XNU entry marker, then the
-   early XNU console on the S8 screen.
-2. UFS driver for the root filesystem (USERDATA), then the iPhone X root.
+1. Boot `04b4172` + the eight-core change with `cpus=8 s8mngsdbg=1`: check
+   tearing and the Mongoose lines above.
+2. If a Mongoose core still does not run its entry: compare the PLL dump
+   with CPUCL1, and try the cluster sequence with the core powered before the
+   cluster (`cluster0_on` after `CONFIGURATION`).
+3. Zero-copy scanout: make DECON fetch from a moved IDMA base.

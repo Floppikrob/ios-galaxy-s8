@@ -78,16 +78,84 @@ static int wait_bit(uintptr_t a, uint32_t bit, unsigned ms)
 }
 
 #define DD(n)		(0x16840000UL + (n) * 0x400)	/* DDn_DD_DA_INPUT_0 */
+#define CMU_CPUCL0	0x16800000UL	/* Mongoose cluster CMU (inside CL0) */
+#define CMU_CPUCL1	0x16900000UL	/* A53 cluster CMU */
+#define PLL_CON0	0x0120		/* bit 31 enable, bit 29 stable */
+#define MUX_CLK_PLL	0x1000		/* bit 0 select, bit 16 busy */
 
 /*
- * Mongoose (CLUSTER0, MPIDR 0x0-0x3) bring-up test on core 0x000, in the
- * order of Samsung's cal-if/exynos8895/pmucal_cpu_exynos8895.h:
- * cluster0_on = CPU_QCH 0x3C20 := 1, wait 0x3C24; CLKSTOP 0x45C0 := 1,
- * wait 0x45C4; DD4 := 1; CPUSEQUENCER_OPTION 0x2488 bit 0 := 0.
- * cpu00_on = CONFIGURATION 0x2000 := 0xF; DD0 := 1. Then PSCI CPU_ON.
- * Every wait has a timeout and stops the test, so a stuck step is logged.
+ * Mongoose (CLUSTER0, MPIDR 0x0-0x3) cluster power-up, in the order of
+ * Samsung's cal-if/exynos8895/pmucal_cpu_exynos8895.h cluster0_on:
+ * CPU_QCH 0x3C20 := 1, wait 0x3C24; CLKSTOP 0x45C0 := 1, wait 0x45C4;
+ * DD4 := 1; CPUSEQUENCER_OPTION 0x2488 bit 0 := 0. Every wait has a
+ * timeout, so a stuck step is logged instead of hanging the loader.
  */
-void mngs_probe(void (*kv)(const char *, uint64_t), void (*out)(const char *))
+static int mngs_cluster_on(void (*kv)(const char *, uint64_t), void (*out)(const char *))
+{
+	wr(PMU + 0x3c20, rd(PMU + 0x3c20) | 1);
+	if (!wait_bit(PMU + 0x3c24, 1, 50)) {
+		out("MNGS: QCH status stuck\n");
+		return 0;
+	}
+	wr(PMU + 0x45c0, rd(PMU + 0x45c0) | 1);
+	if (!wait_bit(PMU + 0x45c4, 1, 50)) {
+		out("MNGS: CLKSTOP status stuck\n");
+		return 0;
+	}
+	wr(DD(4), rd(DD(4)) | 1);
+	wr(PMU + 0x2488, rd(PMU + 0x2488) & ~1u);
+	kv("cluster on: seq st", rd(PMU + 0x2484));
+	out("\n");
+	return 1;
+}
+
+/*
+ * One Mongoose core, MPIDR 0x00n. Boot 31 powered the core first, then
+ * CPU_ON: status 0xf, rc 0, the core never ran our entry. This is the order
+ * that starts the A53s (SweetCPU, patch 0124): power off (core0n_off: DDn,
+ * then CONFIGURATION), CPU_ON (firmware records the entry), power 0 -> 0xF
+ * edge plus DDn (core0n_on), CPU_ON again. The core marks smp_flags[n] in
+ * smp_entry and turns itself off (CPU_OFF); XNU repeats the sequence.
+ */
+static int mngs_core_start(unsigned n, void (*kv)(const char *, uint64_t), void (*out)(const char *))
+{
+	uint64_t m = n;
+	smp_flags[n] = 0;
+	wr(DD(n), rd(DD(n)) & ~1u);
+	wr(CPU_CFG(m), rd(CPU_CFG(m)) & ~0xfu);
+	uint64_t end = ticks() + TIMER_HZ / 10;
+	while (ticks() < end && (rd(CPU_STAT(m)) & 0xf))
+		;
+	int64_t rc0 = smc3(PSCI_CPU_ON, m, (uintptr_t)smp_entry, 0);
+	wr(CPU_CFG(m), rd(CPU_CFG(m)) | 0xf);
+	end = ticks() + TIMER_HZ / 10;
+	while (ticks() < end && (rd(CPU_STAT(m)) & 0xf) != 0xf)
+		;
+	wr(DD(n), rd(DD(n)) | 1);
+	int up = wait_flag(n, 100);
+	int64_t rc = 0;
+	if (!up) {
+		rc = smc3(PSCI_CPU_ON, m, (uintptr_t)smp_entry, 0);
+		up = wait_flag(n, 300);
+	}
+	kv("core", m);
+	kv("rc0", (uint64_t)rc0);
+	kv("rc", (uint64_t)rc);
+	kv("st", rd(CPU_STAT(m)));
+	kv("up", up);
+	out("\n");
+	return up;
+}
+
+/*
+ * Mongoose cluster bring-up test, run before XNU. Returns how many of the
+ * four Mongoose cores ran smp_entry (they stop at the first that does not).
+ * The loader limits XNU's cpus= to 4 + that count, so a cpus=8 image still
+ * boots on the A53s when the big cores do not start.
+ * With "s8mngsdbg=1" it also dumps the cluster PLLs; the CL0 CMU sits in
+ * the Mongoose power domain, so it is read only after the cluster is on.
+ */
+int mngs_probe(void (*kv)(const char *, uint64_t), void (*out)(const char *), int dbg)
 {
 	out("MNGS probe (Mongoose cluster 0)\n");
 	kv("seq st", rd(PMU + 0x2484));
@@ -97,51 +165,24 @@ void mngs_probe(void (*kv)(const char *, uint64_t), void (*out)(const char *))
 	kv("dd4", rd(DD(4)));
 	kv("cpu0 st", rd(CPU_STAT(0)));
 	out("\n");
-	wr(PMU + 0x3c20, rd(PMU + 0x3c20) | 1);
-	if (!wait_bit(PMU + 0x3c24, 1, 50)) {
-		out("MNGS: QCH status stuck\n");
-		return;
+	if (dbg) {
+		kv("cl1 pll", rd(CMU_CPUCL1 + PLL_CON0));
+		kv("cl1 mux", rd(CMU_CPUCL1 + MUX_CLK_PLL));
+		out("\n");
 	}
-	wr(PMU + 0x45c0, rd(PMU + 0x45c0) | 1);
-	if (!wait_bit(PMU + 0x45c4, 1, 50)) {
-		out("MNGS: CLKSTOP status stuck\n");
-		return;
+	if (!mngs_cluster_on(kv, out))
+		return 0;
+	if (dbg) {
+		kv("cl0 pll", rd(CMU_CPUCL0 + PLL_CON0));
+		kv("cl0 mux", rd(CMU_CPUCL0 + MUX_CLK_PLL));
+		out("\n");
 	}
-	wr(DD(4), rd(DD(4)) | 1);
-	wr(PMU + 0x2488, rd(PMU + 0x2488) & ~1u);
-	kv("cluster on: seq st", rd(PMU + 0x2484));
-	out("\n");
-	/*
-	 * Boot 31 powered the core first, then CPU_ON: status 0xf, rc 0, the
-	 * core never ran our entry. The order that starts the A53s (SweetCPU,
-	 * patch 0124): power off, CPU_ON (firmware records the entry), power
-	 * 0 -> 0xF edge, CPU_ON again. cpu00_on adds DD0 after the power-up.
-	 */
-	smp_flags[0] = 0;
-	wr(DD(0), rd(DD(0)) & ~1u);
-	wr(CPU_CFG(0), rd(CPU_CFG(0)) & ~0xfu);
-	uint64_t end = ticks() + TIMER_HZ / 10;
-	while (ticks() < end && (rd(CPU_STAT(0)) & 0xf))
-		;
-	int64_t rc0 = smc3(PSCI_CPU_ON, 0x000, (uintptr_t)smp_entry, 0);
-	wr(CPU_CFG(0), rd(CPU_CFG(0)) | 0xf);
-	end = ticks() + TIMER_HZ / 10;
-	while (ticks() < end && (rd(CPU_STAT(0)) & 0xf) != 0xf)
-		;
-	wr(DD(0), rd(DD(0)) | 1);
-	kv("first CPU_ON rc", (uint64_t)rc0);
-	kv("cpu0 st", rd(CPU_STAT(0)));
-	kv("dd0", rd(DD(0)));
-	out("\n");
-	int up = wait_flag(0, 100);
-	int64_t rc = 0;
-	if (!up) {
-		rc = smc3(PSCI_CPU_ON, 0x000, (uintptr_t)smp_entry, 0);
-		up = wait_flag(0, 300);
-	}
-	kv("CPU_ON rc", (uint64_t)rc);
-	kv("MONGOOSE STARTED", up);
+	int started = 0;
+	while (started < 4 && mngs_core_start((unsigned)started, kv, out))
+		started++;
+	kv("MONGOOSE STARTED", (uint64_t)started);
 	out("\nMNGS probe done\n");
+	return started;
 }
 
 void smp_probe(void (*kv)(const char *, uint64_t), void (*out)(const char *))

@@ -121,7 +121,8 @@ Restore BOOT and Data from the TWRP backup (or `dd` the saved `BOOT.img` back to
 
 | Argument | Purpose |
 | --- | --- |
-| `cpus=N` | How many A53 cores to start (1–4) |
+| `cpus=N` | How many cores to start: 1–4 = A53s, 5–8 adds Mongoose cores (experimental; the loader caps N at 4 + the Mongoose cores its probe started) |
+| `s8mngsdbg=1` | Loader logs the CPU cluster PLLs during the Mongoose probe |
 | `rd=ufsroot0 ufsroot=USERDATA` | Root is the HFS+ volume in USERDATA |
 | `ufsrw=1 rootrw=1` | Root mounted read/write |
 | `sweetfb_native=1` | Present the 1440×2960 panel to iOS (1125×2436 hangs for now) |
