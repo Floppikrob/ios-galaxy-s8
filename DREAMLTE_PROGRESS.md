@@ -386,3 +386,13 @@ the kernel, must get GPU memory and run Mali jobs.
   and then installs the overlay (`S8 OVERLAY: root writable after N s`).
   `launchd.s8` therefore runs from the boot after that: boot 46 twice.
   sha256 13d3f772bbd7f3c4bf203825a5b9fe253d5c57d1ffec2c2ca82d551d7a20ee93.
+- Boot 46 result (logs of the second boot): overlay installed on the first
+  boot (`root writable after 1 s`, 3 written). On the second boot pid 1
+  (`launchd.s8`, an ad-hoc signed iOS program) used `/dev/s8mali`:
+  `WRITE_VALUE slot1 ... USER GPU JOB WORKS` (85 us),
+  `FRAGMENT 1440x2960 clear: 3120/3120 samples ... USER GPU DRAW WORKS`,
+  `60 full-screen GPU frames: avg 1162 us, worst 1220 us`, then
+  `exec /sbin/launchd`; iOS booted normally. So an iOS process can drive
+  the Mali, and a full-screen fragment pass (clear + tile writeback) costs
+  ~1.2 ms. iOS itself still swaps at most ~10 frames/s (SWEET FB 100-102
+  swaps per 10 s under load) with CoreAnimation rendering on the CPU.
