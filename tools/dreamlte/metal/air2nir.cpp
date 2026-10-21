@@ -47,11 +47,14 @@
 #include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Operator.h>
+#include <llvm/IR/ReplaceConstant.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Transforms/IPO/AlwaysInliner.h>
 #include <llvm/Transforms/IPO/GlobalOpt.h>
+#include <llvm/Transforms/Scalar/EarlyCSE.h>
+#include <llvm/Transforms/Scalar/SROA.h>
 #include <llvm/Transforms/Utils/ModuleUtils.h>
 
 #include <cstdio>
@@ -65,6 +68,7 @@
 
 #include "compiler/nir/nir.h"
 #include "compiler/nir/nir_builder.h"
+#include "compiler/nir/nir_builtin_builder.h"
 #include "compiler/glsl_types.h"
 #include "util/u_dynarray.h"
 /* Panfrost's headers have no extern "C" of their own. */
@@ -74,6 +78,8 @@ extern "C" {
 
 using namespace llvm;
 
+#define S8_UBO_DATA    28      /* constant tables of the shader */
+#define S8_UBO_FC      29
 #define S8_UBO_ADDRS   30
 #define S8_UBO_SYSVALS 31
 #define S8_INLINE_SAMPLER_BASE 16
@@ -151,8 +157,201 @@ struct ConstantValue {
 	uint64_t bits;
 };
 
-static void specialise(Module &m, Function &entry, const std::vector<ConstantValue> &values)
+/* A function constant read at run time: its value and "defined" flag
+ * live in UBO S8_UBO_FC at index * 16 (value, little endian) and
+ * index * 16 + 8 (u32 non-zero when defined). */
+struct DynamicConstant {
+	std::string name;
+	unsigned index, bits;
+};
+
+static std::vector<DynamicConstant> dynamic_constants;
+
+static void make_dynamic(Module &m, Function &entry)
 {
+	LLVMContext &ctx = m.getContext();
+	NamedMDNode *fcs = m.getNamedMetadata("air.function_constants");
+	if (fcs) {
+		for (MDNode *n : fcs->operands()) {
+			auto *gv = mdconst::dyn_extract_or_null<GlobalVariable>(n->getOperand(0));
+			auto *name = dyn_cast<MDString>(n->getOperand(2));
+			auto *idx = mdconst::dyn_extract_or_null<ConstantInt>(n->getOperand(3));
+			if (!gv || !name || !idx)
+				continue;
+			unsigned index = (unsigned)idx->getZExtValue();
+			Type *t = gv->getValueType();
+			dynamic_constants.push_back({ name->getString().str(), index,
+			    (unsigned)m.getDataLayout().getTypeStoreSizeInBits(t) });
+			std::vector<User *> users(gv->user_begin(), gv->user_end());
+			for (User *u : users) {
+				auto *ins = dyn_cast<Instruction>(u);
+				if (!ins)
+					fail("function constant " + name->getString().str() + " used by a constant expression");
+				IRBuilder<> b(ins);
+				if (auto *ci = dyn_cast<CallInst>(ins)) {
+					FunctionCallee fc = m.getOrInsertFunction("s8.fcdef", Type::getInt1Ty(ctx), b.getInt32Ty());
+					ci->replaceAllUsesWith(b.CreateCall(fc, { b.getInt32(index) }));
+					ci->eraseFromParent();
+				} else if (auto *ld = dyn_cast<LoadInst>(ins)) {
+					std::string tn;
+					raw_string_ostream os(tn);
+					ld->getType()->print(os);
+					FunctionCallee fc = m.getOrInsertFunction("s8.fc." + os.str(), ld->getType(), b.getInt32Ty());
+					ld->replaceAllUsesWith(b.CreateCall(fc, { b.getInt32(index) }));
+					ld->eraseFromParent();
+				} else {
+					fail("function constant " + name->getString().str() + " has an unsupported user");
+				}
+			}
+		}
+	}
+	/* The static initialiser now runs at the start of the entry point. */
+	for (Function &f : m) {
+		if (f.getSection() != "air.static_init")
+			continue;
+		f.setSection("");
+		f.setLinkage(GlobalValue::InternalLinkage);
+		IRBuilder<> b(&*entry.getEntryBlock().getFirstInsertionPt());
+		b.CreateCall(&f);
+	}
+}
+
+/* Point the users of old (a global's address or a GEP of it) at new, a
+ * private alloca in address space 0. */
+static void repoint(Value *old, Value *nw);
+
+/* v selects between a localised global (now nw_side, address space 0) and
+ * another pointer: push the choice down to the loads. a and b are the
+ * true/false side pointers after the same GEPs as v. */
+static void distribute(Value *v, Value *cond, Value *a, Value *b)
+{
+	std::vector<User *> users(v->user_begin(), v->user_end());
+	for (User *u : users) {
+		auto *ins = dyn_cast<Instruction>(u);
+		if (!ins)
+			fail("unsupported constant use of a selected shader global");
+		IRBuilder<> bl(ins);
+		if (auto *ld = dyn_cast<LoadInst>(ins)) {
+			LoadInst *la = bl.CreateLoad(ld->getType(), a);
+			LoadInst *lb = bl.CreateLoad(ld->getType(), b);
+			la->setAlignment(ld->getAlign());
+			lb->setAlignment(ld->getAlign());
+			ld->replaceAllUsesWith(bl.CreateSelect(cond, la, lb));
+		} else if (auto *g = dyn_cast<GetElementPtrInst>(ins)) {
+			std::vector<Value *> idx(g->idx_begin(), g->idx_end());
+			distribute(g, cond, bl.CreateGEP(g->getSourceElementType(), a, idx, "", g->isInBounds()),
+			    bl.CreateGEP(g->getSourceElementType(), b, idx, "", g->isInBounds()));
+		} else {
+			std::string s;
+			raw_string_ostream os(s);
+			ins->print(os);
+			fail("unsupported use of a selected shader global: " + os.str());
+		}
+		ins->eraseFromParent();
+	}
+}
+
+static void repoint(Value *old, Value *nw)
+{
+	std::vector<User *> users(old->user_begin(), old->user_end());
+	for (User *u : users) {
+		auto *ins = dyn_cast<Instruction>(u);
+		if (!ins)
+			fail("unsupported constant use of a shader global");
+		IRBuilder<> b(ins);
+		if (auto *ld = dyn_cast<LoadInst>(ins)) {
+			LoadInst *n = b.CreateLoad(ld->getType(), nw);
+			n->setAlignment(ld->getAlign());
+			ld->replaceAllUsesWith(n);
+		} else if (auto *st = dyn_cast<StoreInst>(ins)) {
+			if (st->getPointerOperand() != old)
+				fail("shader global address stored as a value");
+			b.CreateAlignedStore(st->getValueOperand(), nw, st->getAlign());
+		} else if (auto *g = dyn_cast<GetElementPtrInst>(ins)) {
+			std::vector<Value *> idx(g->idx_begin(), g->idx_end());
+			repoint(g, b.CreateGEP(g->getSourceElementType(), nw, idx, "", g->isInBounds()));
+		} else if (auto *c = dyn_cast<AddrSpaceCastInst>(ins)) {
+			repoint(c, nw);
+		} else if (auto *sel = dyn_cast<SelectInst>(ins); sel && sel->getCondition() != old) {
+			bool t = sel->getTrueValue() == old;
+			Value *other = t ? sel->getFalseValue() : sel->getTrueValue();
+			distribute(sel, sel->getCondition(), t ? nw : other, t ? other : nw);
+		} else if (auto *ci = dyn_cast<CallInst>(ins); ci && ci->getCalledFunction() &&
+		    ci->getCalledFunction()->isIntrinsic() &&
+		    ci->getCalledFunction()->getName().starts_with("llvm.lifetime")) {
+		} else {
+			std::string s;
+			raw_string_ostream os(s);
+			ins->print(os);
+			fail("unsupported use of a shader global: " + os.str());
+		}
+		ins->eraseFromParent();
+	}
+}
+
+/* After inlining: globals the shader writes (the implicit predicates, the
+ * fragment shader configuration) become private variables of the entry
+ * point. */
+static void localise_globals(Module &m, Function &entry)
+{
+	for (const char *keep : { "llvm.used", "llvm.compiler.used" })
+		if (GlobalVariable *g = m.getGlobalVariable(keep))
+			g->eraseFromParent();
+	std::vector<GlobalVariable *> gvs;
+	for (GlobalVariable &gv : m.globals())
+		if (!gv.isConstant() && gv.hasLocalLinkage())
+			gvs.push_back(&gv);
+	for (GlobalVariable *gv : gvs) {
+		gv->removeDeadConstantUsers();
+		if (gv->use_empty())
+			continue;
+		convertUsersOfConstantsToInstructions({ gv });
+		IRBuilder<> eb(&*entry.getEntryBlock().getFirstInsertionPt());
+		AllocaInst *a = eb.CreateAlloca(gv->getValueType());
+		a->setAlignment(gv->getAlign().valueOrOne());
+		if (gv->hasInitializer())
+			eb.CreateStore(gv->getInitializer(), a);
+		repoint(gv, a);
+	}
+}
+
+static void specialise(Module &m, Function &entry, const std::vector<ConstantValue> &values, bool dynamic)
+{
+	if (dynamic) {
+		make_dynamic(m, entry);
+		for (Function &f : m) {
+			if (&f == &entry || f.isDeclaration())
+				continue;
+			f.removeFnAttr(Attribute::NoInline);
+			f.addFnAttr(Attribute::AlwaysInline);
+		}
+		{
+			LoopAnalysisManager lam;
+			FunctionAnalysisManager fam;
+			CGSCCAnalysisManager cam;
+			ModuleAnalysisManager mam;
+			PassBuilder pb;
+			pb.registerModuleAnalyses(mam);
+			pb.registerCGSCCAnalyses(cam);
+			pb.registerFunctionAnalyses(fam);
+			pb.registerLoopAnalyses(lam);
+			pb.crossRegisterProxies(lam, fam, cam, mam);
+			ModulePassManager mpm;
+			mpm.addPass(AlwaysInlinerPass());
+			mpm.run(m, mam);
+		}
+		{
+			FunctionAnalysisManager fam;
+			PassBuilder pb;
+			pb.registerFunctionAnalyses(fam);
+			FunctionPassManager fpm;
+			fpm.addPass(SROAPass(SROAOptions::ModifyCFG));
+			fpm.addPass(EarlyCSEPass());
+			fpm.run(entry, fam);
+		}
+		localise_globals(m, entry);
+	}
+
 	LLVMContext &ctx = m.getContext();
 	/* Function constants: !air.function_constants = { ptr @g, type, name, index, required } */
 	std::map<GlobalVariable *, std::string> fc_names;
@@ -164,6 +363,8 @@ static void specialise(Module &m, Function &entry, const std::vector<ConstantVal
 				fc_names[gv] = name->getString().str();
 		}
 	}
+	if (dynamic)
+		fc_names.clear();
 	std::map<std::string, uint64_t> given;
 	for (auto &v : values)
 		given[v.name] = v.bits;
@@ -217,6 +418,7 @@ static void specialise(Module &m, Function &entry, const std::vector<ConstantVal
 	}
 	/* Run the static initialiser through GlobalOpt's evaluator. */
 	for (Function &f : m)
+		if (!dynamic)
 		if (f.getSection() == "air.static_init")
 			appendToGlobalCtors(m, &f, 0);
 	/* Inline everything into the entry point. */
@@ -326,6 +528,7 @@ public:
 	nir_shader *run();
 	std::vector<InlineSampler> inline_samplers;
 	std::vector<std::string> unsupported;
+	std::vector<uint8_t> constant_data;     /* UBO S8_UBO_DATA */
 
 private:
 	Module &m;
@@ -340,6 +543,8 @@ private:
 	std::map<const AllocaInst *, nir_variable *> allocas;
 	std::vector<ArgInfo> args, rets;
 	std::map<const GlobalVariable *, int> sampler_index;
+	std::map<const GlobalVariable *, uint32_t> data_offset;
+	void put_constant(const Constant *c, size_t at);
 
 	nir_def *def(const Value *v);
 	std::vector<nir_def *> agg(const Value *v);
@@ -438,9 +643,20 @@ nir_def *Translator::def(const Value *v)
 	}
 	if (isa<ConstantPointerNull>(v))
 		return nir_imm_int64(&b, 0);
-	if (auto *gv = dyn_cast<GlobalVariable>(v))
+	if (auto *gv = dyn_cast<GlobalVariable>(v)) {
 		if (sampler_index.count(gv))
 			return nir_imm_int64(&b, sampler_index[gv]);
+		if (gv->isConstant() && gv->hasInitializer() && gv->getAddressSpace() == 2) {
+			/* constant table: copied into UBO S8_UBO_DATA */
+			if (!data_offset.count(gv)) {
+				size_t at = (constant_data.size() + 15) & ~(size_t)15;
+				constant_data.resize(at + dl.getTypeAllocSize(gv->getValueType()));
+				put_constant(gv->getInitializer(), at);
+				data_offset[gv] = (uint32_t)at;
+			}
+			return nir_imm_int64(&b, ((uint64_t)S8_UBO_DATA << 32) | data_offset[gv]);
+		}
+	}
 	if (auto *g = dyn_cast<GEPOperator>(v))
 		return gep(g);
 	if (auto *ce = dyn_cast<ConstantExpr>(v))
@@ -475,9 +691,15 @@ std::vector<nir_def *> Translator::agg(const Value *v)
 
 int Translator::varying_slot(const std::string &name)
 {
-	for (size_t i = 0; i < varying_table.size(); i++)
-		if (varying_table[i] == name)
+	/* entries are "name" (slot = position) or "name=slot" */
+	for (size_t i = 0; i < varying_table.size(); i++) {
+		const std::string &e = varying_table[i];
+		size_t eq = e.rfind('=');
+		if (eq != std::string::npos && e.compare(0, eq, name) == 0 && eq == name.size())
+			return VARYING_SLOT_VAR0 + atoi(e.c_str() + eq + 1);
+		if (e == name)
 			return VARYING_SLOT_VAR0 + (int)i;
+	}
 	varying_table.push_back(name);
 	fprintf(stderr, "air2nir: note: varying %s not in the table, slot VAR%zu\n", name.c_str(),
 	    varying_table.size() - 1);
@@ -529,6 +751,45 @@ void Translator::branch_to(const BasicBlock *from, const BasicBlock *to)
 }
 
 static nir_def *nir_fsat_any(nir_builder *b, nir_def *x) { return nir_fsat(b, x); }
+
+void Translator::put_constant(const Constant *c, size_t at)
+{
+	if (isa<ConstantAggregateZero>(c) || isa<UndefValue>(c))
+		return;
+	if (auto *s = dyn_cast<ConstantDataSequential>(c)) {
+		StringRef raw = s->getRawDataValues();
+		memcpy(&constant_data[at], raw.data(), raw.size());
+		return;
+	}
+	if (auto *ci = dyn_cast<ConstantInt>(c)) {
+		uint64_t v = ci->getZExtValue();
+		memcpy(&constant_data[at], &v, dl.getTypeStoreSize(ci->getType()));
+		return;
+	}
+	if (auto *cf = dyn_cast<ConstantFP>(c)) {
+		uint64_t v = cf->getValueAPF().bitcastToAPInt().getZExtValue();
+		memcpy(&constant_data[at], &v, dl.getTypeStoreSize(cf->getType()));
+		return;
+	}
+	if (auto *cs = dyn_cast<ConstantStruct>(c)) {
+		const StructLayout *sl = dl.getStructLayout(cs->getType());
+		for (unsigned i = 0; i < cs->getNumOperands(); i++)
+			put_constant(cs->getOperand(i), at + sl->getElementOffset(i));
+		return;
+	}
+	if (isa<ConstantArray>(c) || isa<ConstantVector>(c)) {
+		Type *et = isa<ConstantArray>(c) ? cast<ArrayType>(c->getType())->getElementType()
+		    : cast<FixedVectorType>(c->getType())->getElementType();
+		uint64_t stride = dl.getTypeAllocSize(et);
+		for (unsigned i = 0; i < c->getNumOperands(); i++)
+			put_constant(cast<Constant>(c->getOperand(i)), at + i * stride);
+		return;
+	}
+	std::string s;
+	raw_string_ostream os(s);
+	c->print(os);
+	fail("unsupported constant initialiser " + s);
+}
 
 nir_shader *Translator::run()
 {
@@ -604,6 +865,8 @@ nir_shader *Translator::run()
 			 * a shader may select one at run time (texture_offset) */
 			vals[&arg] = { nir_imm_int64(&b, a.location) };
 		} else if (a.kind == "air.buffer") {
+			if (a.location >= S8_UBO_DATA)
+				unsupported.push_back("buffer index " + std::to_string(a.location) + " (reserved UBO)");
 			if (a.address_space == 2)
 				vals[&arg] = { nir_imm_int64(&b, (uint64_t)a.location << 32) };
 			else
@@ -713,6 +976,7 @@ static nir_def *s8_length(nir_builder *b, nir_def *x) { return nir_fsqrt(b, nir_
 static nir_def *s8_dot(nir_builder *b, nir_def *x, nir_def *y) { return nir_fdot(b, x, y); }
 static nir_def *s8_any(nir_builder *b, nir_def *x) { return nir_bany(b, x); }
 static nir_def *s8_all(nir_builder *b, nir_def *x) { return nir_ball(b, x); }
+static nir_def *s8_tan(nir_builder *b, nir_def *x) { return nir_fdiv(b, nir_fsin(b, x), nir_fcos(b, x)); }
 
 void Translator::emit_air(CallInst &ci, StringRef name)
 {
@@ -729,11 +993,13 @@ void Translator::emit_air(CallInst &ci, StringRef name)
 		{ "fract", s8_frac }, { "saturate", nir_fsat_any }, { "exp2", nir_fexp2 }, { "log2", nir_flog2 },
 		{ "exp", s8_exp_e }, { "log", s8_log_e }, { "sin", nir_fsin }, { "cos", nir_fcos }, { "sign", s8_sign },
 		{ "fwidth", s8_fwidth }, { "dfdx", s8_ddx }, { "dfdy", s8_ddy }, { "normalize", s8_normalize },
-		{ "length", s8_length }, { "any", s8_any }, { "all", s8_all },
+		{ "length", s8_length }, { "any", s8_any }, { "all", s8_all }, { "atan", nir_atan },
+		{ "tan", s8_tan },
 	};
 	static const std::map<std::string, binop> binops = {
 		{ "fmin", nir_fmin }, { "fmax", nir_fmax }, { "pow", nir_fpow }, { "powr", s8_powr },
 		{ "dot", s8_dot }, { "step", s8_step }, { "min", nir_fmin }, { "max", nir_fmax },
+		{ "atan2", nir_atan2 },
 	};
 	static const std::map<std::string, triop> triops = {
 		{ "mix", s8_fmix }, { "clamp", s8_fclamp }, { "fma", s8_fma }, { "smoothstep", s8_smoothstep },
@@ -746,6 +1012,20 @@ void Translator::emit_air(CallInst &ci, StringRef name)
 		r = binops.at(bs)(&b, arg(0), arg(1));
 	} else if (triops.count(bs)) {
 		r = triops.at(bs)(&b, arg(0), arg(1), arg(2));
+	} else if (bs == "unpack" || bs == "pack") {
+		/* air.unpack.unorm4x8.v4f16 and friends */
+		StringRef kind = name.drop_front(4 + bs.size() + 1).take_until([](char c) { return c == '.'; });
+		nir_def *x = arg(0);
+		if (bs == "unpack" && kind == "unorm4x8") r = nir_unpack_unorm_4x8(&b, x);
+		else if (bs == "unpack" && kind == "snorm4x8") r = nir_unpack_snorm_4x8(&b, x);
+		else if (bs == "unpack" && kind == "unorm2x16") r = nir_unpack_unorm_2x16(&b, x);
+		else if (bs == "unpack" && kind == "snorm2x16") r = nir_unpack_snorm_2x16(&b, x);
+		else if (bs == "pack" && kind == "unorm4x8") r = nir_pack_unorm_4x8(&b, nir_f2f32(&b, x));
+		else if (bs == "pack" && kind == "snorm4x8") r = nir_pack_snorm_4x8(&b, nir_f2f32(&b, x));
+		else if (bs == "pack" && kind == "unorm2x16") r = nir_pack_unorm_2x16(&b, nir_f2f32(&b, x));
+		else if (bs == "pack" && kind == "snorm2x16") r = nir_pack_snorm_2x16(&b, nir_f2f32(&b, x));
+		else
+			unsupported.push_back(name.str());
 	} else if (bs == "convert") {
 		/* air.convert.<dst kind>.<dst type>.<src kind>.<src type> */
 		SmallVector<StringRef, 6> p;
@@ -878,6 +1158,38 @@ void Translator::emit_call(CallInst &ci)
 	StringRef name = callee->getName();
 	if (name.starts_with("air.")) {
 		emit_air(ci, name);
+		return;
+	}
+	if (name == "s8.fcdef" || name.starts_with("s8.fc.")) {
+		unsigned index = (unsigned)cast<ConstantInt>(ci.getArgOperand(0))->getZExtValue();
+		nir_def *ubo = nir_imm_int(&b, S8_UBO_FC);
+		if (name == "s8.fcdef") {
+			nir_def *d = s8_load_ubo(&b, 1, 32, ubo, nir_imm_int(&b, index * 16 + 8), 4);
+			vals[&ci] = { nir_ine_imm(&b, d, 0) };
+			return;
+		}
+		Type *t = ci.getType();
+		auto *vt = dyn_cast<FixedVectorType>(t);
+		unsigned n = vt ? vt->getNumElements() : 1, eb = bits(vt ? vt->getElementType() : t);
+		nir_def *r;
+		if (eb == 64) {
+			r = s8_load_ubo(&b, n, 64, ubo, nir_imm_int(&b, index * 16), 8);
+		} else if (eb == 32) {
+			r = s8_load_ubo(&b, n, 32, ubo, nir_imm_int(&b, index * 16), 4);
+		} else {
+			/* 8/16/1-bit elements: unpack from 32-bit words */
+			nir_def *w = s8_load_ubo(&b, 2, 32, ubo, nir_imm_int(&b, index * 16), 8);
+			unsigned eb_store = eb == 1 ? 8 : eb;
+			nir_def *c[16];
+			for (unsigned i = 0; i < n; i++) {
+				unsigned bit = i * eb_store;
+				nir_def *word = nir_channel(&b, w, bit / 32);
+				nir_def *e = nir_ubitfield_extract(&b, word, nir_imm_int(&b, bit % 32), nir_imm_int(&b, eb_store));
+				c[i] = eb == 1 ? nir_ine_imm(&b, e, 0) : nir_u2uN(&b, e, eb);
+			}
+			r = nir_vec(&b, c, n);
+		}
+		vals[&ci] = { r };
 		return;
 	}
 	if (auto *ii = dyn_cast<IntrinsicInst>(&ci)) {
@@ -1173,6 +1485,16 @@ static bool lower_sysvals(nir_builder *b, nir_intrinsic_instr *intr, void *data)
 	switch (intr->intrinsic) {
 	case nir_intrinsic_load_viewport_scale: off = 0; break;
 	case nir_intrinsic_load_viewport_offset: off = 16; break;
+	case nir_intrinsic_load_rt_conversion_pan: {
+		/* framebuffer fetch: the driver stores the render targets' internal
+		 * conversion words (pan_blend_get_internal_desc >> 32) at 32 +
+		 * (rt * 2 + (16-bit ? 1 : 0)) * 4 */
+		unsigned size = nir_alu_type_get_type_size(nir_intrinsic_src_type(intr));
+		off = 32 + (nir_intrinsic_base(intr) * 2 + (size == 16 ? 1 : 0)) * 4;
+		b->cursor = nir_before_instr(&intr->instr);
+		nir_def_replace(&intr->def, s8_load_ubo(b, 1, 32, nir_imm_int(b, S8_UBO_SYSVALS), nir_imm_int(b, off), 4));
+		return true;
+	}
 	default: return false;
 	}
 	b->cursor = nir_before_instr(&intr->instr);
@@ -1183,8 +1505,22 @@ static bool lower_sysvals(nir_builder *b, nir_intrinsic_instr *intr, void *data)
 
 /* ---- output ---- */
 
+/* Blend register format of a render target output (pan_blend_type_from_nir). */
+static uint32_t regfmt(nir_alu_type t)
+{
+	switch (t) {
+	case nir_type_float16: return MALI_REGISTER_FILE_FORMAT_F16;
+	case nir_type_float32: return MALI_REGISTER_FILE_FORMAT_F32;
+	case nir_type_int32: return MALI_REGISTER_FILE_FORMAT_I32;
+	case nir_type_uint32: return MALI_REGISTER_FILE_FORMAT_U32;
+	case nir_type_int16: return MALI_REGISTER_FILE_FORMAT_I16;
+	case nir_type_uint16: return MALI_REGISTER_FILE_FORMAT_U16;
+	default: return 0;
+	}
+}
+
 /* air2nir output (little endian):
- *   "S8SH" u32 version=1
+ *   "S8SH" u32 version=2
  *   u32 stage (0 vertex, 4 fragment), u32 binary size, u32 work_reg_count,
  *   u32 attribute_count, u32 ubo_count, u32 texture_count, u32 sampler_count,
  *   u32 varying_count, then varying_count x { u32 location, u32 pipe_format },
@@ -1192,18 +1528,22 @@ static bool lower_sysvals(nir_builder *b, nir_intrinsic_instr *intr, void *data)
  *   u32 fs_flags (bit0 can_discard, bit1 reads_frag_coord, bit2 writes_depth,
  *   bit3 reads_fb), u32 rsd_words, rsd_words x u32 (renderer state, shader
  *   pointer 0), u32 shader_ptr_word (word index of the pointer in the RSD),
- *   binary bytes. */
+ *   u32 constant_count, constant_count x { u32 index, u32 bits, char name[48] }
+ *   (function constants read from UBO S8_UBO_FC, -D), 8 x u32 render
+ *   target register formats (fragment), u32 data_size, data_size bytes of
+ *   constant tables (UBO S8_UBO_DATA), binary bytes. */
 int main(int argc, char **argv)
 {
 	if (argc < 4) {
 		fprintf(stderr, "usage: air2nir METALLIB FUNCTION OUT [-v name,name,...] [-c name=bits ...] "
-		    "[-f rt_format] [-d]\n");
+		    "[-d] [-D]\n"
+		    "  -v: varying table, entries name or name=slot; -D: function constants at run time\n");
 		return 2;
 	}
 	std::string lib = argv[1], fname = argv[2], out = argv[3];
 	std::vector<std::string> varyings;
 	std::vector<ConstantValue> consts;
-	bool dump = false;
+	bool dump = false, dynamic = false;
 	for (int i = 4; i < argc; i++) {
 		std::string a = argv[i];
 		if (a == "-v" && i + 1 < argc) {
@@ -1223,6 +1563,8 @@ int main(int argc, char **argv)
 			consts.push_back({ s.substr(0, eq), strtoull(s.c_str() + eq + 1, nullptr, 0) });
 		} else if (a == "-d") {
 			dump = true;
+		} else if (a == "-D") {
+			dynamic = true;
 		}
 	}
 	MetallibFunction *fn = nullptr;
@@ -1242,7 +1584,7 @@ int main(int argc, char **argv)
 	Function *f = m.getFunction(fname);
 	if (!f)
 		fail("no entry point in module");
-	specialise(m, *f, consts);
+	specialise(m, *f, consts, dynamic);
 	if (dump)
 		f->print(errs());
 
@@ -1305,7 +1647,7 @@ int main(int argc, char **argv)
 	std::vector<uint32_t> w;
 	auto put = [&](uint32_t v) { w.push_back(v); };
 	put(0x48533853); /* "S8SH" */
-	put(1);
+	put(2);
 	put(stage);
 	put(binary.size);
 	put(info.work_reg_count);
@@ -1346,6 +1688,30 @@ int main(int argc, char **argv)
 	for (unsigned i = 0; i < nw; i++)
 		put(rsd0.opaque[i]);
 	put(ptr_word);
+	/* v2: run-time function constants (-D) */
+	put(dynamic_constants.size());
+	for (auto &dc : dynamic_constants) {
+		put(dc.index);
+		put(dc.bits);
+		char name[48] = {};
+		strncpy(name, dc.name.c_str(), sizeof(name) - 1);
+		for (unsigned i = 0; i < 12; i++) {
+			uint32_t v;
+			memcpy(&v, name + i * 4, 4);
+			put(v);
+		}
+	}
+	/* v2: fragment render target register formats (fixed-function blend) */
+	for (unsigned rt = 0; rt < 8; rt++)
+		put(stage == MESA_SHADER_FRAGMENT ? regfmt(info.bifrost.blend[rt].type) : 0);
+	/* v2: constant tables (UBO S8_UBO_DATA), padded to words */
+	tr.constant_data.resize((tr.constant_data.size() + 3) & ~(size_t)3);
+	put(tr.constant_data.size());
+	for (size_t i = 0; i < tr.constant_data.size(); i += 4) {
+		uint32_t v;
+		memcpy(&v, &tr.constant_data[i], 4);
+		put(v);
+	}
 	FILE *o = fopen(out.c_str(), "wb");
 	if (!o)
 		fail("cannot write " + out);
