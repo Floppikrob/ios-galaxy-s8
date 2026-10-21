@@ -474,3 +474,38 @@ the kernel, must get GPU memory and run Mali jobs.
   values (`MTL pipeline N fs consts+K: name=0x..;...`), implements the
   calls boot 49 listed as missing, memoryless textures get memory.
 - Still diagnostic (draws skipped). sha256 4eb58e0db68b5c0dccdf81357e320330a34339d912472badebe8fc3a1922d9cb.
+
+## Boot 50 result and Metal stage 3 (in progress, nothing new booted yet)
+
+- Boot 50 (observed): CoreAnimation stable on the Mali Metal device, the
+  constants were logged but cut at 119 characters per line (kernel log
+  limit). fixed_frag uses fc_framebuffer_fetch=1. The user stays on boot 46
+  for normal use.
+- Kernel (built, CI run 39690299113, commit b05b3b6; not booted yet):
+  S8MALI_MAP_SURFACE maps an IOSurface into one of 16 x 32 MiB GPU windows
+  (LRU), optional clean+invalidate of the CPU caches; page-table pool 4 MiB.
+- air2nir -D (commit 69a66c8 and later): function constants are read at run
+  time from UBO 29 (index*16 value, +8 "defined"); the static initialiser
+  runs in the entry point, the globals it writes become allocas (selects
+  between such a global and a buffer are pushed down to the loads).
+  Constant tables -> UBO 28, framebuffer-fetch conversion words -> sysval
+  UBO 31 at 32 + (rt*2 + is16)*4. S8SH v2 adds the constant table, RT
+  register formats, constant data, tls_size, writes_point_size.
+  "@preload" builds the render target reload frame shader.
+- build-shaders.py: whole QuartzCore metallib -> one cache (S8SC):
+  133/135 entries (all but inplace_copy_lpf/lph: image stores), 955 KB;
+  36 varying names coloured into 5 VAR slots. fixed_frag_lph_cph as one
+  run-time-constant binary: 360 KB.
+- build-mesa-ios.sh: libs8mesa.a (37 objects) incl. fixed-function
+  blending extracted from pan_blend.c.
+- Next (not written yet): tools/dreamlte/metal/s8mtl_draw.c — the Mali
+  command stream after PanVK JM: per pass tiler heap/context, TLS, FBD
+  (pan_emit_fbd), fragment job, preload DCD for LoadActionLoad; per draw
+  vertex COMPUTE job + TILER job (attributes from the pipeline's vertex
+  descriptor, varyings linked as panvk link_shaders with the FS formats,
+  UBO table 0..31, textures via pan_sampled_texture_emit, samplers,
+  fixed-function BLEND, viewport scale (-h/2 for Metal's y-up NDC));
+  submit slot 1 then slot 0. Inline sampler states (AIR i64): bits 0-8
+  address s/t/r (3 bits each; 0 clamp_to_zero?, 1 clamp_to_edge,
+  2 repeat), bits 9/11/13 mag/min/mip linear (decoded from CA's values,
+  unverified). Then raise sweetfb_hz to 60.

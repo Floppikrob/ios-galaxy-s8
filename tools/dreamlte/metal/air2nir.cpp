@@ -1503,6 +1503,42 @@ static bool lower_sysvals(nir_builder *b, nir_intrinsic_instr *intr, void *data)
 	return true;
 }
 
+/* Frame shader that reloads render target 0 (MTLLoadActionLoad): texel
+ * fetch of texture 0 at the pixel, as PanVK's fb preload. */
+static nir_shader *preload_shader()
+{
+	nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_FRAGMENT, pan_shader_get_compiler_options(6),
+	    "s8-preload");
+	nir_def *coords = nir_u2u32(&b, nir_load_pixel_coord(&b));
+	nir_tex_instr *tex = nir_tex_instr_create(b.shader, 2);
+	tex->op = nir_texop_txf;
+	tex->dest_type = nir_type_float32;
+	tex->sampler_dim = GLSL_SAMPLER_DIM_2D;
+	tex->coord_components = 2;
+	tex->src[0] = nir_tex_src_for_ssa(nir_tex_src_coord, coords);
+	tex->src[1] = nir_tex_src_for_ssa(nir_tex_src_lod, nir_imm_int(&b, 0));
+	tex->texture_index = 0;
+	tex->sampler_index = 0;
+	nir_def_init(&tex->instr, &tex->def, 4, 32);
+	nir_builder_instr_insert(&b, &tex->instr);
+	nir_intrinsic_instr *st = nir_intrinsic_instr_create(b.shader, nir_intrinsic_store_output);
+	st->num_components = 4;
+	st->src[0] = nir_src_for_ssa(&tex->def);
+	st->src[1] = nir_src_for_ssa(nir_imm_int(&b, 0));
+	nir_intrinsic_set_base(st, 0);
+	nir_intrinsic_set_write_mask(st, 0xf);
+	nir_intrinsic_set_component(st, 0);
+	nir_intrinsic_set_src_type(st, nir_type_float32);
+	nir_io_semantics io = {};
+	io.location = FRAG_RESULT_DATA0;
+	io.num_slots = 1;
+	nir_intrinsic_set_io_semantics(st, io);
+	nir_builder_instr_insert(&b, &st->instr);
+	b.shader->info.outputs_written |= BITFIELD64_BIT(FRAG_RESULT_DATA0);
+	b.shader->info.num_textures = 1;
+	return b.shader;
+}
+
 /* ---- output ---- */
 
 /* Blend register format of a render target output (pan_blend_type_from_nir). */
@@ -1531,7 +1567,9 @@ static uint32_t regfmt(nir_alu_type t)
  *   u32 constant_count, constant_count x { u32 index, u32 bits, char name[48] }
  *   (function constants read from UBO S8_UBO_FC, -D), 8 x u32 render
  *   target register formats (fragment), u32 data_size, data_size bytes of
- *   constant tables (UBO S8_UBO_DATA), binary bytes. */
+ *   constant tables (UBO S8_UBO_DATA), u32 tls_size (thread local storage
+ *   per thread), u32 writes_point_size, binary bytes.
+ * FUNCTION "@preload" builds the driver's render target reload shader. */
 int main(int argc, char **argv)
 {
 	if (argc < 4) {
@@ -1567,33 +1605,49 @@ int main(int argc, char **argv)
 			dynamic = true;
 		}
 	}
-	MetallibFunction *fn = nullptr;
-	auto funcs = read_metallib(lib);
-	for (auto &f : funcs)
-		if (f.name == fname)
-			fn = &f;
-	if (!fn)
-		fail("no function " + fname);
-
-	LLVMContext ctx;
-	auto buf = MemoryBuffer::getMemBuffer(StringRef((const char *)fn->bitcode.data(), fn->bitcode.size()), fname, false);
-	auto mod = parseBitcodeFile(buf->getMemBufferRef(), ctx);
-	if (!mod)
-		fail("cannot parse bitcode: " + toString(mod.takeError()));
-	Module &m = **mod;
-	Function *f = m.getFunction(fname);
-	if (!f)
-		fail("no entry point in module");
-	specialise(m, *f, consts, dynamic);
-	if (dump)
-		f->print(errs());
-
-	gl_shader_stage stage = fn->type == 0 ? MESA_SHADER_VERTEX : MESA_SHADER_FRAGMENT;
 	glsl_type_singleton_init_or_ref();
-	Translator tr(m, *f, stage, varyings);
-	nir_shader *s = tr.run();
-	for (auto &u : tr.unsupported)
-		fprintf(stderr, "air2nir: unsupported: %s\n", u.c_str());
+	LLVMContext ctx;
+	std::unique_ptr<Module> mod;
+	std::vector<MetallibFunction> funcs;
+	gl_shader_stage stage;
+	nir_shader *s;
+	std::vector<InlineSampler> inline_samplers;
+	std::vector<uint8_t> constant_data;
+	std::vector<std::string> unsupported;
+	if (fname == "@preload") {
+		/* the driver's frame shader for MTLLoadActionLoad (lib = unused) */
+		stage = MESA_SHADER_FRAGMENT;
+		s = preload_shader();
+	} else {
+		MetallibFunction *fn = nullptr;
+		funcs = read_metallib(lib);
+		for (auto &f : funcs)
+			if (f.name == fname)
+				fn = &f;
+		if (!fn)
+			fail("no function " + fname);
+		auto buf = MemoryBuffer::getMemBuffer(StringRef((const char *)fn->bitcode.data(), fn->bitcode.size()), fname, false);
+		auto parsed = parseBitcodeFile(buf->getMemBufferRef(), ctx);
+		if (!parsed)
+			fail("cannot parse bitcode: " + toString(parsed.takeError()));
+		mod = std::move(*parsed);
+		Module &m = *mod;
+		Function *f = m.getFunction(fname);
+		if (!f)
+			fail("no entry point in module");
+		specialise(m, *f, consts, dynamic);
+		if (dump)
+			f->print(errs());
+
+		stage = fn->type == 0 ? MESA_SHADER_VERTEX : MESA_SHADER_FRAGMENT;
+		Translator tr(m, *f, stage, varyings);
+		s = tr.run();
+		inline_samplers = inline_samplers;
+		constant_data = constant_data;
+		unsupported = tr.unsupported;
+		for (auto &u : unsupported)
+			fprintf(stderr, "air2nir: unsupported: %s\n", u.c_str());
+	}
 
 	const unsigned gpu_id = 0x60a00001;
 	s->info.next_stage = stage == MESA_SHADER_VERTEX ? MESA_SHADER_FRAGMENT : MESA_SHADER_NONE;
@@ -1662,8 +1716,8 @@ int main(int argc, char **argv)
 		put(v.location);
 		put(v.format);
 	}
-	put(tr.inline_samplers.size());
-	for (auto &is : tr.inline_samplers) {
+	put(inline_samplers.size());
+	for (auto &is : inline_samplers) {
 		put((uint32_t)is.state);
 		put((uint32_t)(is.state >> 32));
 	}
@@ -1705,18 +1759,20 @@ int main(int argc, char **argv)
 	for (unsigned rt = 0; rt < 8; rt++)
 		put(stage == MESA_SHADER_FRAGMENT ? regfmt(info.bifrost.blend[rt].type) : 0);
 	/* v2: constant tables (UBO S8_UBO_DATA), padded to words */
-	tr.constant_data.resize((tr.constant_data.size() + 3) & ~(size_t)3);
-	put(tr.constant_data.size());
-	for (size_t i = 0; i < tr.constant_data.size(); i += 4) {
+	constant_data.resize((constant_data.size() + 3) & ~(size_t)3);
+	put(constant_data.size());
+	for (size_t i = 0; i < constant_data.size(); i += 4) {
 		uint32_t v;
-		memcpy(&v, &tr.constant_data[i], 4);
+		memcpy(&v, &constant_data[i], 4);
 		put(v);
 	}
+	put(info.tls_size);
+	put(stage == MESA_SHADER_VERTEX ? info.vs.writes_point_size : 0);
 	FILE *o = fopen(out.c_str(), "wb");
 	if (!o)
 		fail("cannot write " + out);
 	fwrite(w.data(), 4, w.size(), o);
 	fwrite(binary.data, 1, binary.size, o);
 	fclose(o);
-	return tr.unsupported.empty() ? 0 : 3;
+	return unsupported.empty() ? 0 : 3;
 }

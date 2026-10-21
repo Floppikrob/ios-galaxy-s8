@@ -13,6 +13,9 @@ on the slot of each name, so all functions share one table; there are more
 names than the 32 VAR slots, so names that never meet in one function share
 a slot (greedy colouring of the "used together" graph).
 
+The cache also holds "@preload", the frame shader the driver uses to reload
+a render target (MTLLoadActionLoad).
+
 Output (little endian): "S8SC", u32 version=1, u32 count, count x
 { char name[64], u32 offset, u32 size } (offsets from the file start),
 then the air2nir S8SH blobs.
@@ -64,6 +67,7 @@ def main():
         slots = colour(sets)
         table = ','.join(f'{n}={s}' for n, s in sorted(slots.items(), key=lambda x: x[1]))
         todo = [f for f in funcs if only is None or f['name'] in only]
+        todo.append({'name': '@preload'})       # the driver's render target reload shader
 
         def build(f):
             o = os.path.join(tmp, f['name'] + '.s8sh')
