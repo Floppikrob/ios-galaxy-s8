@@ -210,6 +210,18 @@ six layers (DPP channels, IOMobileFramebuffer layers) and scale in hardware.
 
 ## Mali-G71 for iOS (started 2026-10-21)
 
+- **Boot 36** (CI run 39647955854, BOOT `45bc176e…1fe8c3`): the loader
+  lines reached the kernel log. **Mali answers: `GPU_ID=0x60a00001`**
+  (product `0x60a0` = kbase TMIx, Mali-G71 r0p0; the probe's `0x6000`
+  check was wrong), `SHADER_PRESENT=0x17771777` (20 cores),
+  `L2_FEATURES=0x7130206`, `L2_PRESENT=1`; pd-g3d was already on
+  (`0x3000f`), BUCK6 on (`0xb8`), CMU_G3D `0x140=0xa0a00412` (PLL on and
+  stable). Flip test: CRC `0xd279` before and after moving the IDMA base,
+  `FLIP WORKS=0`. Mongoose unchanged (cluster NONCPU/L2 off).
+- Step 2 (loader, `s8gpu=1`): soft reset, power L2/tiler/20 shaders, AS0 in
+  IDENTITY mode, a NULL job and a WRITE_VALUE job on slot 0 that must store
+  `0x5a5a1234`; logs `GPU JOB WORKS`.
+
 Step 1, loader `gpu_probe.c` with `s8gpu=1`: log/enable S2MPS17 BUCK6
 (`vdd_g3d`), run Samsung's `g3d_on` (CMU_G3D `0x13800000`, PMU `0x40E0`/
 `0x40E4`) and, only if the domain reports on, read `GPU_ID`/`L2_FEATURES`/
