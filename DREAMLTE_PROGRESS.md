@@ -176,3 +176,16 @@ Profile (0134 `s8prof=backboardd`): the remaining frame cost is CoreAnimation's
 software renderer (CA::OGL::SW image_sampler, vAlpha_Blend, memset_pattern16);
 note the sampler also counts parked workqueue threads (workq_kernreturn,
 start_wqthread), which are idle, not busy (S8WQ: ~70 creations per session).
+
+## GPU step 1 (patch 0135, 2026-10-21)
+
+`s8g3d=455000` asks ACPM for the G3D clock (dvfs_g3d, id 4): PLL_G3D reads
+back 455 MHz (0xa08c0411); the firmware sets the voltage. `s8gpu=1` logs:
+pd_g3d status 0x3000f (on), GPU_ID 0x60a00001 (Mali-G71 r0p0), L2 0x7130206,
+tiler 0x809, mem 0x301, MMU 0x2830, AS 0xff, JS 0x7, shader present
+0x17771777 (20 cores), IRQ raw 0x100 (reset completed). Same as LinuxS8's
+panfrost probe.
+ACPM tables read on the phone: MIF (id 0) 2093/2002 (voltage 0: disabled)
+1794 1540 1352 1014 845 676 546 421 286 208 MHz; INT (id 1) 667 533 400 333
+267 178 107 MHz (667 works); G3D (id 4) 839/764/683 (disabled) 572 546 455
+385 338 260 MHz. The MIF freeze above asked for 2093 MHz, a disabled level.

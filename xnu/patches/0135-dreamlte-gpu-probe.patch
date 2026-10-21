@@ -1,0 +1,187 @@
+From c95803a1e4931a5e64194352361f33cde615e18e Mon Sep 17 00:00:00 2001
+From: local <local@s8>
+Date: Wed, 21 Oct 2026 11:06:00 +0300
+Subject: [PATCH] dreamlte: GPU step 1 (s8gpu=1: Mali-G71 ids; s8g3d=kHz via
+ ACPM)
+
+---
+ bsd/conf/files       |  1 +
+ bsd/dev/s8_cpufreq.c | 21 ++++++----
+ bsd/dev/s8_gpu.c     | 98 ++++++++++++++++++++++++++++++++++++++++++++
+ bsd/dev/sweet_ufs.c  |  2 +
+ 4 files changed, 115 insertions(+), 7 deletions(-)
+ create mode 100644 bsd/dev/s8_gpu.c
+
+diff --git a/bsd/conf/files b/bsd/conf/files
+index 3b349a9..7f35118 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -107,6 +107,7 @@ bsd/dev/memdev.c			standard
+ bsd/dev/sweet_ufs.c			standard
+ bsd/dev/s8_wlan.c			standard
+ bsd/dev/s8_cpufreq.c			standard
++bsd/dev/s8_gpu.c			standard
+ bsd/dev/a5xelte_emmc.c			standard
+ bsd/dev/a5xelte_keys.c			standard
+ bsd/dev/a5xelte_touch.c			standard
+diff --git a/bsd/dev/s8_cpufreq.c b/bsd/dev/s8_cpufreq.c
+index 5b7db85..ed5db0b 100644
+--- a/bsd/dev/s8_cpufreq.c
++++ b/bsd/dev/s8_cpufreq.c
+@@ -414,8 +414,14 @@ s8_cpufreq_start(void)
+ 	uint32_t want_big = 0, chan = 0;
+ 	PE_parse_boot_argn("s8cpufreq_big", &want_big, sizeof(want_big));
+ 	PE_parse_boot_argn("s8cpufreq_ch", &chan, sizeof(chan));
+-	if (want == 0 && want_big == 0) {
+-		return;
++	{
++		uint32_t g = 0, m = 0, i = 0;
++		PE_parse_boot_argn("s8g3d", &g, sizeof(g));
++		PE_parse_boot_argn("s8mif", &m, sizeof(m));
++		PE_parse_boot_argn("s8int", &i, sizeof(i));
++		if (want == 0 && want_big == 0 && g == 0 && m == 0 && i == 0) {
++			return;
++		}
+ 	}
+ 	/*
+ 	 * Requests go to channel 0 by default: Samsung's acpm_dvfs.ch_num stays 0
+@@ -434,13 +440,14 @@ s8_cpufreq_start(void)
+ 	 * with a display underrun stripe (Samsung coordinates MIF changes with
+ 	 * DECON; we do not).
+ 	 */
+-	uint32_t want_mif = 0, want_int = 0;
++	uint32_t want_mif = 0, want_int = 0, want_g3d = 0;
+ 	PE_parse_boot_argn("s8mif", &want_mif, sizeof(want_mif));
+ 	PE_parse_boot_argn("s8int", &want_int, sizeof(want_int));
+-	static const struct { uint32_t id; const char *name; } dom[4] = {
+-		{ 3, "A53" }, { 2, "Mongoose" }, { 0, "MIF" }, { 1, "INT" } };
+-	for (int d = 0; d < 4; d++) {
+-		uint32_t limit = d == 0 ? want : d == 1 ? want_big : d == 2 ? want_mif : want_int;
++	PE_parse_boot_argn("s8g3d", &want_g3d, sizeof(want_g3d));    /* GPU clock (dvfs_g3d), kHz */
++	static const struct { uint32_t id; const char *name; } dom[5] = {
++		{ 3, "A53" }, { 2, "Mongoose" }, { 0, "MIF" }, { 1, "INT" }, { 4, "G3D" } };
++	for (int d = 0; d < 5; d++) {
++		uint32_t limit = d == 0 ? want : d == 1 ? want_big : d == 2 ? want_mif : d == 3 ? want_int : want_g3d;
+ 		if (limit == 0) {
+ 			continue;
+ 		}
+diff --git a/bsd/dev/s8_gpu.c b/bsd/dev/s8_gpu.c
+new file mode 100644
+index 0000000..9e5dd7d
+--- /dev/null
++++ b/bsd/dev/s8_gpu.c
+@@ -0,0 +1,98 @@
++/* SPDX-License-Identifier: GPL-2.0-only
++ *
++ * Galaxy S8 (dreamlte) GPU, step 1: the Mali-G71 MP20 (Bifrost) at 0x13900000.
++ * After MakrSas/LinuxS8 (CMU_G3D, pd_g3d, panfrost on this phone: GPU_ID
++ * 0x60a00001, 20 shader cores) and mainline panfrost (register layout).
++ * GPL-2.0 like those.
++ *
++ * Boot-arg s8gpu=1: log the G3D power domain, CMU_G3D and the GPU's
++ * identification registers. The clock comes from ACPM (dvfs_g3d, boot-arg
++ * s8g3d=kHz in s8_cpufreq.c), which also sets the voltage.
++ */
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <kern/clock.h>
++#include <pexpert/pexpert.h>
++#include <libkern/libkern.h>
++#include <pexpert/arm64/board_config.h>
++
++#if defined(ARM64_BOARD_CONFIG_A5XELTE) && defined(DREAMLTE)
++
++extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++
++#define LOG(fmt, ...)   printf("S8GPU: " fmt "\n", ##__VA_ARGS__)
++
++#define GPU_PA          0x13900000UL
++#define CMU_G3D_PA      0x13800000UL
++#define PMU_PA          0x16480000UL
++#define PD_G3D          0x40e0          /* CONFIGURATION, STATUS at +4 */
++
++/* panfrost_regs.h */
++#define GPU_ID                  0x000
++#define GPU_L2_FEATURES         0x004
++#define GPU_CORE_FEATURES       0x008
++#define GPU_TILER_FEATURES      0x00c
++#define GPU_MEM_FEATURES        0x010
++#define GPU_MMU_FEATURES        0x014
++#define GPU_AS_PRESENT          0x018
++#define GPU_JS_PRESENT          0x01c
++#define GPU_IRQ_RAWSTAT         0x020
++#define GPU_STATUS              0x034
++#define GPU_LATEST_FLUSH_ID     0x038
++#define GPU_THREAD_MAX_THREADS  0x0a0
++#define GPU_SHADER_PRESENT_LO   0x100
++#define GPU_TILER_PRESENT_LO    0x110
++#define GPU_L2_PRESENT_LO       0x120
++#define GPU_SHADER_READY_LO     0x140
++#define GPU_L2_READY_LO         0x160
++
++static inline uint32_t rd(vm_offset_t b, uint32_t o) { return *(volatile uint32_t *)(b + o); }
++
++void s8_gpu_start(void);
++
++void
++s8_gpu_start(void)
++{
++	static bool done;
++	uint32_t on = 0;
++
++	if (done || !PE_parse_boot_argn("s8gpu", &on, sizeof(on)) || on == 0) {
++		return;
++	}
++	done = true;
++	vm_offset_t gpu = ml_io_map(GPU_PA, 0x5000);
++	vm_offset_t cmu = ml_io_map(CMU_G3D_PA, 0x3000);
++	vm_offset_t pmu = ml_io_map(PMU_PA, 0x5000);
++	if (!gpu || !cmu || !pmu) {
++		LOG("map failed");
++		return;
++	}
++	LOG("pd_g3d config %#x status %#x", rd(pmu, PD_G3D), rd(pmu, PD_G3D + 4));
++	if ((rd(pmu, PD_G3D + 4) & 0xf) != 0xf) {
++		LOG("G3D power domain is off, not touching the GPU");
++		return;
++	}
++	uint32_t pll = rd(cmu, 0x140);
++	uint32_t m = (pll >> 16) & 0x3ff, p = (pll >> 8) & 0x3f, s = pll & 7;
++	LOG("cmu_g3d switch_user %#x pll %#x (%u MHz) busd mux %#x busp div %#x agpu gate %#x",
++	    rd(cmu, 0x100), pll, (pll & (1u << 31)) && p ? (unsigned)(26ULL * m / ((uint64_t)p << s)) : 0,
++	    rd(cmu, 0x1000), rd(cmu, 0x1804), rd(cmu, 0x201c));
++	uint32_t id = rd(gpu, GPU_ID);
++	LOG("GPU_ID %#x (arch %u.%u product %#x r%up%u status %u)", id, id >> 28, (id >> 24) & 0xf,
++	    id >> 16, (id >> 12) & 0xf, (id >> 4) & 0xff, id & 0xf);
++	LOG("L2 %#x core %#x tiler %#x mem %#x mmu %#x AS %#x JS %#x max_threads %u",
++	    rd(gpu, GPU_L2_FEATURES), rd(gpu, GPU_CORE_FEATURES), rd(gpu, GPU_TILER_FEATURES),
++	    rd(gpu, GPU_MEM_FEATURES), rd(gpu, GPU_MMU_FEATURES), rd(gpu, GPU_AS_PRESENT),
++	    rd(gpu, GPU_JS_PRESENT), rd(gpu, GPU_THREAD_MAX_THREADS));
++	LOG("shader present %#x ready %#x, tiler %#x, l2 present %#x ready %#x, status %#x irq raw %#x",
++	    rd(gpu, GPU_SHADER_PRESENT_LO), rd(gpu, GPU_SHADER_READY_LO), rd(gpu, GPU_TILER_PRESENT_LO),
++	    rd(gpu, GPU_L2_PRESENT_LO), rd(gpu, GPU_L2_READY_LO), rd(gpu, GPU_STATUS), rd(gpu, GPU_IRQ_RAWSTAT));
++}
++
++#elif defined(ARM64_BOARD_CONFIG_A5XELTE)
++void s8_gpu_start(void);
++void
++s8_gpu_start(void)
++{
++}
++#endif
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index 96c9ed0..53b20c9 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -882,6 +882,8 @@ sweet_ufs_rootdev(dev_t *dev)
+ 	extern void s8_cpufreq_start(void);
+ 	extern void s8_load_start(void);
+ 	s8_cpufreq_start();
++	extern void s8_gpu_start(void);
++	s8_gpu_start();                 /* boot-arg s8gpu=1 (bsd/dev/s8_gpu.c), after the G3D clock */
+ 	s8_load_start();
+ 	extern void s8_prof_start(void);
+ 	s8_prof_start();                /* boot-arg s8prof=NAME (osfmk/kern/s8_prof.c) */                /* per-CPU load every 10 s (osfmk/kern/s8_load.c) */             /* boot-arg s8cpufreq=KHZ (bsd/dev/s8_cpufreq.c) */
+-- 
+2.54.0 (Apple Git-157)
+
