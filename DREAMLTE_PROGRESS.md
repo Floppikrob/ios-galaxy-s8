@@ -222,6 +222,16 @@ six layers (DPP channels, IOMobileFramebuffer layers) and scale in hardware.
   IDENTITY mode, a NULL job and a WRITE_VALUE job on slot 0 that must store
   `0x5a5a1234`; logs `GPU JOB WORKS`.
 
+- **Boot 37** (BOOT `11ed9b64…ff9686`): **the GPU runs jobs.** Soft reset,
+  L2/tiler/all 20 shader cores ready (`0x17771777`), AS0 IDENTITY update
+  done; NULL job and WRITE_VALUE job both completed (JOB_IRQ 1, JS status 0,
+  exception status 1 = done), the GPU stored `0x5a5a1234`, no AS0 fault:
+  `GPU JOB WORKS=1`.
+- Step 3 (loader): a fragment job clears a 256x256 square of the scanned-out
+  S-Boot framebuffer (x 592, y 2496) to grey through the GPU's tile
+  writeback; descriptors per Mesa 25.2.8 `genxml/v6.xml` and Panfrost's
+  clear-only `pan_emit_fbd`/`pan_emit_rt`; logs `GPU DRAW WORKS`.
+
 Step 1, loader `gpu_probe.c` with `s8gpu=1`: log/enable S2MPS17 BUCK6
 (`vdd_g3d`), run Samsung's `g3d_on` (CMU_G3D `0x13800000`, PMU `0x40E0`/
 `0x40E4`) and, only if the domain reports on, read `GPU_ID`/`L2_FEATURES`/
