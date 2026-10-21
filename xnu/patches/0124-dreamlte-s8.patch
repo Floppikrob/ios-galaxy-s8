@@ -753,7 +753,7 @@ index 9969739..0535b28 100644
  	poll();
  	if (fReal) {
 diff --git iokit/Kernel/arm/SweetCPU.cpp iokit/Kernel/arm/SweetCPU.cpp
-index 55d0057..614b271 100644
+index 55d0057..dee6635 100644
 --- a/iokit/Kernel/arm/SweetCPU.cpp
 +++ b/iokit/Kernel/arm/SweetCPU.cpp
 @@ -17,6 +17,9 @@
@@ -807,7 +807,7 @@ index 55d0057..614b271 100644
  	}
  	for (unsigned int i = 0; i < topology->num_cpus; i++) {
  		SweetCPU *cpu = __atomic_load_n(&sweet_cpus[i], __ATOMIC_ACQUIRE);
-@@ -279,13 +292,129 @@ SweetCPU::startCPU(vm_offset_t start_paddr, vm_offset_t arg_paddr)
+@@ -279,13 +292,148 @@ SweetCPU::startCPU(vm_offset_t start_paddr, vm_offset_t arg_paddr)
  {
  	const ml_topology_cpu_t *cpu = &ml_get_topology_info()->cpus[getCPUNumber()];
  	/* cpu_start() passes NULL,NULL: x20/x21 are set by LowResetVectorBase. */
@@ -899,6 +899,25 @@ index 55d0057..614b271 100644
 +		}
 +		if (ddn != NULL) {
 +			*ddn |= 1;
++			/*
++			 * Boot 33: the cluster's NONCPU (0x2404) and L2 (0x2604) status
++			 * stayed off after the core power-up. Power them through their
++			 * CONFIGURATION registers (0x2400 = 0xF, 0x2600 = 0x7), as the
++			 * loader probe does. The loader also enables the BUCK2 rail.
++			 */
++			volatile uint32_t *pm = (volatile uint32_t *)pmu;
++			if ((pm[0x2404 / 4] & 0xf) != 0xf || (pm[0x2604 / 4] & 7) != 7) {
++				pm[0x2400 / 4] |= 0xf;
++				for (int i = 0; i < 10000 && (pm[0x2404 / 4] & 0xf) != 0xf; i++) {
++					IODelay(1);
++				}
++				pm[0x2600 / 4] |= 7;
++				for (int i = 0; i < 10000 && (pm[0x2604 / 4] & 7) != 7; i++) {
++					IODelay(1);
++				}
++			}
++			IOLog(CPU_PORT_NAME " CPU: cpu=%u Mongoose cluster noncpu=0x%x l2=0x%x\n",
++			    getCPUNumber(), pm[0x2404 / 4], pm[0x2604 / 4]);
 +			/*
 +			 * Boot 32: the Mongoose PLL (CMU_CPUCL0 PLL_CON0) was enabled
 +			 * at 1066 MHz but not STABLE (bit 29). Re-lock it as Samsung's

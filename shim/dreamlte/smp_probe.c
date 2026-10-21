@@ -184,7 +184,28 @@ static int mngs_core_start(unsigned n, void (*kv)(const char *, uint64_t), void 
 		kv("seq st", rd(CL_CPUSEQ(0) - 4));
 		kv("noncpu", rd(CL_NONCPU(0)));
 		kv("l2", rd(CL_L2(0)));
+		kv("a53 noncpu", rd(CL_NONCPU(1)));
+		kv("a53 l2", rd(CL_L2(1)));
 		out("\n");
+		/*
+		 * Boot 33: NONCPU (0x2404) and L2 (0x2604) stayed off here although
+		 * the core reported 0xf. Power them through their CONFIGURATION
+		 * registers (0x2400 LOCAL_PWR_CFG 0xF, 0x2600 0x7; the Exynos 8890
+		 * pmusfr names them MNGS_NONCPU/L2_CONFIGURATION), NONCPU first.
+		 */
+		if ((rd(CL_NONCPU(0)) & 0xf) != 0xf || (rd(CL_L2(0)) & 7) != 7) {
+			wr(CL_NONCPU(0) - 4, rd(CL_NONCPU(0) - 4) | 0xf);
+			uint64_t t = ticks() + TIMER_HZ / 100;
+			while (ticks() < t && (rd(CL_NONCPU(0)) & 0xf) != 0xf)
+				;
+			wr(CL_L2(0) - 4, rd(CL_L2(0) - 4) | 7);
+			t = ticks() + TIMER_HZ / 100;
+			while (ticks() < t && (rd(CL_L2(0)) & 7) != 7)
+				;
+			kv("forced noncpu", rd(CL_NONCPU(0)));
+			kv("l2", rd(CL_L2(0)));
+			out("\n");
+		}
 		mngs_pll_lock(kv, out);
 	}
 	int up = wait_flag(n, 100);

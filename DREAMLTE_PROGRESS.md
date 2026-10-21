@@ -156,6 +156,19 @@ CPUSEQUENCER_OPTION `0x2488` bit 0 := 0), `core0n_on` = CONFIGURATION 0xF +
   AppleCLCD now masks the DECON hardware trigger (`0x70`: HW_TRIG_EN bit 0
   off, HW_TRIG_MASK_DECON bit 4 on, as Samsung's `decon_reg_set_trigger`)
   right after a frame-done, copies, and unmasks it.
+- **Boot 33** (CI run 39638299592, BOOT `36a04df1…ac37f16`, PLL relock +
+  trigger masking, `sweetfb_hz` still 10): user reports no smoother motion
+  (expected at 10 Hz). Probe after the core power edge: CPUSEQUENCER_STATUS
+  `0x60000`, **NONCPU status `0x5140000` and L2 status `0x10050000`: both
+  off**; PLL relock `0x81ec0302`, LOCKTIME `0x1c2`, not stable. The cluster
+  itself never powers, so neither its PLL nor a core can run. Again capped
+  to 4 CPUs; 4/4 A53s up, SpringBoard ran.
+- Next: the loader logs S2MPS17 BUCK2 (`vdd_cpucl0`, regs `0x1b/0x1c`)
+  next to BUCK3 and enables BUCK2 (>= 0.8 V) if it is off: Samsung's DT
+  marks it always-on, so Linux enables it itself. If NONCPU/L2 are still off
+  after the core power edge, loader and XNU set their CONFIGURATION
+  registers (`0x2400` = 0xF, `0x2600` = 0x7; names from the 8890 pmusfr).
+  Frame statistics every 10 s and `sweetfb_hz=30` for the 30-60 fps work.
 
 GPU: iOS draws through Metal on Apple's GPU only (AGX); the Mali-G71 runs
 under Linux (Panfrost, see LinuxS8) but no iOS driver can use it. Graphics

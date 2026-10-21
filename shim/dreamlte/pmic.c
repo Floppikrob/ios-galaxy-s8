@@ -34,6 +34,12 @@
 #define LDO_EN			(3u << 6)
 #define L34_1V85		(LDO_EN | (1850000 - 700000) / 25000)
 #define L35_3V0			(LDO_EN | (3000000 - 1800000) / 25000)
+#define B2CTRL			0x1b	/* BUCK2 vdd_cpucl0 (Mongoose) */
+#define B2OUT			0x1c
+#define B3CTRL			0x1d	/* BUCK3 vdd_cpucl1 (A53) */
+#define B3OUT			0x1e
+#define BUCK_EN			(3u << 6)	/* S2MPS17_ENABLE_MASK */
+#define BUCK_VSEL(uv)		(((uv) - 300000) / 6250)	/* BUCK_MIN1, STEP1 */
 #define RTC_UPDATE		0x02
 #define RTC_RUDR		0x01
 #define RTC_SEC			0x04
@@ -136,4 +142,35 @@ uint64_t pmic_init(void (*kv_fn)(const char *, uint64_t), void (*out_fn)(const c
 	kv(" sec..year", raw);
 	out("\n");
 	return raw;
+}
+
+/*
+ * Mongoose cluster rail. Boot 33: with its cores powered in the PMU the
+ * cluster's NONCPU and L2 status stayed off and its PLL never locked. The
+ * rail is S2MPS17 BUCK2 "vdd_cpucl0" (dream2lte_common.dtsi: 0.45-1.2 V,
+ * regulator-always-on, so Samsung's Linux switches it on itself; S-Boot
+ * may leave it off). Log BUCK2 next to BUCK3 (the running A53 rail); if
+ * BUCK2 is not enabled, set at least 0.8 V (1066 MHz is the PLL's boot
+ * rate) and enable it.
+ */
+void pmic_mngs_rail(void)
+{
+	out("MNGS rail");
+	show(" b2ctrl", SLAVE_PMIC, B2CTRL);
+	show("b2out", SLAVE_PMIC, B2OUT);
+	show("b3ctrl", SLAVE_PMIC, B3CTRL);
+	show("b3out", SLAVE_PMIC, B3OUT);
+	out("\n");
+	int ctrl = speedy(SLAVE_PMIC, B2CTRL, 0, 0);
+	int vsel = speedy(SLAVE_PMIC, B2OUT, 0, 0);
+	if (ctrl < 0 || vsel < 0 || (ctrl & BUCK_EN) == BUCK_EN)
+		return;
+	if (vsel < BUCK_VSEL(800000) || vsel > BUCK_VSEL(1100000))
+		speedy(SLAVE_PMIC, B2OUT, 1, BUCK_VSEL(800000));
+	speedy(SLAVE_PMIC, B2CTRL, 1, (uint8_t)(ctrl | BUCK_EN));
+	delay_us(1000);			/* 12 mV/us ramp: < 100 us */
+	out("MNGS rail on");
+	show(" b2ctrl", SLAVE_PMIC, B2CTRL);
+	show("b2out", SLAVE_PMIC, B2OUT);
+	out("\n");
 }
