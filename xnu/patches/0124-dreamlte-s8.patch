@@ -81,7 +81,7 @@ index 3ba2fd4..dcbd143 100644
  		return;
  	}
 diff --git bsd/dev/a5xelte_touch.c bsd/dev/a5xelte_touch.c
-index 7ba309b..dbae017 100644
+index 7ba309b..5317426 100644
 --- a/bsd/dev/a5xelte_touch.c
 +++ b/bsd/dev/a5xelte_touch.c
 @@ -12,6 +12,7 @@
@@ -92,7 +92,7 @@ index 7ba309b..dbae017 100644
  
  extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
  extern void thread_terminate_self(void);
-@@ -615,10 +616,320 @@ a5touch_start_early(vm_offset_t nfc, vm_offset_t alive)
+@@ -615,10 +616,330 @@ a5touch_start_early(vm_offset_t nfc, vm_offset_t alive)
  	}
  }
  
@@ -390,10 +390,20 @@ index 7ba309b..dbae017 100644
 +	}
 +	uint8_t func[3] = {0x30, 0x01, 0x00};                  /* TOUCH_FUNCTION = touch */
 +	uint8_t sense = 0x10;                                   /* SENSE_ON */
-+	if (!s8i2c_xfer(s8ts_i2c, S8TS_ADDR, func, 3, NULL, 0) ||
++	/* Boot 40: the ID read worked, then one enable write failed and touch
++	 * stayed off for the whole boot. Retry after a bus reset. */
++	int tries = 0;
++	while (!s8i2c_xfer(s8ts_i2c, S8TS_ADDR, func, 3, NULL, 0) ||
 +	    !s8i2c_xfer(s8ts_i2c, S8TS_ADDR, &sense, 1, NULL, 0)) {
-+		printf("S8 TOUCH: enable sequence failed\n");
-+		return;
++		if (++tries == 5) {
++			printf("S8 TOUCH: enable sequence failed\n");
++			return;
++		}
++		s8i2c_reset(s8ts_i2c);
++		delay(20000);
++	}
++	if (tries) {
++		printf("S8 TOUCH: enable sequence ok after %d retries\n", tries);
 +	}
 +	if (kernel_thread_start(s8ts_thread, NULL, &thread) == KERN_SUCCESS) {
 +		thread_deallocate(thread);
@@ -961,7 +971,7 @@ index 55d0057..dee6635 100644
  	int32_t rc = sweet_psci_cpu_on(cpu->phys_id, entry, getCPUNumber());
  	IOLog(CPU_PORT_NAME " CPU: cpu=%u PSCI CPU_ON rc=%d\n", getCPUNumber(), rc);
 diff --git iokit/Kernel/arm/SweetFramebuffer.cpp iokit/Kernel/arm/SweetFramebuffer.cpp
-index 356ff51..04d6b06 100644
+index 356ff51..271c99e 100644
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
 @@ -48,6 +48,7 @@ extern "C" int sweet_console_muted;     /* osfmk/console/serial_console.c */
@@ -1806,7 +1816,7 @@ index 356ff51..04d6b06 100644
 +static volatile uint32_t *s8gpu_blob;
 +static uint32_t s8gpu_shaders;
 +static bool s8gpu_ready;
-+static uint32_t s8gpu_frames, s8gpu_errors;
++static uint32_t s8gpu_frames, s8gpu_errors, s8gpu_skips;
 +
 +static inline uint32_t
 +s8gpu_rd(uint32_t off)
@@ -2058,7 +2068,7 @@ index 356ff51..04d6b06 100644
  		if (w <= 0 || h <= 0) {
  			w = (int32_t)s->width;
  			h = (int32_t)s->height;
-@@ -410,6 +1404,21 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -410,6 +1404,27 @@ AppleCLCD::present(const uint8_t *rec)
  		    s->memory == NULL || last > s->memory->getLength()) {
  			src = 0;
  		}
@@ -2074,13 +2084,19 @@ index 356ff51..04d6b06 100644
 +					s->release();
 +					continue;
 +				}
++			} else if (s8gpu_skips++ < 8) {
++				IOLog("S8 GPU: surface %u not contiguous: pa 0x%llx segment %llu need %llu\n",
++				    s->id, (unsigned long long)pa, (unsigned long long)seg, (unsigned long long)need);
 +			}
++		} else if (s8gpu_ready && s8gpu_skips++ < 8) {
++			IOLog("S8 GPU: layer not GPU-presentable: src %d bpe %u s %d,%d d %d,%d %dx%d fmt 0x%x\n",
++			    src != 0, bpe, sx, sy, dx, dy, w, h, s->pixelFormat);
 +		}
 +#endif
  		if (src != 0 && bpe == 4) {
  			for (int32_t y = 0; y < h; y++) {
  				memcpy((void *)(fPixels + (uint64_t)(dy + y) * fRowBytes + (uint64_t)dx * 4),
-@@ -419,6 +1428,11 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -419,6 +1434,11 @@ AppleCLCD::present(const uint8_t *rec)
  		}
  		s->release();
  	}
@@ -2093,7 +2109,7 @@ index 356ff51..04d6b06 100644
  
  bool
 diff --git iokit/Kernel/arm/SweetSurface.cpp iokit/Kernel/arm/SweetSurface.cpp
-index 7f90c56..ffc19f2 100644
+index 7f90c56..29e192d 100644
 --- a/iokit/Kernel/arm/SweetSurface.cpp
 +++ b/iokit/Kernel/arm/SweetSurface.cpp
 @@ -26,6 +26,8 @@
@@ -2105,7 +2121,7 @@ index 7f90c56..ffc19f2 100644
  
  #if defined(SWEET)
  #include <IOKit/IOService.h>
-@@ -688,6 +690,21 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
+@@ -688,6 +690,24 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
  		IOBufferMemoryDescriptor *mem = NULL;
  		if ((uint64_t)OSAddAtomic64(s->allocSize, (volatile SInt64 *)&sweet_surface_wired) +
  		    s->allocSize <= SWEET_SURFACE_WIRED_MAX) {
@@ -2121,6 +2137,9 @@ index 7f90c56..ffc19f2 100644
 +				mem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
 +				    kIODirectionInOut | kIOMemoryKernelUserShared | kIOMemoryPhysicallyContiguous,
 +				    s->allocSize, 0x0000000ffffff000ULL);
++			}
++			if (gpu && s->allocSize >= (4u << 20)) {
++				IOLog("SWEET SURF: contiguous %u bytes: %s\n", s->allocSize, mem ? "ok" : "failed");
 +			}
 +			if (mem == NULL)
 +#endif

@@ -292,10 +292,20 @@ dreamlte_touch_start(void)
 	}
 	uint8_t func[3] = {0x30, 0x01, 0x00};                  /* TOUCH_FUNCTION = touch */
 	uint8_t sense = 0x10;                                   /* SENSE_ON */
-	if (!s8i2c_xfer(s8ts_i2c, S8TS_ADDR, func, 3, NULL, 0) ||
+	/* Boot 40: the ID read worked, then one enable write failed and touch
+	 * stayed off for the whole boot. Retry after a bus reset. */
+	int tries = 0;
+	while (!s8i2c_xfer(s8ts_i2c, S8TS_ADDR, func, 3, NULL, 0) ||
 	    !s8i2c_xfer(s8ts_i2c, S8TS_ADDR, &sense, 1, NULL, 0)) {
-		printf("S8 TOUCH: enable sequence failed\n");
-		return;
+		if (++tries == 5) {
+			printf("S8 TOUCH: enable sequence failed\n");
+			return;
+		}
+		s8i2c_reset(s8ts_i2c);
+		delay(20000);
+	}
+	if (tries) {
+		printf("S8 TOUCH: enable sequence ok after %d retries\n", tries);
 	}
 	if (kernel_thread_start(s8ts_thread, NULL, &thread) == KERN_SUCCESS) {
 		thread_deallocate(thread);

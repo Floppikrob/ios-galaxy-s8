@@ -252,6 +252,14 @@ six layers (DPP channels, IOMobileFramebuffer layers) and scale in hardware.
   that asset; likely the MobileGestalt cache built during the 1440x2960
   boots no longer matches. Back to the native canvas until that is fixed;
   the GPU present path now also handles the native canvas 1:1.
+- **Boot 40** (BOOT `0f0e52e8…c30db2efc`, `sweetfb_gpu=1`, native canvas):
+  `S8 GPU: Mali-G71 0x60a00001 reset=1 l2=1 tiler=1 shaders=0x17771777/1
+  as0=1 -> GPU present on`, but every frame still went through the CPU copy
+  (no GPU frame or error lines): the GPU path was never taken. Touch: the
+  S6SY761 ID read worked, then one enable write failed (`enable sequence
+  failed`), so no touch this boot. Next: the enable writes retry after a
+  bus reset; the log says why a layer is not GPU-presented and whether the
+  contiguous surface allocation worked.
 - **GPU present (built, not yet booted):** `tools/dreamlte/mali-blit-gen.c`,
   built against Mesa 25.2.8 (`build-mali-blit.sh`), compiles a Bifrost
   fragment shader for GPU_ID `0x60a00001` (144 bytes: `VAR_TEX.f32` +

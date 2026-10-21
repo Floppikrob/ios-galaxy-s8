@@ -26,7 +26,7 @@ static volatile uint32_t *s8gpu_regs;
 static volatile uint32_t *s8gpu_blob;
 static uint32_t s8gpu_shaders;
 static bool s8gpu_ready;
-static uint32_t s8gpu_frames, s8gpu_errors;
+static uint32_t s8gpu_frames, s8gpu_errors, s8gpu_skips;
 
 static inline uint32_t
 s8gpu_rd(uint32_t off)
