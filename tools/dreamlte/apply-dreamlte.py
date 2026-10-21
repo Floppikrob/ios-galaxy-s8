@@ -788,6 +788,65 @@ edit('iokit/Kernel/arm/SweetFramebuffer.cpp', [
      'static uint32_t sweet_fb_swaps_logged;\n', 1),
 ])
 
+# GPU present (sweetfb_gpu=1): the Mali-G71 stretches each full-screen iOS
+# frame over the panel (tools/dreamlte/s8_gpu_present.inc, descriptor blob
+# from tools/dreamlte/mali-blit-gen.c). Full-screen IOSurfaces are allocated
+# physically contiguous then, so the GPU (IDENTITY address space) can read
+# them; if that allocation fails, the CPU copy stays.
+edit('iokit/Kernel/arm/SweetFramebuffer.cpp', [
+    ('static uint32_t sweet_fb_swaps_logged;\n',
+     '#if defined(DREAMLTE)\n' +
+     (Path(__file__).parent / 's8_mali_blit.h').read_text() + '\n' +
+     (Path(__file__).parent / 's8_gpu_present.inc').read_text() +
+     '#endif\n\nstatic uint32_t sweet_fb_swaps_logged;\n', 1),
+    ('bool\nAppleCLCD::start(IOService *provider)\n{\n#if defined(DREAMLTE)\n\tsweet_fb_echo_loader();\n#endif\n',
+     'static void s8gpu_init(void);\n\n'
+     'bool\nAppleCLCD::start(IOService *provider)\n{\n#if defined(DREAMLTE)\n\tsweet_fb_echo_loader();\n#endif\n', 1),
+    ('\tsetProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");\n',
+     '#if defined(DREAMLTE)\n\ts8gpu_init();\n#endif\n'
+     '\tsetProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");\n', 1),
+    ('\t\t\t\tsweet_fb_scaled_copy(fPixels, fRowBytes, fWidth, fHeight, fLogicalW, fLogicalH,\n',
+     '\t\t\t\tIOByteCount seg = 0;\n'
+     '\t\t\t\tuint64_t need = (uint64_t)(h - 1) * s->bytesPerRow + (uint64_t)w * 4;\n'
+     '\t\t\t\tif (s8gpu_ready && sx == 0 && sy == 0 && dx == 0 && dy == 0 &&\n'
+     '\t\t\t\t    w == (int32_t)fLogicalW && h == (int32_t)fLogicalH &&\n'
+     '\t\t\t\t    s->pixelFormat == SWEET_FB_FORMAT_BGRA) {\n'
+     '\t\t\t\t\taddr64_t pa = s->memory->getPhysicalSegment(s->offset, &seg, kIOMemoryMapperNone);\n'
+     '\t\t\t\t\tif (pa != 0 && seg >= need) {\n'
+     '\t\t\t\t\t\t/* CoreAnimation drew through the CPU caches. */\n'
+     '\t\t\t\t\t\tclean_dcache((vm_offset_t)(src + s->offset), (unsigned)need, 0);\n'
+     '\t\t\t\t\t\tif (s8gpu_present(pa, s->bytesPerRow, (uint32_t)w, (uint32_t)h)) {\n'
+     '\t\t\t\t\t\t\ts->release();\n'
+     '\t\t\t\t\t\t\tcontinue;\n'
+     '\t\t\t\t\t\t}\n'
+     '\t\t\t\t\t}\n'
+     '\t\t\t\t}\n'
+     '\t\t\t\tsweet_fb_scaled_copy(fPixels, fRowBytes, fWidth, fHeight, fLogicalW, fLogicalH,\n', 1),
+])
+edit('iokit/Kernel/arm/SweetSurface.cpp', [
+    ('\t\t\tmem = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,\n'
+     '\t\t\t    kIODirectionInOut | kIOMemoryKernelUserShared, s->allocSize, page_size);\n',
+     '#if defined(DREAMLTE)\n'
+     '\t\t\t/* sweetfb_gpu: full-screen surfaces physically contiguous, so the\n'
+     '\t\t\t * Mali (IDENTITY address space) can read them as a texture. */\n'
+     '\t\t\tstatic int gpu = -1;\n'
+     '\t\t\tif (gpu < 0) {\n'
+     '\t\t\t\tgpu = 0;\n'
+     '\t\t\t\tPE_parse_boot_argn("sweetfb_gpu", &gpu, sizeof(gpu));\n'
+     '\t\t\t}\n'
+     '\t\t\tif (gpu && s->allocSize >= (4u << 20)) {\n'
+     '\t\t\t\tmem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,\n'
+     '\t\t\t\t    kIODirectionInOut | kIOMemoryKernelUserShared | kIOMemoryPhysicallyContiguous,\n'
+     '\t\t\t\t    s->allocSize, 0x0000000ffffff000ULL);\n'
+     '\t\t\t}\n'
+     '\t\t\tif (mem == NULL)\n'
+     '#endif\n'
+     '\t\t\tmem = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,\n'
+     '\t\t\t    kIODirectionInOut | kIOMemoryKernelUserShared, s->allocSize, page_size);\n', 1),
+    ('#include "SweetSurface.h"\n',
+     '#include "SweetSurface.h"\n#include <pexpert/arm64/board_config.h>\n#include <pexpert/pexpert.h>\n', 1),
+])
+
 # Battery: the A5XELTE config had no power source, so iOS showed a wrong
 # battery. On the S8, SweetBattery reads the MAX77865 fuel gauge and charger
 # through dreamlte_battery_read() (dreamlte_touch.c). S8 battery: 3000 mAh.

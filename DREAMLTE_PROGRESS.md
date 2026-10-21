@@ -243,6 +243,21 @@ six layers (DPP channels, IOMobileFramebuffer layers) and scale in hardware.
   slot), a Bifrost blit shader built with Mesa's compiler, then iOS frames
   composed and stretched by the GPU instead of the CPU copy.
 
+- **GPU present (built, not yet booted):** `tools/dreamlte/mali-blit-gen.c`,
+  built against Mesa 25.2.8 (`build-mali-blit.sh`), compiles a Bifrost
+  fragment shader for GPU_ID `0x60a00001` (144 bytes: `VAR_TEX.f32` +
+  `BLEND`, checked with Mesa's disassembler) and packs, as Panfrost's
+  preload path does, the renderer state, blend, unnormalised nearest
+  sampler, BGRA8 linear texture, varyings, pre-frame DCD (mode ALWAYS), MFBD
+  with the panel as RT (writeback swizzle B,G,R,A) and the fragment job into
+  `tools/dreamlte/s8_mali_blit.h` (base `0x8a0000000`, right after XNU's
+  512 MiB). With `sweetfb_gpu=1` AppleCLCD powers and resets the Mali, sets
+  AS0 IDENTITY, copies the blob, and for a full-screen BGRA layer in a
+  physically contiguous IOSurface (allocated contiguous for surfaces
+  >= 4 MiB) cleans the CPU cache, patches texture size/pointer/stride and
+  the source corners and runs the fragment job instead of the CPU copy;
+  errors fall back to the CPU copy, three switch the GPU path off.
+
 Step 1, loader `gpu_probe.c` with `s8gpu=1`: log/enable S2MPS17 BUCK6
 (`vdd_g3d`), run Samsung's `g3d_on` (CMU_G3D `0x13800000`, PMU `0x40E0`/
 `0x40E4`) and, only if the domain reports on, read `GPU_ID`/`L2_FEATURES`/
