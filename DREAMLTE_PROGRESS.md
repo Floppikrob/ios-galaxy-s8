@@ -349,8 +349,27 @@ the kernel, must get GPU memory and run Mali jobs.
   timed frames; then execs `/sbin/launchd`.
 - Image: boot-42 command line + `launchdsuffix=s8`, no `s8boost`; sha256
   ebee2ff293cde19f65e7750dc3c0ed9c45bdaaf71120b6bc15dfb5706ec717ee.
-  Result on the device: pending. Expected log lines: `S8 MALI: /dev/s8mali
+  Result (boot 44 logs): `S8 MALI: /dev/s8mali major 19 ready`; GPU
+  present on as before; but the overlay got EROFS (30) for
+  `/usr/appleinternal` and ENOENT for the rest: before launchd the HFS+
+  root is still read-only (launchd's mount_hfs remounts it later), so the
+  test never ran and the normal launchd started. User report: still laggy
+  (SWEET FB 2-100 swaps per 10 s). Expected log lines were: `S8 MALI: /dev/s8mali
   major`, `S8 OVERLAY: ... written`, `S8 MALI| ... USER GPU JOB WORKS`,
   `USER GPU DRAW WORKS`, `60 full-screen GPU frames: avg ...`.
 - If pid 1 dies before the exec the kernel panics ("init died"); then
   boot 42 is the fallback.
+
+## Boot 45 (prepared, not yet run): read-write root for the overlay
+
+- Kernel CI run 39669193497 (commit fc97d7c): with `rootrw=1` the root is
+  mounted read-write from the start (A5XELTE copy of SWEET patch 0031's
+  vfs_subr hunk), so the overlay can write `launchd.s8` before launchd.
+- Same command line and overlay as boot 44; sha256
+  bb8fb1f3756d08a944fc13e09084bc2c5d2263d32f138c05523e06ec9ee50020.
+- Research for the Metal path (iPhone X 16.7.16 shared cache, local only):
+  Metal.framework and IOGPU read `MetalPluginName` / `MetalPluginClassName`
+  from the accelerator's IORegistry entry and load that bundle from
+  /System/Library/Extensions (AGXMetalA11 on a real A11). Plan: the kernel
+  publishes a Mali accelerator entry naming our own plugin bundle, which
+  implements MTLDevice on /dev/s8mali.
