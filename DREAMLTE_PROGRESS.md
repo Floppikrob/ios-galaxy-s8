@@ -438,3 +438,18 @@ the kernel, must get GPU memory and run Mali jobs.
   the CPU; draws are only counted. Logs: `MTL pipeline N: vs ... fs ...`,
   `fs constants`, `MTL command buffer ...`, `unimplemented`.
 - Diagnostic: the UI will not draw (draws skipped). sha256 b484c819c17a3f94e25105026eccd1ff4a02cc3050ade7fb2039959b3c706cc9.
+- Boot 49 result: no backboardd crash. CoreAnimation ran on the Mali
+  device: QuartzCore default.metallib (141 functions) loaded through the
+  driver's library, 88 render pipelines created, command buffers of 3-21
+  passes and 16-54 draws completed (35491 draws counted in ~3 min). With
+  draws skipped the display ran at up to 327 swaps per 10 s, the
+  sweetfb_hz=30 cap, against <= ~100 with CoreAnimation's CPU renderer.
+  Pipelines: fixed_vert_lph_spc + fixed_frag_lph_cph (39 constant sets),
+  std_vert0/1, downsample_blur_vert, downsample_4/8, narrow_blur_7..27,
+  single_pass_blur_3, variable_blur, home_affordance_base, inplace_copy,
+  luma_boost, p3_clamp, harmony, display_overdrive_*, attachment_clear;
+  colour formats 80 (BGRA8) and 550/551/554 (XR display formats), 115.
+  The constants' -description has no values (next: read them).
+  Still unimplemented: command buffer/texture protectionOptions,
+  -[MTLBuffer newLinearTextureWithDescriptor:...], instanced indexed draws,
+  supportsVertexAmplificationCount:. Memoryless textures got no memory.
