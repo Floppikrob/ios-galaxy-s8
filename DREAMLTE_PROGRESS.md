@@ -243,6 +243,15 @@ six layers (DPP channels, IOMobileFramebuffer layers) and scale in hardware.
   slot), a Bifrost blit shader built with Mesa's compiler, then iOS frames
   composed and stretched by the GPU instead of the CPU copy.
 
+- **Boot 39** (BOOT `b85fc046…c721f751`, `sweetfb_scale=1`): Apple logo,
+  then black. The log shows the 1125x2436 swaps arriving (bpr 4608) and
+  touches/keys working, but SpringBoard aborting in a loop (12 execs):
+  `NSInternalInconsistencyException: Failed to load bounding path bitmap
+  data from the asset manager for asset name:
+  BoundingPathBitmap-1125x2436-375x812-3.00x`. The iPhone X canvas needs
+  that asset; likely the MobileGestalt cache built during the 1440x2960
+  boots no longer matches. Back to the native canvas until that is fixed;
+  the GPU present path now also handles the native canvas 1:1.
 - **GPU present (built, not yet booted):** `tools/dreamlte/mali-blit-gen.c`,
   built against Mesa 25.2.8 (`build-mali-blit.sh`), compiles a Bifrost
   fragment shader for GPU_ID `0x60a00001` (144 bytes: `VAR_TEX.f32` +

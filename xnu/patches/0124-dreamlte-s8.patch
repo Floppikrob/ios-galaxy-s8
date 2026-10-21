@@ -961,7 +961,7 @@ index 55d0057..dee6635 100644
  	int32_t rc = sweet_psci_cpu_on(cpu->phys_id, entry, getCPUNumber());
  	IOLog(CPU_PORT_NAME " CPU: cpu=%u PSCI CPU_ON rc=%d\n", getCPUNumber(), rc);
 diff --git iokit/Kernel/arm/SweetFramebuffer.cpp iokit/Kernel/arm/SweetFramebuffer.cpp
-index 356ff51..958e308 100644
+index 356ff51..04d6b06 100644
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
 @@ -48,6 +48,7 @@ extern "C" int sweet_console_muted;     /* osfmk/console/serial_console.c */
@@ -2058,7 +2058,29 @@ index 356ff51..958e308 100644
  		if (w <= 0 || h <= 0) {
  			w = (int32_t)s->width;
  			h = (int32_t)s->height;
-@@ -419,6 +1413,11 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -410,6 +1404,21 @@ AppleCLCD::present(const uint8_t *rec)
+ 		    s->memory == NULL || last > s->memory->getLength()) {
+ 			src = 0;
+ 		}
++#if defined(DREAMLTE)
++		if (src != 0 && bpe == 4 && s8gpu_ready && sx == 0 && sy == 0 && dx == 0 && dy == 0 &&
++		    w == (int32_t)fWidth && h == (int32_t)fHeight && s->pixelFormat == SWEET_FB_FORMAT_BGRA) {
++			IOByteCount seg = 0;
++			uint64_t need = (uint64_t)(h - 1) * s->bytesPerRow + (uint64_t)w * 4;
++			addr64_t pa = s->memory->getPhysicalSegment(s->offset, &seg, kIOMemoryMapperNone);
++			if (pa != 0 && seg >= need) {
++				clean_dcache((vm_offset_t)(src + s->offset), (unsigned)need, 0);
++				if (s8gpu_present(pa, s->bytesPerRow, (uint32_t)w, (uint32_t)h)) {
++					s->release();
++					continue;
++				}
++			}
++		}
++#endif
+ 		if (src != 0 && bpe == 4) {
+ 			for (int32_t y = 0; y < h; y++) {
+ 				memcpy((void *)(fPixels + (uint64_t)(dy + y) * fRowBytes + (uint64_t)dx * 4),
+@@ -419,6 +1428,11 @@ AppleCLCD::present(const uint8_t *rec)
  		}
  		s->release();
  	}

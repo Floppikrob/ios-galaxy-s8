@@ -822,6 +822,26 @@ edit('iokit/Kernel/arm/SweetFramebuffer.cpp', [
      '\t\t\t\t\t}\n'
      '\t\t\t\t}\n'
      '\t\t\t\tsweet_fb_scaled_copy(fPixels, fRowBytes, fWidth, fHeight, fLogicalW, fLogicalH,\n', 1),
+    # Boot 39: with the 1125x2436 canvas SpringBoard aborted in a loop
+    # (BoundingPathBitmap-1125x2436-375x812-3.00x not in the asset manager),
+    # so the GPU also presents the native 1440x2960 canvas, 1:1.
+    ('\t\tif (src != 0 && bpe == 4) {\n\t\t\tfor (int32_t y = 0; y < h; y++) {\n',
+     '#if defined(DREAMLTE)\n'
+     '\t\tif (src != 0 && bpe == 4 && s8gpu_ready && sx == 0 && sy == 0 && dx == 0 && dy == 0 &&\n'
+     '\t\t    w == (int32_t)fWidth && h == (int32_t)fHeight && s->pixelFormat == SWEET_FB_FORMAT_BGRA) {\n'
+     '\t\t\tIOByteCount seg = 0;\n'
+     '\t\t\tuint64_t need = (uint64_t)(h - 1) * s->bytesPerRow + (uint64_t)w * 4;\n'
+     '\t\t\taddr64_t pa = s->memory->getPhysicalSegment(s->offset, &seg, kIOMemoryMapperNone);\n'
+     '\t\t\tif (pa != 0 && seg >= need) {\n'
+     '\t\t\t\tclean_dcache((vm_offset_t)(src + s->offset), (unsigned)need, 0);\n'
+     '\t\t\t\tif (s8gpu_present(pa, s->bytesPerRow, (uint32_t)w, (uint32_t)h)) {\n'
+     '\t\t\t\t\ts->release();\n'
+     '\t\t\t\t\tcontinue;\n'
+     '\t\t\t\t}\n'
+     '\t\t\t}\n'
+     '\t\t}\n'
+     '#endif\n'
+     '\t\tif (src != 0 && bpe == 4) {\n\t\t\tfor (int32_t y = 0; y < h; y++) {\n', 1),
 ])
 edit('iokit/Kernel/arm/SweetSurface.cpp', [
     ('\t\t\tmem = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,\n'
