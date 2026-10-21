@@ -1,0 +1,12 @@
+--- !tapi-tbd
+tbd-version:     4
+targets:         [ arm64-ios ]
+install-name:    '/System/Library/Frameworks/IOSurface.framework/IOSurface'
+current-version: 336.60.1
+exports:
+  - targets:         [ arm64-ios ]
+    symbols:         [ _IOSurfaceGetBaseAddress, _IOSurfaceGetBaseAddressOfPlane,
+                       _IOSurfaceGetBytesPerRow, _IOSurfaceGetBytesPerRowOfPlane,
+                       _IOSurfaceGetWidth, _IOSurfaceGetHeight, _IOSurfaceGetID,
+                       _IOSurfaceGetPixelFormat, _IOSurfaceGetAllocSize ]
+...

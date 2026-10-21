@@ -31,6 +31,7 @@ __attribute__((objc_root_class))
 - (oneway void)release;
 - (instancetype)autorelease;
 - (void)dealloc;
+- (id)copy;
 - (Class)class;
 - (BOOL)respondsToSelector:(SEL)sel;
 - (id)forwardingTargetForSelector:(SEL)sel;
@@ -43,3 +44,13 @@ __attribute__((objc_root_class))
 @interface _MTLDevice : NSObject
 - (instancetype)init;
 @end
+
+@interface NSString : NSObject
++ (id)stringWithUTF8String:(const char *)s;
+- (const char *)UTF8String;
+@end
+
+@interface NSError : NSObject
++ (id)errorWithDomain:(id)domain code:(NSInteger)code userInfo:(id)info;
+@end
+

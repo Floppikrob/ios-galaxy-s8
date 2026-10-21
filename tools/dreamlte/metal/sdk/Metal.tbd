@@ -5,5 +5,6 @@ install-name:    '/System/Library/Frameworks/Metal.framework/Metal'
 current-version: 306.6.6
 exports:
   - targets:         [ arm64-ios ]
-    objc-classes:    [ _MTLDevice ]
+    objc-classes:    [ _MTLDevice, _MTLObjectWithLabel, _MTLCommandQueue, _MTLCommandBuffer,
+                       _MTLCommandEncoder, _MTLResource, _MTLSamplerState, _MTLDepthStencilState ]
 ...

@@ -1,0 +1,206 @@
+/*
+ * S8MaliMetal.bundle: Metal on the Galaxy S8's Mali-G71 for iOS.
+ *
+ * Metal.framework (MTLRegisterDevices) matches every IOAcceleratorES
+ * service, loads /System/Library/Extensions/<MetalPluginName>.bundle and
+ * instantiates <MetalPluginClassName>, which must subclass Metal's
+ * _MTLDevice and conform to MTLDevice (boot 47), with
+ * -initWithAcceleratorPort:. The S8 kernel publishes such a service with
+ * boot-arg s8metal=1 (S8MaliAccelerator in SweetFramebuffer.cpp); the GPU
+ * itself is reached through /dev/s8mali (tools/dreamlte/s8mali_ioctl.h).
+ *
+ * S8MaliDevice (stage 2):
+ *
+ * _MTLDevice supplies limits, GPU family answers and library parsing; this
+ * class creates the driver's objects. It presents itself like the A11
+ * family (featureProfile 5) but without tile shaders, memoryless targets,
+ * raster order groups or SIMD-group functions, which CoreAnimation asks
+ * for explicitly and then avoids.
+ */
+#import "s8mtl.h"
+
+@implementation S8MaliDevice
+
+- (instancetype)initWithAcceleratorPort:(unsigned int)port
+{
+	self = [super init];
+	if (self == nil)
+		return nil;
+	_s8port = port;
+	struct s8mali_info info = { 0 };
+	int ioctl(int, unsigned long, ...);
+	if (s8_fd() >= 0)
+		ioctl(s8_fd(), S8MALI_INFO, &info);
+	s8_log("MTL device created (stage 2): gpu 0x%x ready %u, %llu MiB GPU memory free",
+	    info.gpu_id, info.ready, (unsigned long long)(info.heap_free >> 20));
+	return self;
+}
+
+S8_FORWARDING
+
+- (id)name
+{
+	return [NSString stringWithUTF8String:"Mali-G71 MP20 (Galaxy S8)"];
+}
+
+- (NSUInteger)featureProfile { return 5; }
+- (NSUInteger)maxBufferLength { return 256u << 20; }
+- (BOOL)supportsTileShaders { return NO; }
+- (BOOL)supportsMemorylessRenderTargets { return NO; }
+- (BOOL)supportsRasterOrderGroups { return NO; }
+- (BOOL)supportsSIMDGroup { return NO; }
+- (BOOL)supportsExtendedXR10Formats { return NO; }
+- (BOOL)supportsYCBCRFormats12 { return NO; }
+- (BOOL)supportsYCBCRPackedFormats12 { return NO; }
+- (BOOL)supportsNativeHardwareFP16 { return YES; }
+- (BOOL)isLowPower { return YES; }
+- (BOOL)isHeadless { return NO; }
+- (BOOL)isRemovable { return NO; }
+- (BOOL)hasUnifiedMemory { return YES; }
+
+/* ---- queues ---- */
+
+- (id)newCommandQueue
+{
+	return [[S8CommandQueue alloc] initWithS8Device:self];
+}
+
+- (id)newCommandQueueWithMaxCommandBufferCount:(NSUInteger)count
+{
+	(void)count;
+	return [[S8CommandQueue alloc] initWithS8Device:self];
+}
+
+- (id)newCommandQueueWithDescriptor:(id)descriptor
+{
+	(void)descriptor;
+	return [[S8CommandQueue alloc] initWithS8Device:self];
+}
+
+/* ---- resources ---- */
+
+- (id)newBufferWithLength:(NSUInteger)length options:(NSUInteger)options
+{
+	return [[S8Buffer alloc] initWithDevice:self length:length options:options];
+}
+
+- (id)newBufferWithBytes:(const void *)bytes length:(NSUInteger)length options:(NSUInteger)options
+{
+	void *memcpy(void *, const void *, size_t);
+	S8Buffer *b = [[S8Buffer alloc] initWithDevice:self length:length options:options];
+	if (b != nil && bytes != NULL)
+		memcpy(b->_mem.cpu, bytes, length);
+	return b;
+}
+
+- (id)newBufferWithBytesNoCopy:(void *)p length:(NSUInteger)length options:(NSUInteger)options
+    deallocator:(id)dealloc
+{
+	return [[S8Buffer alloc] initWithDevice:self bytesNoCopy:p length:length options:options
+	    deallocator:dealloc];
+}
+
+- (id)newTextureWithDescriptor:(id)desc
+{
+	return [[S8Texture alloc] initWithDevice:self descriptor:desc];
+}
+
+- (id)newTextureWithDescriptor:(id)desc iosurface:(void *)surface plane:(NSUInteger)plane
+{
+	return [[S8Texture alloc] initWithDevice:self descriptor:desc iosurface:surface plane:plane];
+}
+
+- (id)newSamplerStateWithDescriptor:(id)desc
+{
+	return [[S8SamplerState alloc] initWithDevice:self samplerDescriptor:desc];
+}
+
+- (id)newDepthStencilStateWithDescriptor:(id)desc
+{
+	return [[S8DepthStencilState alloc] initWithDevice:self depthStencilDescriptor:desc];
+}
+
+- (id)newHeapWithDescriptor:(id)desc
+{
+	(void)desc;
+	s8_log("MTL newHeapWithDescriptor: not supported yet (nil)");
+	return nil;
+}
+
+/* ---- shaders and pipelines ---- */
+
+- (id)newLibraryWithURL:(id)url error:(id *)error
+{
+	if (error != NULL)
+		*error = nil;
+	return [[S8Library alloc] initWithDevice:self path:[[url path] UTF8String]];
+}
+
+static id s8_error(const char *what)
+{
+	return [NSError errorWithDomain:[NSString stringWithUTF8String:what] code:1 userInfo:nil];
+}
+
+- (id)newPipelineLibraryWithFilePath:(id)path error:(id *)error
+{
+	(void)path;
+	if (error != NULL)
+		*error = s8_error("S8MaliMetal: no precompiled pipelines for the Mali");
+	return nil;
+}
+
+- (id)newRenderPipelineStateWithDescriptor:(id)desc error:(id *)error
+{
+	return [self newRenderPipelineStateWithDescriptor:desc options:0 reflection:NULL error:error];
+}
+
+- (id)newRenderPipelineStateWithDescriptor:(id)desc options:(NSUInteger)options
+    reflection:(id *)reflection error:(id *)error
+{
+	static unsigned count;
+	(void)options;
+	if (reflection != NULL)
+		*reflection = nil;
+	if (error != NULL)
+		*error = nil;
+	S8RenderPipelineState *p = [[S8RenderPipelineState alloc] init];
+	p->_s8device = self;
+	p->_vertex = [[desc vertexFunction] retain];
+	p->_fragment = [[desc fragmentFunction] retain];
+	id ca = [[desc colorAttachments] objectAtIndexedSubscript:0];
+	p->_colorFormat = [ca pixelFormat];
+	p->_blending = [ca isBlendingEnabled];
+	p->_id = ++count;
+	S8Function *vs = p->_vertex, *fs = p->_fragment;
+	s8_log("MTL pipeline %u: vs %s fs %s fmt %lu blend %d", p->_id,
+	    vs ? [vs->_name UTF8String] : "-", fs ? [fs->_name UTF8String] : "-",
+	    (unsigned long)p->_colorFormat, p->_blending);
+	if (fs != nil && fs->_constants[0])
+		s8_log("MTL pipeline %u fs constants: %.100s", p->_id, fs->_constants);
+	return p;
+}
+
+- (id)newComputePipelineStateWithFunction:(id)function error:(id *)error
+{
+	S8Function *f = function;
+	if (error != NULL)
+		*error = nil;
+	s8_log("MTL compute pipeline %s (stage 2: dispatches are skipped)", f ? [f->_name UTF8String] : "-");
+	S8ComputePipelineState *p = [[S8ComputePipelineState alloc] init];
+	p->_s8device = self;
+	return p;
+}
+
+- (id)newRenderPipelineStateWithTileDescriptor:(id)desc options:(NSUInteger)options
+    reflection:(id *)reflection error:(id *)error
+{
+	(void)desc;
+	(void)options;
+	if (reflection != NULL)
+		*reflection = nil;
+	if (error != NULL)
+		*error = s8_error("S8MaliMetal: no tile shaders");
+	return nil;
+}
+
+@end

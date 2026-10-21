@@ -5,7 +5,9 @@ install-name:    '/usr/lib/libSystem.B.dylib'
 current-version: 1319
 exports:
   - targets:         [ arm64-ios ]
-    symbols:         [ _open, _close, _ioctl, _execve, _write, _usleep, _snprintf, _vsnprintf,
-                       _memset, _memcpy, _exit, _mach_absolute_time, _strlen,
+    symbols:         [ _open, _close, _ioctl, _execve, _write, _usleep, _snprintf,
+                       _memset, _memcpy, _bzero, _exit, _mach_absolute_time, _strlen, _strcmp, _malloc, _calloc, _realloc, _free,
+                       _memmove, _dispatch_async_f, _dispatch_queue_create,
+                       _pthread_mutex_lock, _pthread_mutex_unlock, _vsnprintf, _read, _lseek,
                        ___stack_chk_fail, ___stack_chk_guard, dyld_stub_binder ]
 ...

@@ -420,3 +420,21 @@ the kernel, must get GPU memory and run Mali jobs.
   (declared by name; the runtime unifies them with Metal's). Diagnostic
   boot again. sha256 recorded with the image below.
   sha256 174c540996925dab8c807a896bc14667e037d9d2a8e92c091c56be336ebaa53f.
+- Boot 48 result: protocol check passed; CoreAnimation asked the device for
+  `featureProfile` and `maxBufferLength` (logged as unimplemented), then
+  `CA::OGL::new_metal_context` returned NULL (no command queue) and
+  backboardd crashed in `CA::WindowServer::EAGLServer::renderer` (NULL
+  context) in a loop.
+
+## Boot 49 (prepared, not yet run): Metal stage 2, object model
+
+- Same kernel (run 39676237484). S8MaliMetal stage 2 (tools/dreamlte/metal/
+  s8mtl_*.m): device (featureProfile 5, no tile shaders / memoryless / ROG),
+  command queue and buffers on Metal's _MTLCommandQueue/_MTLCommandBuffer
+  (submit runs the work, completion on a serial dispatch queue), render /
+  blit / compute encoders, buffers and textures in /dev/s8mali memory,
+  IOSurface textures through the CPU mapping, own library objects (reads
+  the metallib function list) and pipeline objects. Clears and blits run on
+  the CPU; draws are only counted. Logs: `MTL pipeline N: vs ... fs ...`,
+  `fs constants`, `MTL command buffer ...`, `unimplemented`.
+- Diagnostic: the UI will not draw (draws skipped). sha256 b484c819c17a3f94e25105026eccd1ff4a02cc3050ade7fb2039959b3c706cc9.
