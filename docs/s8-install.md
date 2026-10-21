@@ -23,6 +23,8 @@ adb pull /sdcard/BOOT.img backup/BOOT.img
 
 `backup/BOOT.img` (the stock BOOT) is needed later: it supplies the image header and the DTBH.
 
+Only the header page and the DTBH are used. `tools\dreamlte\get-boot-template.ps1` (phone in TWRP) saves just those parts as a small `boot-template.img` (usually under 1 MB), which works in place of `backup/BOOT.img` below.
+
 ## 2. XNU kernel
 
 The kernel is built on GitHub Actions macOS runners (free for public repositories).
@@ -84,7 +86,7 @@ bash tools/dreamlte/make-boot.sh xnu/out/kernel.development.a5xelte backup/BOOT.
 
 The script builds the ADT (`tools/mkadt_dreamlte.py`) and the payload (`tools/mkpayload.py`), compiles the `shim/dreamlte` loader and packs BOOT with the stock header.
 
-Flash it (phone in TWRP):
+Flash it (phone in TWRP). On Windows, `tools\dreamlte\flash-boot.ps1 s8-ios-boot.img` does the checks below, writes only BOOT, verifies it by SHA-256 and reboots. By hand:
 
 ```bash
 adb push s8-ios-boot.img /tmp/boot.img
