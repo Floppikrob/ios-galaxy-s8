@@ -800,10 +800,10 @@ edit('iokit/Kernel/arm/SweetFramebuffer.cpp', [
      (Path(__file__).parent / 's8_gpu_present.inc').read_text() +
      '#endif\n\nstatic uint32_t sweet_fb_swaps_logged;\n', 1),
     ('bool\nAppleCLCD::start(IOService *provider)\n{\n#if defined(DREAMLTE)\n\tsweet_fb_echo_loader();\n#endif\n',
-     'static void s8gpu_init(void);\n\n'
+     'static void s8gpu_init(void);\nstatic void s8gpu_publish_metal(IOService *provider);\n\n'
      'bool\nAppleCLCD::start(IOService *provider)\n{\n#if defined(DREAMLTE)\n\tsweet_fb_echo_loader();\n#endif\n', 1),
     ('\tsetProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");\n',
-     '#if defined(DREAMLTE)\n\ts8gpu_init();\n#endif\n'
+     '#if defined(DREAMLTE)\n\ts8gpu_init();\n\ts8gpu_publish_metal(this);\n#endif\n'
      '\tsetProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");\n', 1),
     ('\t\t\t\tsweet_fb_scaled_copy(fPixels, fRowBytes, fWidth, fHeight, fLogicalW, fLogicalH,\n',
      '\t\t\t\tif (s8gpu_ready && sx == 0 && sy == 0 && dx == 0 && dy == 0 &&\n'

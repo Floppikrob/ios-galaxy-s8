@@ -558,3 +558,53 @@ s8gpu_user_close(int client)
 		IOLog("S8 MALI: client %d closed, %u allocations freed (%u jobs so far)\n", client, n, s8gpu_user_jobs);
 	}
 }
+
+/*
+ * The Mali as a Metal device (boot-arg s8metal=1). Metal.framework's
+ * MTLRegisterDevices matches IOServiceMatching("IOAcceleratorES"), reads
+ * MetalPluginName / MetalPluginClassName from each match, loads
+ * /System/Library/Extensions/<name>.bundle and calls
+ * -[<class> initWithAcceleratorPort:] (class must subclass _MTLDevice).
+ * There is no IOAcceleratorFamily here, so the class is defined locally;
+ * the plugin (tools/dreamlte/metal) reaches the GPU through /dev/s8mali.
+ */
+class IOAcceleratorES : public IOService
+{
+	OSDeclareDefaultStructors(IOAcceleratorES);
+};
+OSDefineMetaClassAndStructors(IOAcceleratorES, IOService);
+
+class S8MaliAccelerator : public IOAcceleratorES
+{
+	OSDeclareDefaultStructors(S8MaliAccelerator);
+};
+OSDefineMetaClassAndStructors(S8MaliAccelerator, IOAcceleratorES);
+
+static void
+s8gpu_publish_metal(IOService *provider)
+{
+	int on = 0;
+	if (!PE_parse_boot_argn("s8metal", &on, sizeof(on)) || on == 0) {
+		return;
+	}
+	if (!s8gpu_ready) {
+		IOLog("S8 MALI: s8metal=1 but the GPU is not ready; no Metal device\n");
+		return;
+	}
+	S8MaliAccelerator *acc = OSTypeAlloc(S8MaliAccelerator);
+	if (acc == NULL || !acc->init()) {
+		OSSafeReleaseNULL(acc);
+		return;
+	}
+	acc->setProperty("MetalPluginName", "S8MaliMetal");
+	acc->setProperty("MetalPluginClassName", "S8MaliDevice");
+	acc->setProperty("model", "Mali-G71 MP20");
+	acc->setProperty("GPUConfigurationVariable", "S8Mali");
+	if (!acc->attach(provider)) {
+		acc->release();
+		return;
+	}
+	acc->registerService();
+	IOLog("S8 MALI: Metal device published (S8MaliMetal.bundle / S8MaliDevice)\n");
+	acc->release();
+}

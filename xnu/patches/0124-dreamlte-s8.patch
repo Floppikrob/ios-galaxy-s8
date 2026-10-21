@@ -1305,7 +1305,7 @@ index 55d0057..dee6635 100644
  	int32_t rc = sweet_psci_cpu_on(cpu->phys_id, entry, getCPUNumber());
  	IOLog(CPU_PORT_NAME " CPU: cpu=%u PSCI CPU_ON rc=%d\n", getCPUNumber(), rc);
 diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
-index 356ff51..e78bcc5 100644
+index 356ff51..12dbb7a 100644
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
 @@ -48,6 +48,7 @@ extern "C" int sweet_console_muted;     /* osfmk/console/serial_console.c */
@@ -1335,7 +1335,7 @@ index 356ff51..e78bcc5 100644
  
  	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
  	void addClient(IOMobileFramebufferUserClient *client);
-@@ -153,9 +159,70 @@ public:
+@@ -153,9 +159,71 @@ public:
  
  OSDefineMetaClassAndStructors(IOMobileFramebufferUserClient, IOUserClient);
  
@@ -1396,6 +1396,7 @@ index 356ff51..e78bcc5 100644
 +#endif
 +
 +static void s8gpu_init(void);
++static void s8gpu_publish_metal(IOService *provider);
 +
  bool
  AppleCLCD::start(IOService *provider)
@@ -1406,7 +1407,7 @@ index 356ff51..e78bcc5 100644
  	PE_Video video;
  
  	if (!IOService::start(provider)) {
-@@ -166,10 +233,10 @@ AppleCLCD::start(IOService *provider)
+@@ -166,10 +234,10 @@ AppleCLCD::start(IOService *provider)
  	/* The loader's DECON handoff scans out this physical XRGB8888 buffer.
  	 * It does not fill boot_args.Video, so PE_current_console is empty.
  	 * Keep the physical address out of the donor path. */
@@ -1421,7 +1422,7 @@ index 356ff51..e78bcc5 100644
  #else
  	fPhys = video.v_baseAddr;
  	fWidth = (uint32_t)video.v_width;
-@@ -184,7 +251,12 @@ AppleCLCD::start(IOService *provider)
+@@ -184,7 +252,12 @@ AppleCLCD::start(IOService *provider)
  	PE_parse_boot_argn("sweetfb_native", &native, sizeof(native));
  	fLogicalW = fWidth;
  	fLogicalH = fHeight;
@@ -1435,7 +1436,7 @@ index 356ff51..e78bcc5 100644
  	if (!native && fWidth <= SWEET_FB_LOGICAL_W && fHeight <= SWEET_FB_LOGICAL_H) {
  		fLogicalW = SWEET_FB_LOGICAL_W;
  		fLogicalH = SWEET_FB_LOGICAL_H;
-@@ -192,6 +264,14 @@ AppleCLCD::start(IOService *provider)
+@@ -192,6 +265,14 @@ AppleCLCD::start(IOService *provider)
  #endif
  	fOffX = (int32_t)(fLogicalW - fWidth) / 2;
  	fOffY = (int32_t)(fLogicalH - fHeight) / 2;
@@ -1450,7 +1451,7 @@ index 356ff51..e78bcc5 100644
  	fLock = IOLockAlloc();
  	fClients = OSArray::withCapacity(4);
  	fSurface = sweet_surface_create_physical(fPhys, fWidth, fHeight, fRowBytes, SWEET_FB_FORMAT_BGRA);
-@@ -211,8 +291,16 @@ AppleCLCD::start(IOService *provider)
+@@ -211,8 +292,17 @@ AppleCLCD::start(IOService *provider)
  	uint32_t hz = 10;
  	PE_parse_boot_argn("sweetfb_hz", &hz, sizeof(hz));
  	fFlushTicks = (hz == 0 || hz >= 60) ? 1 : 60 / hz;
@@ -1463,11 +1464,12 @@ index 356ff51..e78bcc5 100644
  
 +#if defined(DREAMLTE)
 +	s8gpu_init();
++	s8gpu_publish_metal(this);
 +#endif
  	setProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");
  	setProperty("external", false);
  	setProperty("DisplayPipePlaneBaseAlignment", 64ULL, 32);
-@@ -302,6 +390,1285 @@ get32(const uint8_t *p, uint32_t off)
+@@ -302,6 +392,1335 @@ get32(const uint8_t *p, uint32_t off)
  	return v;
  }
  
@@ -2748,12 +2750,62 @@ index 356ff51..e78bcc5 100644
 +		IOLog("S8 MALI: client %d closed, %u allocations freed (%u jobs so far)\n", client, n, s8gpu_user_jobs);
 +	}
 +}
++
++/*
++ * The Mali as a Metal device (boot-arg s8metal=1). Metal.framework's
++ * MTLRegisterDevices matches IOServiceMatching("IOAcceleratorES"), reads
++ * MetalPluginName / MetalPluginClassName from each match, loads
++ * /System/Library/Extensions/<name>.bundle and calls
++ * -[<class> initWithAcceleratorPort:] (class must subclass _MTLDevice).
++ * There is no IOAcceleratorFamily here, so the class is defined locally;
++ * the plugin (tools/dreamlte/metal) reaches the GPU through /dev/s8mali.
++ */
++class IOAcceleratorES : public IOService
++{
++	OSDeclareDefaultStructors(IOAcceleratorES);
++};
++OSDefineMetaClassAndStructors(IOAcceleratorES, IOService);
++
++class S8MaliAccelerator : public IOAcceleratorES
++{
++	OSDeclareDefaultStructors(S8MaliAccelerator);
++};
++OSDefineMetaClassAndStructors(S8MaliAccelerator, IOAcceleratorES);
++
++static void
++s8gpu_publish_metal(IOService *provider)
++{
++	int on = 0;
++	if (!PE_parse_boot_argn("s8metal", &on, sizeof(on)) || on == 0) {
++		return;
++	}
++	if (!s8gpu_ready) {
++		IOLog("S8 MALI: s8metal=1 but the GPU is not ready; no Metal device\n");
++		return;
++	}
++	S8MaliAccelerator *acc = OSTypeAlloc(S8MaliAccelerator);
++	if (acc == NULL || !acc->init()) {
++		OSSafeReleaseNULL(acc);
++		return;
++	}
++	acc->setProperty("MetalPluginName", "S8MaliMetal");
++	acc->setProperty("MetalPluginClassName", "S8MaliDevice");
++	acc->setProperty("model", "Mali-G71 MP20");
++	acc->setProperty("GPUConfigurationVariable", "S8Mali");
++	if (!acc->attach(provider)) {
++		acc->release();
++		return;
++	}
++	acc->registerService();
++	IOLog("S8 MALI: Metal device published (S8MaliMetal.bundle / S8MaliDevice)\n");
++	acc->release();
++}
 +#endif
 +
  static uint32_t sweet_fb_swaps_logged;
  static uint64_t sweet_fb_swap_count;
  
-@@ -318,7 +1685,19 @@ AppleCLCD::swap(const uint8_t *rec)
+@@ -318,7 +1737,19 @@ AppleCLCD::swap(const uint8_t *rec)
  	IOLockLock(fLock);
  	memcpy(fPending, rec, SWEET_FB_SWAP_REC_SIZE);
  	fDirty = true;
@@ -2773,7 +2825,7 @@ index 356ff51..e78bcc5 100644
  	if ((++sweet_fb_swap_count % 1000) == 0) {
  		IOLog("SWEET FB: %llu swaps\n", sweet_fb_swap_count);
  	}
-@@ -328,6 +1707,13 @@ void
+@@ -328,6 +1759,13 @@ void
  AppleCLCD::present(const uint8_t *rec)
  {
  	uint32_t mask = get32(rec, 0x104);
@@ -2787,7 +2839,7 @@ index 356ff51..e78bcc5 100644
  
  
  	if (!fConsolePaused) {
-@@ -369,6 +1755,50 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -369,6 +1807,50 @@ AppleCLCD::present(const uint8_t *rec)
  		}
  		uintptr_t src = s->kernelAddress();
  		uint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;
@@ -2838,7 +2890,7 @@ index 356ff51..e78bcc5 100644
  		if (w <= 0 || h <= 0) {
  			w = (int32_t)s->width;
  			h = (int32_t)s->height;
-@@ -410,6 +1840,19 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -410,6 +1892,19 @@ AppleCLCD::present(const uint8_t *rec)
  		    s->memory == NULL || last > s->memory->getLength()) {
  			src = 0;
  		}
@@ -2858,7 +2910,7 @@ index 356ff51..e78bcc5 100644
  		if (src != 0 && bpe == 4) {
  			for (int32_t y = 0; y < h; y++) {
  				memcpy((void *)(fPixels + (uint64_t)(dy + y) * fRowBytes + (uint64_t)dx * 4),
-@@ -419,6 +1862,11 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -419,6 +1914,11 @@ AppleCLCD::present(const uint8_t *rec)
  		}
  		s->release();
  	}
