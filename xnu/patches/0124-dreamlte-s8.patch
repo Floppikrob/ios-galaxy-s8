@@ -939,7 +939,7 @@ index 55d0057..614b271 100644
  	int32_t rc = sweet_psci_cpu_on(cpu->phys_id, entry, getCPUNumber());
  	IOLog(CPU_PORT_NAME " CPU: cpu=%u PSCI CPU_ON rc=%d\n", getCPUNumber(), rc);
 diff --git iokit/Kernel/arm/SweetFramebuffer.cpp iokit/Kernel/arm/SweetFramebuffer.cpp
-index 356ff51..ec6b9da 100644
+index 356ff51..dbbea62 100644
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
 @@ -48,6 +48,7 @@ extern "C" int sweet_console_muted;     /* osfmk/console/serial_console.c */
@@ -1001,7 +1001,7 @@ index 356ff51..ec6b9da 100644
  	fVsync->setTimeoutUS(SWEET_FB_VSYNC_US);
  
  	setProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");
-@@ -302,6 +316,36 @@ get32(const uint8_t *p, uint32_t off)
+@@ -302,6 +316,56 @@ get32(const uint8_t *p, uint32_t off)
  	return v;
  }
  
@@ -1033,12 +1033,32 @@ index 356ff51..ec6b9da 100644
 +		IODelay(100);
 +	}
 +}
++
++/*
++ * Boot 32: frames still tore. The S8 panel runs in command mode: on
++ * every TE the DECON sends the whole buffer to the panel's own frame
++ * memory, also while we copy into it. Samsung's DECON driver masks the
++ * hardware trigger around an update (decon_reg_set_trigger:
++ * HW_SW_TRIG_CONTROL 0x70, HW_TRIG_EN bit 0, HW_TRIG_MASK_DECON bit 4).
++ * Mask it right after a frame-done (no transfer in flight), copy, unmask:
++ * the panel keeps showing the previous frame and then gets a whole one.
++ */
++static void
++sweet_fb_trigger(bool enable)
++{
++	if (sweet_fb_decon == 0) {
++		return;
++	}
++	volatile uint32_t *trig = (volatile uint32_t *)(sweet_fb_decon + 0x70);
++	uint32_t v = *trig & ~((1u << 0) | (1u << 4));
++	*trig = v | (enable ? (1u << 0) : (1u << 4));
++}
 +#endif
 +
  static uint32_t sweet_fb_swaps_logged;
  static uint64_t sweet_fb_swap_count;
  
-@@ -318,7 +362,16 @@ AppleCLCD::swap(const uint8_t *rec)
+@@ -318,7 +382,16 @@ AppleCLCD::swap(const uint8_t *rec)
  	IOLockLock(fLock);
  	memcpy(fPending, rec, SWEET_FB_SWAP_REC_SIZE);
  	fDirty = true;
@@ -1055,21 +1075,25 @@ index 356ff51..ec6b9da 100644
  	if ((++sweet_fb_swap_count % 1000) == 0) {
  		IOLog("SWEET FB: %llu swaps\n", sweet_fb_swap_count);
  	}
-@@ -328,6 +381,10 @@ void
+@@ -328,6 +401,11 @@ void
  AppleCLCD::present(const uint8_t *rec)
  {
  	uint32_t mask = get32(rec, 0x104);
 +	IOLockLock(fPresentLock);
 +#if defined(DREAMLTE)
 +	sweet_fb_wait_frame_done();
++	sweet_fb_trigger(false);
 +#endif
  
  
  	if (!fConsolePaused) {
-@@ -419,6 +476,7 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -419,6 +497,10 @@ AppleCLCD::present(const uint8_t *rec)
  		}
  		s->release();
  	}
++#if defined(DREAMLTE)
++	sweet_fb_trigger(true);
++#endif
 +	IOLockUnlock(fPresentLock);
  }
  

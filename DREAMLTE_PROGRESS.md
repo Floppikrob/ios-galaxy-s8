@@ -151,6 +151,11 @@ CPUSEQUENCER_OPTION `0x2488` bit 0 := 0), `core0n_on` = CONFIGURATION 0xF +
 - Next probe: logs NONCPU/L2 status after the core's power edge and
   re-locks the Mongoose PLL as Samsung's `ra.c` does (mux to FIN, disable,
   LOCKTIME = P * 150, enable, wait STABLE, mux back); XNU repeats it.
+- Boot 32 still tore (user report). The panel is in command mode: each TE
+  sends the whole buffer to the panel's own memory, also during our copy.
+  AppleCLCD now masks the DECON hardware trigger (`0x70`: HW_TRIG_EN bit 0
+  off, HW_TRIG_MASK_DECON bit 4 on, as Samsung's `decon_reg_set_trigger`)
+  right after a frame-done, copies, and unmasks it.
 
 GPU: iOS draws through Metal on Apple's GPU only (AGX); the Mali-G71 runs
 under Linux (Panfrost, see LinuxS8) but no iOS driver can use it. Graphics

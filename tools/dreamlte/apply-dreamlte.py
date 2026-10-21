@@ -506,7 +506,7 @@ edit('iokit/Kernel/arm/SweetFramebuffer.cpp', [
      '\t}\n', 1),
     ('\tuint32_t mask = get32(rec, 0x104);\n',
      '\tuint32_t mask = get32(rec, 0x104);\n\tIOLockLock(fPresentLock);\n'
-     '#if defined(DREAMLTE)\n\tsweet_fb_wait_frame_done();\n#endif\n', 1),
+     '#if defined(DREAMLTE)\n\tsweet_fb_wait_frame_done();\n\tsweet_fb_trigger(false);\n#endif\n', 1),
     ('static uint32_t sweet_fb_swaps_logged;\n',
      '#if defined(DREAMLTE)\n'
      '/*\n'
@@ -536,11 +536,33 @@ edit('iokit/Kernel/arm/SweetFramebuffer.cpp', [
      '\t\tIODelay(100);\n'
      '\t}\n'
      '}\n'
+     '\n'
+     '/*\n'
+     ' * Boot 32: frames still tore. The S8 panel runs in command mode: on\n'
+     ' * every TE the DECON sends the whole buffer to the panel\'s own frame\n'
+     ' * memory, also while we copy into it. Samsung\'s DECON driver masks the\n'
+     ' * hardware trigger around an update (decon_reg_set_trigger:\n'
+     ' * HW_SW_TRIG_CONTROL 0x70, HW_TRIG_EN bit 0, HW_TRIG_MASK_DECON bit 4).\n'
+     ' * Mask it right after a frame-done (no transfer in flight), copy, unmask:\n'
+     ' * the panel keeps showing the previous frame and then gets a whole one.\n'
+     ' */\n'
+     'static void\n'
+     'sweet_fb_trigger(bool enable)\n'
+     '{\n'
+     '\tif (sweet_fb_decon == 0) {\n'
+     '\t\treturn;\n'
+     '\t}\n'
+     '\tvolatile uint32_t *trig = (volatile uint32_t *)(sweet_fb_decon + 0x70);\n'
+     '\tuint32_t v = *trig & ~((1u << 0) | (1u << 4));\n'
+     '\t*trig = v | (enable ? (1u << 0) : (1u << 4));\n'
+     '}\n'
      '#endif\n'
      '\n'
      'static uint32_t sweet_fb_swaps_logged;\n', 1),
     ('\t\ts->release();\n\t}\n}\n',
-     '\t\ts->release();\n\t}\n\tIOLockUnlock(fPresentLock);\n}\n', 1),
+     '\t\ts->release();\n\t}\n'
+     '#if defined(DREAMLTE)\n\tsweet_fb_trigger(true);\n#endif\n'
+     '\tIOLockUnlock(fPresentLock);\n}\n', 1),
 ])
 
 # Battery: the A5XELTE config had no power source, so iOS showed a wrong
