@@ -1,6 +1,6 @@
-From 9a24e64353381420f3564d1ba18af2b36d6e4870 Mon Sep 17 00:00:00 2001
+From b62132a07e0eecad884bed18e783a95d8e68170d Mon Sep 17 00:00:00 2001
 From: local <local@s8>
-Date: Wed, 21 Oct 2026 03:13:08 +0300
+Date: Wed, 21 Oct 2026 09:46:19 +0300
 Subject: [PATCH] dreamlte: present timing (S8FPS)
 
 ---
@@ -8,20 +8,23 @@ Subject: [PATCH] dreamlte: present timing (S8FPS)
  1 file changed, 21 insertions(+)
 
 diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
-index ece1417..4081853 100644
+index ec6b9da..4a7c7c3 100644
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
-@@ -351,7 +351,9 @@ void
+@@ -381,10 +381,12 @@ void
  AppleCLCD::present(const uint8_t *rec)
  {
  	uint32_t mask = get32(rec, 0x104);
 +	uint64_t t_wait = mach_absolute_time();
  	IOLockLock(fPresentLock);
+ #if defined(DREAMLTE)
+ 	sweet_fb_wait_frame_done();
+ #endif
 +	uint64_t t_start = mach_absolute_time();
  
  
  	if (!fConsolePaused) {
-@@ -443,6 +445,25 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -476,6 +478,25 @@ AppleCLCD::present(const uint8_t *rec)
  		}
  		s->release();
  	}
@@ -37,7 +40,7 @@ index ece1417..4081853 100644
 +	if (tn++ == 0) {
 +		first = t_end;
 +	} else if (tn == 61) {
-+		IOLog("S8FPS: 60 presents in %llu ms (%llu.%llu fps): copy avg %llu.%llu ms max %llu ms, lock wait avg %llu.%llu ms\n",
++		IOLog("S8FPS: 60 presents in %llu ms (%llu.%llu fps): copy avg %llu.%llu ms max %llu ms, wait (lock + frame-done) avg %llu.%llu ms\n",
 +		    (t_end - first) / 26000, 60ULL * 26000000 * 10 / (t_end - first) / 10, 60ULL * 26000000 * 10 / (t_end - first) % 10,
 +		    tsum / 60 / 26000, tsum / 60 / 2600 % 10, tmax / 26000, wsum / 60 / 26000, wsum / 60 / 2600 % 10);
 +		tsum = tmax = wsum = 0;
