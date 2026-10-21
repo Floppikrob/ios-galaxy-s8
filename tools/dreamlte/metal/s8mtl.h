@@ -133,6 +133,8 @@ id s8_forward(id self, SEL sel);
 }
 - (instancetype)initWithDevice:(id)device descriptor:(id)desc;
 - (instancetype)initWithDevice:(id)device descriptor:(id)desc iosurface:(void *)surface plane:(NSUInteger)plane;
+- (instancetype)initWithDevice:(id)device descriptor:(id)desc buffer:(S8Buffer *)buffer
+    offset:(NSUInteger)offset bytesPerRow:(NSUInteger)bpr;
 @end
 
 @interface S8SamplerState : _MTLSamplerState
@@ -154,7 +156,7 @@ id s8_forward(id self, SEL sel);
 	id _s8device;
 	id _name;               /* NSString */
 	NSUInteger _type;
-	char _constants[512];   /* MTLFunctionConstantValues description */
+	char _constants[1024];  /* function constants, "name=0xbits;..." */
 }
 @end
 

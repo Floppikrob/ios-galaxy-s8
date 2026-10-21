@@ -453,3 +453,24 @@ the kernel, must get GPU memory and run Mali jobs.
   Still unimplemented: command buffer/texture protectionOptions,
   -[MTLBuffer newLinearTextureWithDescriptor:...], instanced indexed draws,
   supportsVertexAmplificationCount:. Memoryless textures got no memory.
+
+## Shader compiler (host): air2nir
+
+- tools/dreamlte/metal/air2nir.cpp + build-air2nir.sh: AIR bitcode from
+  QuartzCore's default.metallib -> LLVM 18 specialisation (function
+  constants, air.static_init evaluated by GlobalOpt, inlining, -O2) ->
+  NIR (unstructured, nir_lower_goto_ifs) -> Mesa 25.2.8 Bifrost (v6)
+  compiler. Verified on the host: std_vert1_lph (992 bytes of Bifrost
+  code: LD_ATTR, UBO load, FMA, varying stores), read_surf_frag, and
+  fixed_frag_lph_cph in its generic mode (fc_generic=1, 154768 bytes).
+  Textures, samplers and constant-buffer pointers are binding indices /
+  (UBO << 32 | offset) values so run-time selection works.
+- The SDK used to build the plugin with real headers comes from
+  github.com/theos/sdks (iPhoneOS16.5.sdk), local only.
+
+## Boot 50 (prepared, not yet run): constants for the shader compiler
+
+- Plugin only (kernel as boot 47-49): logs each pipeline's function-constant
+  values (`MTL pipeline N fs consts+K: name=0x..;...`), implements the
+  calls boot 49 listed as missing, memoryless textures get memory.
+- Still diagnostic (draws skipped). sha256 4eb58e0db68b5c0dccdf81357e320330a34339d912472badebe8fc3a1922d9cb.

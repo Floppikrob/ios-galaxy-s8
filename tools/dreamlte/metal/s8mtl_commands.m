@@ -130,6 +130,8 @@ static unsigned s8_frames, s8_draws_total;
 S8_FORWARDING
 
 - (id)device { return _s8device; }
+- (NSUInteger)protectionOptions { return 0; }
+- (void)setProtectionOptions:(NSUInteger)options { (void)options; }
 
 - (id)renderCommandEncoderWithDescriptor:(id)desc
 {
@@ -297,6 +299,12 @@ S8_FORWARDING
 {
 	(void)type; (void)s; (void)c; (void)n;
 	[self p]->draws++;
+}
+- (void)drawIndexedPrimitives:(NSUInteger)type indexCount:(NSUInteger)c indexType:(NSUInteger)t
+    indexBuffer:(id)b indexBufferOffset:(NSUInteger)o instanceCount:(NSUInteger)n
+{
+	(void)n;
+	[self drawIndexedPrimitives:type indexCount:c indexType:t indexBuffer:b indexBufferOffset:o];
 }
 - (void)drawIndexedPrimitives:(NSUInteger)type indexCount:(NSUInteger)c indexType:(NSUInteger)t
     indexBuffer:(id)b indexBufferOffset:(NSUInteger)o

@@ -19,6 +19,7 @@ void free(void *);
 void *memcpy(void *, const void *, size_t);
 int strcmp(const char *, const char *);
 size_t strlen(const char *);
+int snprintf(char *, size_t, const char *, ...);
 
 static uint8_t *s8_read_file(const char *path, size_t *len)
 {
@@ -47,6 +48,46 @@ static uint8_t *s8_read_file(const char *path, size_t *len)
 static uint64_t s8_u64(const uint8_t *p) { uint64_t v; memcpy(&v, p, 8); return v; }
 static uint32_t s8_u32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
 static uint16_t s8_u16(const uint8_t *p) { uint16_t v; memcpy(&v, p, 2); return v; }
+
+/* Function-constant values as "name=0xbits;..." in the order Metal keeps
+ * them (MTLFunctionConstantValuesInternal -newNamedConstantArray, elements
+ * MTLNamedConstantValue name/dataType/data). Values are the constant's
+ * bytes, little endian, as air2nir -c takes them. */
+static unsigned s8_type_size(NSUInteger t)
+{
+	if (t >= 3 && t <= 6) return 4 * (unsigned)(t - 2);          /* float..float4 */
+	if (t >= 16 && t <= 19) return 2 * (unsigned)(t - 15);        /* half..half4 */
+	if (t >= 29 && t <= 36) return 4 * (unsigned)((t - 29) % 4 + 1); /* int, uint */
+	if (t >= 37 && t <= 44) return 2 * (unsigned)((t - 37) % 4 + 1); /* short, ushort */
+	if (t >= 45 && t <= 56) return (unsigned)((t - 45) % 4 + 1);  /* char, uchar, bool */
+	return 0;
+}
+
+static void s8_constants_key(id values, char *out, size_t len)
+{
+	size_t n = 0;
+	out[0] = 0;
+	id arr = [values newNamedConstantArray];
+	NSUInteger count = [arr count];
+	for (NSUInteger i = 0; i < count; i++) {
+		id v = [arr objectAtIndex:i];
+		const char *name = [[v name] UTF8String];
+		NSUInteger type = [v dataType];
+		const uint8_t *d = [v data];
+		unsigned sz = s8_type_size(type);
+		uint64_t bits = 0;
+		for (unsigned k = 0; k < sz && k < 8 && d != NULL; k++)
+			bits |= (uint64_t)d[k] << (8 * k);
+		int w = snprintf(out + n, len - n, "%s%s=0x%llx", n ? ";" : "", name ? name : "?",
+		    (unsigned long long)bits);
+		if (w < 0 || (size_t)w >= len - n) {
+			out[n] = 0;
+			break;
+		}
+		n += (size_t)w;
+	}
+	[arr release];
+}
 
 @implementation S8Library
 
@@ -111,15 +152,8 @@ S8_FORWARDING
 	f->_name = [name retain];
 	f->_type = _funcs[i].type == 0 ? MTLFunctionTypeVertex :
 	    _funcs[i].type == 1 ? MTLFunctionTypeFragment : MTLFunctionTypeKernel;
-	if (constants != nil) {
-		const char *c = [[constants description] UTF8String];
-		size_t l = c ? strlen(c) : 0;
-		if (l >= sizeof(f->_constants))
-			l = sizeof(f->_constants) - 1;
-		if (c != NULL)
-			memcpy(f->_constants, c, l);
-		f->_constants[l] = 0;
-	}
+	if (constants != nil)
+		s8_constants_key(constants, f->_constants, sizeof(f->_constants));
 	return f;
 }
 

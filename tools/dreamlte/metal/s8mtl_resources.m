@@ -84,6 +84,17 @@ S8_FORWARDING
 - (void)makeAliasable { }
 - (void)didModifyRange:(NSRange)range { (void)range; }
 - (NSUInteger)setPurgeableState:(NSUInteger)state { (void)state; return 2; /* NonVolatile */ }
+- (NSUInteger)protectionOptions { return 0; }
+
+/* A texture over this buffer's memory (linear, the caller's row pitch). */
+- (id)newLinearTextureWithDescriptor:(id)desc offset:(NSUInteger)offset bytesPerRow:(NSUInteger)bpr
+    bytesPerImage:(NSUInteger)bpi
+{
+	(void)bpi;
+	S8Texture *t = [[S8Texture alloc] initWithDevice:_s8device descriptor:desc buffer:self
+	    offset:offset bytesPerRow:bpr];
+	return t;
+}
 
 @end
 
@@ -118,7 +129,7 @@ static void s8_texture_from_descriptor(S8Texture *t, id device, id desc)
 	unsigned bpp = s8_format_bpp(_format);
 	_rowBytes = ((uint64_t)_width * bpp + 63) & ~63ULL;
 	uint64_t size = (uint64_t)_rowBytes * _height * _depth;
-	if (_storage == MTLStorageModeMemoryless || size == 0) {
+	if (size == 0) {
 		s8_log("MTL texture %lux%lu fmt %lu storage %lu: no memory", (unsigned long)_width,
 		    (unsigned long)_height, (unsigned long)_format, (unsigned long)_storage);
 		return self;
@@ -195,6 +206,21 @@ S8_FORWARDING
 - (NSUInteger)rotation { return 0; }
 - (NSUInteger)setPurgeableState:(NSUInteger)state { (void)state; return 2; }
 - (NSUInteger)s8_rowBytes { return _rowBytes; }
+- (NSUInteger)protectionOptions { return 0; }
+
+- (instancetype)initWithDevice:(id)device descriptor:(id)desc buffer:(S8Buffer *)buffer
+    offset:(NSUInteger)offset bytesPerRow:(NSUInteger)bpr
+{
+	self = [super init];
+	if (self == nil)
+		return nil;
+	s8_texture_from_descriptor(self, device, desc);
+	_rowBytes = bpr;
+	_cpu = (uint8_t *)buffer->_mem.cpu + offset;
+	_gpu = buffer->_mem.gpu ? buffer->_mem.gpu + offset : 0;
+	_parent = [buffer retain];
+	return self;
+}
 
 static void s8_copy_rows(uint8_t *dst, NSUInteger dstPitch, const uint8_t *src, NSUInteger srcPitch,
     NSUInteger rowLen, NSUInteger rows)

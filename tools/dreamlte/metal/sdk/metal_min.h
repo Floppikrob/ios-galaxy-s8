@@ -88,6 +88,10 @@ enum { MTLCommandBufferStatusCompleted = 4 };
 - (id)path;
 - (const char *)fileSystemRepresentation;
 - (id)localizedDescription;
+- (id)newNamedConstantArray;
+- (id)objectAtIndex:(NSUInteger)i;
+- (NSUInteger)dataType;
+- (void *)data;
 @end
 
 /* Metal's private base classes (Metal.framework exports them). */

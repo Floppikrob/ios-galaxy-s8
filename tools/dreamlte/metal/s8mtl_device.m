@@ -19,6 +19,8 @@
  */
 #import "s8mtl.h"
 
+size_t strlen(const char *);
+
 @implementation S8MaliDevice
 
 - (instancetype)initWithAcceleratorPort:(unsigned int)port
@@ -57,6 +59,7 @@ S8_FORWARDING
 - (BOOL)isHeadless { return NO; }
 - (BOOL)isRemovable { return NO; }
 - (BOOL)hasUnifiedMemory { return YES; }
+- (BOOL)supportsVertexAmplificationCount:(NSUInteger)count { return count <= 1; }
 
 /* ---- queues ---- */
 
@@ -175,8 +178,15 @@ static id s8_error(const char *what)
 	s8_log("MTL pipeline %u: vs %s fs %s fmt %lu blend %d", p->_id,
 	    vs ? [vs->_name UTF8String] : "-", fs ? [fs->_name UTF8String] : "-",
 	    (unsigned long)p->_colorFormat, p->_blending);
-	if (fs != nil && fs->_constants[0])
-		s8_log("MTL pipeline %u fs constants: %.100s", p->_id, fs->_constants);
+	/* the full constant sets, in log-line-sized pieces */
+	for (int which = 0; which < 2; which++) {
+		S8Function *fn = which ? fs : vs;
+		if (fn == nil || !fn->_constants[0])
+			continue;
+		size_t len = strlen(fn->_constants);
+		for (size_t o = 0; o < len; o += 96)
+			s8_log("MTL pipeline %u %s consts+%zu: %.96s", p->_id, which ? "fs" : "vs", o, fn->_constants + o);
+	}
 	return p;
 }
 
