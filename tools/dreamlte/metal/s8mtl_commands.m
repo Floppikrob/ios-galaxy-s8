@@ -7,8 +7,10 @@
  * count: runs the passes, reports them scheduled and, on a private serial
  * queue, completed (-commandBufferDidComplete:...).
  *
- * Stage 2 runs clears and blits on the CPU and only counts draws: it lets
- * CoreAnimation run on the Mali device while the shaders are brought up.
+ * Stage 3: render passes run on the Mali (s8mtl_draw.c builds and submits
+ * their job chains); blits still run on the CPU. A render pass the GPU path
+ * cannot take (target not GPU-visible, unknown format, no shader cache)
+ * falls back to stage 2: its clear runs on the CPU, its draws are skipped.
  */
 #import "s8mtl.h"
 
@@ -116,8 +118,16 @@ static unsigned s8_frames, s8_draws_total;
 	return &_passes[index];
 }
 
+- (struct s8d_cmdbuf *)s8_draw
+{
+	if (_draw == NULL && s8d_init() == 0)
+		_draw = s8d_cmdbuf_new();
+	return _draw;
+}
+
 - (void)dealloc
 {
+	s8d_cmdbuf_free(_draw);
 	for (unsigned i = 0; i < _npasses; i++) {
 		[_passes[i].target release];
 		[_passes[i].src release];
@@ -206,12 +216,14 @@ static void s8_cpu_clear(S8Texture *t, MTLClearColor c)
 
 - (void)s8_execute
 {
-	unsigned draws = 0, clears = 0, blits = 0;
+	unsigned draws = 0, clears = 0, blits = 0, gpu = 0;
 	for (unsigned i = 0; i < _npasses; i++) {
 		struct s8_pass *p = &_passes[i];
 		if (p->kind == 1) {
 			draws += p->draws;
-			if (p->load == MTLLoadActionClear) {
+			if (p->gpu >= 0 && s8d_pass_execute(_draw, p->gpu) == 0) {
+				gpu++;
+			} else if (p->load == MTLLoadActionClear) {
 				s8_cpu_clear(p->target, p->clear);
 				clears++;
 			}
@@ -232,13 +244,38 @@ static void s8_cpu_clear(S8Texture *t, MTLClearColor c)
 	}
 	s8_draws_total += draws;
 	if (++s8_frames % 120 == 1)
-		s8_log("MTL command buffer %u: %u passes, %u clears, %u blits, %u draws (%u draws so far)",
-		    s8_frames, _npasses, clears, blits, draws, s8_draws_total);
+		s8_log("MTL command buffer %u: %u passes (%u on the GPU), %u CPU clears, %u blits, %u draws (%u so far)",
+		    s8_frames, _npasses, gpu, clears, blits, draws, s8_draws_total);
 }
 
 @end
 
 /* ---- render encoder ---- */
+
+static void s8_bind_texture(struct s8d_cmdbuf *d, unsigned stage, NSUInteger index, id t)
+{
+	struct s8d_texture ref;
+	if (d == NULL)
+		return;
+	if (t != nil && s8_texture_ref(t, &ref) == 0)
+		s8d_set_texture(d, stage, (unsigned)index, &ref);
+	else
+		s8d_set_texture(d, stage, (unsigned)index, NULL);
+}
+
+static void s8_bind_buffer(struct s8d_cmdbuf *d, unsigned stage, NSUInteger index, id b, NSUInteger offset)
+{
+	S8Buffer *buf = b;
+	if (d == NULL)
+		return;
+	if (buf == nil) {
+		s8d_set_buffer(d, stage, (unsigned)index, 0, NULL, 0);
+		return;
+	}
+	uint64_t len = buf->_length > offset ? buf->_length - offset : 0;
+	s8d_set_buffer(d, stage, (unsigned)index, buf->_mem.gpu && buf->_nocopy == NULL ? buf->_mem.gpu + offset : 0,
+	    buf->_mem.cpu ? (uint8_t *)buf->_mem.cpu + offset : NULL, len);
+}
 
 @implementation S8RenderEncoder
 
@@ -252,65 +289,154 @@ static void s8_cpu_clear(S8Texture *t, MTLClearColor c)
 	struct s8_pass *p = [cb s8_pass:_pass];
 	id ca = [[desc colorAttachments] objectAtIndexedSubscript:0];
 	p->kind = 1;
+	p->gpu = -1;
 	p->target = [[ca texture] retain];
 	p->load = [ca loadAction];
 	p->clear = [ca clearColor];
+	struct s8d_cmdbuf *d = [cb s8_draw];
+	struct s8d_texture ref;
+	if (d != NULL && p->target != nil && s8_texture_ref(p->target, &ref) == 0) {
+		double c[4] = { p->clear.red, p->clear.green, p->clear.blue, p->clear.alpha };
+		p->gpu = s8d_pass_begin(d, &ref, (unsigned)p->load, c);
+	}
 	return self;
 }
 
 S8_FORWARDING
 
 - (struct s8_pass *)p { return [_cb s8_pass:_pass]; }
+- (struct s8d_cmdbuf *)d { return [self p]->gpu >= 0 ? _cb->_draw : NULL; }
 
-- (void)setRenderPipelineState:(id)state { (void)state; [self p]->pipelines++; }
+- (void)endEncoding
+{
+	if ([self d] != NULL)
+		s8d_pass_end([self d]);
+	[super endEncoding];
+}
+
+- (void)setRenderPipelineState:(id)state
+{
+	S8RenderPipelineState *ps = state;
+	[self p]->pipelines++;
+	if ([self d] != NULL)
+		s8d_set_pipeline([self d], ps ? ps->_gpu : NULL);
+}
 - (void)setDepthStencilState:(id)state { (void)state; }
-- (void)setVertexBuffer:(id)b offset:(NSUInteger)o atIndex:(NSUInteger)i { (void)b; (void)o; (void)i; }
-- (void)setVertexBufferOffset:(NSUInteger)o atIndex:(NSUInteger)i { (void)o; (void)i; }
-- (void)setVertexBytes:(const void *)p length:(NSUInteger)l atIndex:(NSUInteger)i { (void)p; (void)l; (void)i; }
-- (void)setVertexTexture:(id)t atIndex:(NSUInteger)i { (void)t; (void)i; }
-- (void)setVertexSamplerState:(id)s atIndex:(NSUInteger)i { (void)s; (void)i; }
-- (void)setFragmentBuffer:(id)b offset:(NSUInteger)o atIndex:(NSUInteger)i { (void)b; (void)o; (void)i; }
-- (void)setFragmentBufferOffset:(NSUInteger)o atIndex:(NSUInteger)i { (void)o; (void)i; }
-- (void)setFragmentBytes:(const void *)p length:(NSUInteger)l atIndex:(NSUInteger)i { (void)p; (void)l; (void)i; }
-- (void)setFragmentTexture:(id)t atIndex:(NSUInteger)i { (void)t; (void)i; }
-- (void)setFragmentSamplerState:(id)s atIndex:(NSUInteger)i { (void)s; (void)i; }
+- (void)setVertexBuffer:(id)b offset:(NSUInteger)o atIndex:(NSUInteger)i { s8_bind_buffer([self d], S8D_STAGE_VERTEX, i, b, o); }
+- (void)setVertexBuffers:(const id *)b offsets:(const NSUInteger *)o withRange:(NSRange)r
+{
+	for (NSUInteger k = 0; k < r.length; k++)
+		s8_bind_buffer([self d], S8D_STAGE_VERTEX, r.location + k, b[k], o[k]);
+}
+- (void)setVertexBufferOffset:(NSUInteger)o atIndex:(NSUInteger)i
+{
+	(void)o; (void)i;
+	static unsigned logged;
+	if (logged++ < 5)
+		s8_log("MTL setVertexBufferOffset: not handled");
+}
+- (void)setVertexBytes:(const void *)p length:(NSUInteger)l atIndex:(NSUInteger)i
+{
+	if ([self d] != NULL)
+		s8d_set_bytes([self d], S8D_STAGE_VERTEX, (unsigned)i, p, l);
+}
+- (void)setVertexTexture:(id)t atIndex:(NSUInteger)i { s8_bind_texture([self d], S8D_STAGE_VERTEX, i, t); }
+- (void)setVertexSamplerState:(id)s atIndex:(NSUInteger)i
+{
+	S8SamplerState *ss = s;
+	if ([self d] != NULL)
+		s8d_set_sampler([self d], S8D_STAGE_VERTEX, (unsigned)i, ss ? &ss->_s8 : NULL);
+}
+- (void)setFragmentBuffer:(id)b offset:(NSUInteger)o atIndex:(NSUInteger)i { s8_bind_buffer([self d], S8D_STAGE_FRAGMENT, i, b, o); }
+- (void)setFragmentBuffers:(const id *)b offsets:(const NSUInteger *)o withRange:(NSRange)r
+{
+	for (NSUInteger k = 0; k < r.length; k++)
+		s8_bind_buffer([self d], S8D_STAGE_FRAGMENT, r.location + k, b[k], o[k]);
+}
+- (void)setFragmentBufferOffset:(NSUInteger)o atIndex:(NSUInteger)i
+{
+	(void)o; (void)i;
+	static unsigned logged;
+	if (logged++ < 5)
+		s8_log("MTL setFragmentBufferOffset: not handled");
+}
+- (void)setFragmentBytes:(const void *)p length:(NSUInteger)l atIndex:(NSUInteger)i
+{
+	if ([self d] != NULL)
+		s8d_set_bytes([self d], S8D_STAGE_FRAGMENT, (unsigned)i, p, l);
+}
+- (void)setFragmentTexture:(id)t atIndex:(NSUInteger)i { s8_bind_texture([self d], S8D_STAGE_FRAGMENT, i, t); }
+- (void)setFragmentTextures:(const id *)t withRange:(NSRange)r
+{
+	for (NSUInteger k = 0; k < r.length; k++)
+		s8_bind_texture([self d], S8D_STAGE_FRAGMENT, r.location + k, t[k]);
+}
+- (void)setFragmentSamplerState:(id)s atIndex:(NSUInteger)i
+{
+	S8SamplerState *ss = s;
+	if ([self d] != NULL)
+		s8d_set_sampler([self d], S8D_STAGE_FRAGMENT, (unsigned)i, ss ? &ss->_s8 : NULL);
+}
+- (void)setFragmentSamplerStates:(const id *)s withRange:(NSRange)r
+{
+	for (NSUInteger k = 0; k < r.length; k++)
+		[self setFragmentSamplerState:s[k] atIndex:r.location + k];
+}
 - (void)setFragmentTexture:(id)t atTextureIndex:(NSUInteger)ti samplerState:(id)s atSamplerIndex:(NSUInteger)si
 {
-	(void)t; (void)ti; (void)s; (void)si;
+	[self setFragmentTexture:t atIndex:ti];
+	[self setFragmentSamplerState:s atIndex:si];
 }
-- (void)setViewport:(MTLViewport)v { (void)v; }
-- (void)setScissorRect:(MTLScissorRect)r { (void)r; }
-- (void)setCullMode:(NSUInteger)m { (void)m; }
-- (void)setFrontFacingWinding:(NSUInteger)w { (void)w; }
+- (void)setViewport:(MTLViewport)v
+{
+	if ([self d] != NULL)
+		s8d_set_viewport([self d], v.originX, v.originY, v.width, v.height, v.znear, v.zfar);
+}
+- (void)setScissorRect:(MTLScissorRect)r
+{
+	if ([self d] != NULL)
+		s8d_set_scissor([self d], (unsigned)r.x, (unsigned)r.y, (unsigned)r.width, (unsigned)r.height);
+}
+- (void)setCullMode:(NSUInteger)m { _cull = m; if ([self d] != NULL) s8d_set_cull([self d], (unsigned)_cull, (unsigned)_winding); }
+- (void)setFrontFacingWinding:(NSUInteger)w { _winding = w; if ([self d] != NULL) s8d_set_cull([self d], (unsigned)_cull, (unsigned)_winding); }
 - (void)setTriangleFillMode:(NSUInteger)m { (void)m; }
 - (void)setDepthBias:(float)b slopeScale:(float)s clamp:(float)c { (void)b; (void)s; (void)c; }
 - (void)setStencilReferenceValue:(uint32_t)v { (void)v; }
-- (void)setBlendColorRed:(float)r green:(float)g blue:(float)b alpha:(float)a { (void)r; (void)g; (void)b; (void)a; }
+- (void)setBlendColorRed:(float)r green:(float)g blue:(float)b alpha:(float)a
+{
+	if ([self d] != NULL)
+		s8d_set_blend_color([self d], r, g, b, a);
+}
 - (void)setVisibilityResultMode:(NSUInteger)m offset:(NSUInteger)o { (void)m; (void)o; }
 - (void)setTileBytes:(const void *)p length:(NSUInteger)l atIndex:(NSUInteger)i { (void)p; (void)l; (void)i; }
 - (void)setTileTexture:(id)t atIndex:(NSUInteger)i { (void)t; (void)i; }
 - (void)drawPrimitives:(NSUInteger)type vertexStart:(NSUInteger)s vertexCount:(NSUInteger)c
 {
-	(void)type; (void)s; (void)c;
-	[self p]->draws++;
+	[self drawPrimitives:type vertexStart:s vertexCount:c instanceCount:1];
 }
 - (void)drawPrimitives:(NSUInteger)type vertexStart:(NSUInteger)s vertexCount:(NSUInteger)c
     instanceCount:(NSUInteger)n
 {
-	(void)type; (void)s; (void)c; (void)n;
 	[self p]->draws++;
+	if ([self d] != NULL)
+		s8d_draw([self d], (unsigned)type, (unsigned)s, (unsigned)c, (unsigned)n, 0, 0, NULL);
 }
 - (void)drawIndexedPrimitives:(NSUInteger)type indexCount:(NSUInteger)c indexType:(NSUInteger)t
     indexBuffer:(id)b indexBufferOffset:(NSUInteger)o instanceCount:(NSUInteger)n
 {
-	(void)n;
-	[self drawIndexedPrimitives:type indexCount:c indexType:t indexBuffer:b indexBufferOffset:o];
+	S8Buffer *buf = b;
+	[self p]->draws++;
+	if ([self d] == NULL || buf == nil)
+		return;
+	unsigned size = t == 1 ? 4 : 2;   /* MTLIndexTypeUInt32 = 1 */
+	const uint8_t *cpu = buf->_mem.cpu ? (const uint8_t *)buf->_mem.cpu + o : NULL;
+	uint64_t gpu = buf->_mem.gpu && buf->_nocopy == NULL ? buf->_mem.gpu + o : 0;
+	s8d_draw([self d], (unsigned)type, 0, (unsigned)c, (unsigned)n, size, gpu, cpu);
 }
 - (void)drawIndexedPrimitives:(NSUInteger)type indexCount:(NSUInteger)c indexType:(NSUInteger)t
     indexBuffer:(id)b indexBufferOffset:(NSUInteger)o
 {
-	(void)type; (void)c; (void)t; (void)b; (void)o;
-	[self p]->draws++;
+	[self drawIndexedPrimitives:type indexCount:c indexType:t indexBuffer:b indexBufferOffset:o instanceCount:1];
 }
 
 @end

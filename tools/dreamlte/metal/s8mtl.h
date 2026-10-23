@@ -14,20 +14,9 @@
 #import "sdk/metal_min.h"
 #include "../s8mali_ioctl.h"
 
-/* ---- C helpers (s8mtl_core.c) ---- */
-void s8_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
-int s8_fd(void);
-/* GPU memory: write-combined CPU mapping + GPU address (VA = PA). Small
- * blocks come from shared slabs, large ones are their own allocation. */
-typedef struct {
-	uint64_t gpu;
-	void *cpu;
-	uint64_t size;
-	int big;
-} s8_mem;
-int s8_mem_alloc(s8_mem *m, uint64_t size, uint64_t align);
-void s8_mem_free(s8_mem *m);
-uint64_t s8_now_ns(void);
+#include "s8mtl_core.h"
+#include "s8mtl_draw.h"
+
 /* Bytes per pixel of a MTLPixelFormat (0 = unknown/compressed). */
 unsigned s8_format_bpp(NSUInteger format);
 /* Calls a Metal deallocator block (void (^)(void *pointer, NSUInteger length)). */
@@ -137,8 +126,15 @@ id s8_forward(id self, SEL sel);
     offset:(NSUInteger)offset bytesPerRow:(NSUInteger)bpr;
 @end
 
-@interface S8SamplerState : _MTLSamplerState
+@interface S8SamplerState : _MTLSamplerState {
+@public
+	struct s8d_sampler _s8;
+}
 @end
+
+/* The GPU view of a texture for the draw path (IOSurfaces are mapped into
+ * a GPU window first). 0 when it has no GPU memory. */
+int s8_texture_ref(S8Texture *t, struct s8d_texture *out);
 
 @interface S8DepthStencilState : _MTLDepthStencilState
 @end
@@ -167,12 +163,15 @@ id s8_forward(id self, SEL sel);
 	NSUInteger _colorFormat;
 	BOOL _blending;
 	unsigned _id;
+	struct s8d_pipeline *_gpu;      /* NULL: draws with it are skipped */
 }
 @end
 
-/* One recorded render pass (stage 2: clears execute, draws are counted). */
+/* One recorded pass: render passes run on the GPU (s8mtl_draw.c), blits
+ * on the CPU. */
 struct s8_pass {
 	int kind;               /* 1 render, 2 blit copy buffer, 3 blit copy texture */
+	int gpu;                /* render: s8d pass index, -1 none */
 	id target;              /* S8Texture, retained */
 	NSUInteger load;
 	MTLClearColor clear;
@@ -188,15 +187,18 @@ struct s8_pass {
 	id _s8device;
 	struct s8_pass *_passes;
 	unsigned _npasses, _cap;
+	struct s8d_cmdbuf *_draw;
 }
 - (unsigned)s8_newPass;
 - (struct s8_pass *)s8_pass:(unsigned)index;
+- (struct s8d_cmdbuf *)s8_draw;
 - (void)s8_execute;
 @end
 
 @interface S8RenderEncoder : _MTLCommandEncoder <MTLRenderCommandEncoderSPI> {
 	unsigned _pass;         /* index: the pass array may move */
 	S8CommandBuffer *_cb;
+	NSUInteger _cull, _winding;
 }
 - (instancetype)initWithCommandBuffer:(S8CommandBuffer *)cb descriptor:(id)desc;
 @end

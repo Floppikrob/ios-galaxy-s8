@@ -20,6 +20,7 @@
 #import "s8mtl.h"
 
 size_t strlen(const char *);
+void *memset(void *, int, size_t);
 
 @implementation S8MaliDevice
 
@@ -33,8 +34,8 @@ size_t strlen(const char *);
 	int ioctl(int, unsigned long, ...);
 	if (s8_fd() >= 0)
 		ioctl(s8_fd(), S8MALI_INFO, &info);
-	s8_log("MTL device created (stage 2): gpu 0x%x ready %u, %llu MiB GPU memory free",
-	    info.gpu_id, info.ready, (unsigned long long)(info.heap_free >> 20));
+	s8_log("MTL device created (stage 3): gpu 0x%x ready %u, %llu MiB GPU memory free, draw path %s",
+	    info.gpu_id, info.ready, (unsigned long long)(info.heap_free >> 20), s8d_init() == 0 ? "on" : "off");
 	return self;
 }
 
@@ -187,6 +188,39 @@ static id s8_error(const char *what)
 		for (size_t o = 0; o < len; o += 96)
 			s8_log("MTL pipeline %u %s consts+%zu: %.96s", p->_id, which ? "fs" : "vs", o, fn->_constants + o);
 	}
+	/* GPU pipeline (stage 3) */
+	struct s8d_pipeline_desc d;
+	memset(&d, 0, sizeof(d));
+	d.vs_name = vs ? [vs->_name UTF8String] : NULL;
+	d.fs_name = fs ? [fs->_name UTF8String] : NULL;
+	d.vs_constants = vs ? vs->_constants : "";
+	d.fs_constants = fs ? fs->_constants : "";
+	d.color_format = (uint32_t)p->_colorFormat;
+	d.blending = p->_blending;
+	d.write_mask = (uint8_t)[ca writeMask];
+	d.rgb_op = (uint8_t)[ca rgbBlendOperation];
+	d.alpha_op = (uint8_t)[ca alphaBlendOperation];
+	d.src_rgb = (uint8_t)[ca sourceRGBBlendFactor];
+	d.dst_rgb = (uint8_t)[ca destinationRGBBlendFactor];
+	d.src_alpha = (uint8_t)[ca sourceAlphaBlendFactor];
+	d.dst_alpha = (uint8_t)[ca destinationAlphaBlendFactor];
+	id vd = [desc vertexDescriptor];
+	if (vd != nil) {
+		id attrs = [vd attributes], layouts = [vd layouts];
+		for (unsigned i = 0; i < S8D_MAX_ATTRIBS; i++) {
+			id a = [attrs objectAtIndexedSubscript:i];
+			d.attribs[i].format = (uint32_t)[a format];
+			d.attribs[i].offset = (uint32_t)[a offset];
+			d.attribs[i].buffer = (uint32_t)[a bufferIndex];
+		}
+		for (unsigned i = 0; i < S8D_MAX_BUFFERS; i++) {
+			id l = [layouts objectAtIndexedSubscript:i];
+			d.layouts[i].stride = (uint32_t)[l stride];
+			d.layouts[i].step = (uint32_t)[l stepFunction];
+			d.layouts[i].rate = (uint32_t)[l stepRate];
+		}
+	}
+	p->_gpu = s8d_pipeline_new(&d, p->_id);
 	return p;
 }
 

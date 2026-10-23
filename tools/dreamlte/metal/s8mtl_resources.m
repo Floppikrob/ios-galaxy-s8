@@ -289,8 +289,53 @@ static void s8_copy_rows(uint8_t *dst, NSUInteger dstPitch, const uint8_t *src, 
 /* ---- state objects ---- */
 
 @implementation S8SamplerState
+- (instancetype)initWithDevice:(id)device samplerDescriptor:(id)desc
+{
+	self = [super initWithDevice:device samplerDescriptor:desc];
+	if (self == nil)
+		return nil;
+	_s8.min_linear = [desc minFilter] == 1;
+	_s8.mag_linear = [desc magFilter] == 1;
+	_s8.mip = (uint8_t)[desc mipFilter];
+	_s8.address[0] = (uint8_t)[desc sAddressMode];
+	_s8.address[1] = (uint8_t)[desc tAddressMode];
+	_s8.address[2] = (uint8_t)[desc rAddressMode];
+	_s8.normalized = [desc normalizedCoordinates];
+	_s8.lod_min = [desc lodMinClamp];
+	_s8.lod_max = [desc lodMaxClamp];
+	return self;
+}
 S8_FORWARDING
 @end
+
+int s8_texture_ref(S8Texture *t, struct s8d_texture *out)
+{
+	static unsigned logged;
+	int ioctl(int, unsigned long, ...);
+	if (t == nil)
+		return -1;
+	out->width = (uint32_t)t->_width;
+	out->height = (uint32_t)t->_height;
+	out->format = (uint32_t)t->_format;
+	out->row_bytes = (uint32_t)t->_rowBytes;
+	out->gpu = t->_gpu;
+	if (out->gpu == 0 && t->_iosurface != NULL) {
+		/* The window stays valid until 16 other surfaces were mapped: map
+		 * at bind time, the command buffer runs right after encoding. */
+		struct s8mali_map_surface m = { .id = IOSurfaceGetID(t->_iosurface), .flags = S8MALI_MAP_FLUSH };
+		if (s8_fd() < 0 || ioctl(s8_fd(), S8MALI_MAP_SURFACE, &m) != 0) {
+			if (logged++ < 10)
+				s8_log("MTL IOSurface %u: no GPU mapping", m.id);
+			return -1;
+		}
+		out->gpu = m.gpu_va;
+		if (t->_plane != 0 && logged++ < 10)
+			s8_log("MTL IOSurface %u plane %lu: plane offsets not handled", m.id, (unsigned long)t->_plane);
+		if (m.bytes_per_row)
+			out->row_bytes = m.bytes_per_row;
+	}
+	return out->gpu ? 0 : -1;
+}
 
 @implementation S8DepthStencilState
 S8_FORWARDING
@@ -299,6 +344,7 @@ S8_FORWARDING
 @implementation S8RenderPipelineState
 - (void)dealloc
 {
+	s8d_pipeline_free(_gpu);
 	[_vertex release];
 	[_fragment release];
 	[super dealloc];

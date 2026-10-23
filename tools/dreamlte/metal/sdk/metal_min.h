@@ -92,6 +92,24 @@ enum { MTLCommandBufferStatusCompleted = 4 };
 - (id)objectAtIndex:(NSUInteger)i;
 - (NSUInteger)dataType;
 - (void *)data;
+- (id)vertexDescriptor;
+- (id)attributes;
+- (id)layouts;
+- (NSUInteger)format;
+- (NSUInteger)offset;
+- (NSUInteger)bufferIndex;
+- (NSUInteger)stride;
+- (NSUInteger)stepFunction;
+- (NSUInteger)stepRate;
+- (NSUInteger)minFilter;
+- (NSUInteger)magFilter;
+- (NSUInteger)mipFilter;
+- (NSUInteger)sAddressMode;
+- (NSUInteger)tAddressMode;
+- (NSUInteger)rAddressMode;
+- (BOOL)normalizedCoordinates;
+- (float)lodMinClamp;
+- (float)lodMaxClamp;
 @end
 
 /* Metal's private base classes (Metal.framework exports them). */

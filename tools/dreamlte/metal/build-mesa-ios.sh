@@ -2,7 +2,7 @@
 # Build the parts of Mesa 25.2.8 the S8 Metal plugin uses at run time
 # (panfrost v6 descriptors: framebuffer, textures, blending, formats, job
 # chains; plus the util code they need) as an iOS arm64 static library.
-#   build-mesa-ios.sh MESA_SRC MESA_BUILD IOS_SDK OUT.a
+#   build-mesa-ios.sh MESA_SRC MESA_BUILD IOS_SDK OUT.a   (also writes OUT.flags)
 # MESA_BUILD is the host meson build (generated headers and tables are
 # target independent); compile flags are taken from it and stripped of the
 # Linux-specific HAVE_* probes.
@@ -45,6 +45,8 @@ for e in json.load(open(os.path.join(bld, 'compile_commands.json'))):
 PY
 )
 cc="clang -target arm64-apple-ios16.0 -isysroot $sdk -I$here/ios-stub -I$src/src/util -I$src/src/util/format -I$bld/src/util/format -Wno-everything -fno-stack-protector"
+# The same flags compile s8mtl_draw.c (metal/build.sh reads them from here).
+echo "-isysroot $sdk -I$here/ios-stub -I$src/src/util -I$src/src/util/format -I$bld/src/util/format -I$src/src/panfrost/lib $flags -DPAN_ARCH=6" > "${out%.a}.flags"
 objs=()
 compile() {     # compile SRC TAG [extra flags]
 	local s=$1 tag=$2; shift 2
@@ -56,19 +58,22 @@ for f in pan_desc pan_texture pan_mod; do
 	compile "$src/src/panfrost/lib/$f.c" v6 -DPAN_ARCH=6
 done
 compile "$src/src/panfrost/lib/pan_format.c" fmt6 -DPAN_ARCH=6
-for f in pan_afbc pan_clear pan_earlyzs pan_layout pan_samples pan_tiler pan_util pan_props; do
+for f in pan_afbc pan_clear pan_earlyzs pan_layout pan_samples pan_scratch pan_tiler pan_util pan_props; do
 	compile "$src/src/panfrost/lib/$f.c" lib
 done
 for f in bitscan half_float ralloc hash_table set u_debug log os_misc simple_mtx format/u_format \
     format/u_format_table format/u_format_pack format/u_format_unpack format/u_format_other \
     format/u_format_zs format/u_format_s3tc format/u_format_rgtc format/u_format_latc \
     format/u_format_etc format/u_format_bptc format/u_format_fxt1 format/u_format_yuv format_srgb \
-    format_r11g11b10f softfloat u_math rand_xor; do
+    format_r11g11b10f softfloat u_math rand_xor rgtc format/u_format_unpack_neon; do
 	s="$src/src/util/$f.c"
 	[ -f "$s" ] || s="$bld/src/util/$f.c"
 	[ -f "$s" ] || { echo "skip $f"; continue; }
 	compile "$s" util
 done
+# C11 call_once and friends (util's format tables use them).
+compile "$src/src/c11/impl/threads_posix.c" c11
+compile "$src/src/c11/impl/time.c" c11
 # Fixed-function blending: the common part of pan_blend.c without its
 # NIR blend-shader half (which would pull in the whole compiler).
 glue=$obj/pan_blend_ff.c

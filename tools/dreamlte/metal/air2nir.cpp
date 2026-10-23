@@ -1642,8 +1642,8 @@ int main(int argc, char **argv)
 		stage = fn->type == 0 ? MESA_SHADER_VERTEX : MESA_SHADER_FRAGMENT;
 		Translator tr(m, *f, stage, varyings);
 		s = tr.run();
-		inline_samplers = inline_samplers;
-		constant_data = constant_data;
+		inline_samplers = tr.inline_samplers;
+		constant_data = tr.constant_data;
 		unsupported = tr.unsupported;
 		for (auto &u : unsupported)
 			fprintf(stderr, "air2nir: unsupported: %s\n", u.c_str());
