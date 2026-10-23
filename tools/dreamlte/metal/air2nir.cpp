@@ -1553,6 +1553,23 @@ static bool lower_txs(nir_builder *b, nir_instr *instr, void *data)
 	return true;
 }
 
+static unsigned s8_lower16(const nir_instr *instr, void *data)
+{
+	(void)data;
+	if (instr->type != nir_instr_type_alu)
+		return 0;
+	const nir_alu_instr *alu = nir_instr_as_alu(instr);
+	/* conversions keep their sizes (they are the 16/32-bit boundary) */
+	if (nir_op_infos[alu->op].is_conversion || nir_op_is_vec_or_mov(alu->op))
+		return 0;
+	if (alu->def.bit_size == 16)
+		return 32;
+	for (unsigned i = 0; i < nir_op_infos[alu->op].num_inputs; i++)
+		if (nir_src_bit_size(alu->src[i].src) == 16)
+			return 32;
+	return 0;
+}
+
 /* Frame shader that reloads render target 0 (MTLLoadActionLoad): texel
  * fetch of texture 0 at the pixel, as PanVK's fb preload. */
 static nir_shader *preload_shader()
@@ -1793,6 +1810,12 @@ int main(int argc, char **argv)
 	struct util_dynarray binary;
 	util_dynarray_init(&binary, nullptr);
 	struct pan_shader_info info;
+	/* 16-bit ALU runs as 32-bit: Bifrost packs some v2i16/v2f16 swizzles
+	 * Mesa's back end cannot encode (bi_packer "swz0 < 4" on
+	 * fixed_frag_lph_cpf, backboardd's main shader). */
+	NIR_PASS(_, s, nir_lower_bit_size, s8_lower16, nullptr);
+	NIR_PASS(_, s, nir_opt_algebraic);
+	NIR_PASS(_, s, nir_opt_dce);
 	pan_shader_compile(s, &inputs, &binary, &info);
 
 	fprintf(stderr, "air2nir: %s: %u bytes, %u work registers, %u attributes, %u UBOs, %u textures, "

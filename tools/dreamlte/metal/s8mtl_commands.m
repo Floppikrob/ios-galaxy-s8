@@ -322,21 +322,33 @@ S8_FORWARDING
 		s8d_set_pipeline([self d], ps ? ps->_gpu : NULL);
 }
 - (void)setDepthStencilState:(id)state { (void)state; }
-- (void)setVertexBuffer:(id)b offset:(NSUInteger)o atIndex:(NSUInteger)i { s8_bind_buffer([self d], S8D_STAGE_VERTEX, i, b, o); }
+/* Buffers stay bound (not retained) per stage so setXBufferOffset: can
+ * rebind them (boot 52: backboardd changes offsets between draws). */
+- (void)s8_buffer:(unsigned)stage index:(NSUInteger)i buffer:(id)b offset:(NSUInteger)o
+{
+	if (i >= S8D_MAX_BUFFERS)
+		return;
+	_buffers[stage][i] = b;
+	s8_bind_buffer([self d], stage, i, b, o);
+}
+- (void)setVertexBuffer:(id)b offset:(NSUInteger)o atIndex:(NSUInteger)i
+{
+	[self s8_buffer:S8D_STAGE_VERTEX index:i buffer:b offset:o];
+}
 - (void)setVertexBuffers:(const id *)b offsets:(const NSUInteger *)o withRange:(NSRange)r
 {
 	for (NSUInteger k = 0; k < r.length; k++)
-		s8_bind_buffer([self d], S8D_STAGE_VERTEX, r.location + k, b[k], o[k]);
+		[self s8_buffer:S8D_STAGE_VERTEX index:r.location + k buffer:b[k] offset:o[k]];
 }
 - (void)setVertexBufferOffset:(NSUInteger)o atIndex:(NSUInteger)i
 {
-	(void)o; (void)i;
-	static unsigned logged;
-	if (logged++ < 5)
-		s8_log("MTL setVertexBufferOffset: not handled");
+	if (i < S8D_MAX_BUFFERS)
+		s8_bind_buffer([self d], S8D_STAGE_VERTEX, i, _buffers[S8D_STAGE_VERTEX][i], o);
 }
 - (void)setVertexBytes:(const void *)p length:(NSUInteger)l atIndex:(NSUInteger)i
 {
+	if (i < S8D_MAX_BUFFERS)
+		_buffers[S8D_STAGE_VERTEX][i] = nil;
 	if ([self d] != NULL)
 		s8d_set_bytes([self d], S8D_STAGE_VERTEX, (unsigned)i, p, l);
 }
@@ -347,21 +359,24 @@ S8_FORWARDING
 	if ([self d] != NULL)
 		s8d_set_sampler([self d], S8D_STAGE_VERTEX, (unsigned)i, ss ? &ss->_s8 : NULL);
 }
-- (void)setFragmentBuffer:(id)b offset:(NSUInteger)o atIndex:(NSUInteger)i { s8_bind_buffer([self d], S8D_STAGE_FRAGMENT, i, b, o); }
+- (void)setFragmentBuffer:(id)b offset:(NSUInteger)o atIndex:(NSUInteger)i
+{
+	[self s8_buffer:S8D_STAGE_FRAGMENT index:i buffer:b offset:o];
+}
 - (void)setFragmentBuffers:(const id *)b offsets:(const NSUInteger *)o withRange:(NSRange)r
 {
 	for (NSUInteger k = 0; k < r.length; k++)
-		s8_bind_buffer([self d], S8D_STAGE_FRAGMENT, r.location + k, b[k], o[k]);
+		[self s8_buffer:S8D_STAGE_FRAGMENT index:r.location + k buffer:b[k] offset:o[k]];
 }
 - (void)setFragmentBufferOffset:(NSUInteger)o atIndex:(NSUInteger)i
 {
-	(void)o; (void)i;
-	static unsigned logged;
-	if (logged++ < 5)
-		s8_log("MTL setFragmentBufferOffset: not handled");
+	if (i < S8D_MAX_BUFFERS)
+		s8_bind_buffer([self d], S8D_STAGE_FRAGMENT, i, _buffers[S8D_STAGE_FRAGMENT][i], o);
 }
 - (void)setFragmentBytes:(const void *)p length:(NSUInteger)l atIndex:(NSUInteger)i
 {
+	if (i < S8D_MAX_BUFFERS)
+		_buffers[S8D_STAGE_FRAGMENT][i] = nil;
 	if ([self d] != NULL)
 		s8d_set_bytes([self d], S8D_STAGE_FRAGMENT, (unsigned)i, p, l);
 }

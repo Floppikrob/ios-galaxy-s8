@@ -1264,7 +1264,24 @@ static uint64_t s8_ubo_table(struct s8d_cmdbuf *cb, struct s8_stage_state *s, co
 		uint64_t ptr = 0, size = 0;
 		if (i < S8_UBO_DATA && i < S8D_MAX_BUFFERS && s->buffers[i].set && s->buffers[i].gpu) {
 			ptr = s->buffers[i].gpu;
-			size = s->buffers[i].length;
+			size = MIN2(s->buffers[i].length, 65536);
+			/* UBO pointers must be 16-byte aligned; Metal buffer offsets
+			 * need only be 4 (boot 52: a bound offset tripped the pack
+			 * assertion and aborted backboardd). Copy such a range. */
+			if ((ptr & 15) && s->buffers[i].cpu != NULL && size) {
+				struct s8_ptr c = s8_alloc(&cb->arena, size, 16);
+				if (c.cpu != NULL) {
+					memcpy(c.cpu, s->buffers[i].cpu, size);
+					ptr = c.gpu;
+				}
+			}
+			if (ptr & 15) {
+				static unsigned logged;
+				if (logged++ < 10)
+					s8_log("MTL draw: buffer %u at unaligned 0x%llx without CPU copy", i,
+					    (unsigned long long)ptr);
+				ptr = 0;
+			}
 		} else if (i == S8_UBO_DATA) {
 			ptr = sh->data_gpu;
 			size = sh->data_size;

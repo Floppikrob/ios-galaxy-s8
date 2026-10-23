@@ -212,8 +212,10 @@ struct s8_pass {
 	unsigned _pass;         /* index: the pass array may move */
 	S8CommandBuffer *_cb;
 	NSUInteger _cull, _winding;
+	id _buffers[2][S8D_MAX_BUFFERS];        /* bound per stage, not retained */
 }
 - (instancetype)initWithCommandBuffer:(S8CommandBuffer *)cb descriptor:(id)desc;
+- (void)s8_buffer:(unsigned)stage index:(NSUInteger)i buffer:(id)b offset:(NSUInteger)o;
 @end
 
 @interface S8BlitEncoder : _MTLCommandEncoder <MTLBlitCommandEncoderSPI> {

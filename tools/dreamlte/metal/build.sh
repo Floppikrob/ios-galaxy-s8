@@ -25,7 +25,7 @@ if [[ -n ${S8_MESA_LIB:-} ]]; then
 	o=$out/obj/s8mtl_draw.o
 	eval "$(printf '%q' "$clang")" -target arm64-apple-ios16.0 "$(cat "${S8_MESA_LIB%.a}.flags")" -std=gnu11 -O2 \
 		-Wall -Wextra -Werror -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers \
-		-Wno-macro-redefined -Wno-ignored-qualifiers -fno-stack-protector \
+		-Wno-macro-redefined -Wno-ignored-qualifiers -fno-stack-protector -DNDEBUG \
 		-c "$(printf '%q' "$here/s8mtl_draw.c")" -o "$(printf '%q' "$o")"
 	objs+=("$o" "$S8_MESA_LIB")
 	libs=("$sdk/usr/lib/libSystem.tbd")
