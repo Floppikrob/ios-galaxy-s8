@@ -510,6 +510,15 @@ static enum pipe_format s8_pixel_format(uint32_t mtl)
 	case 105: return PIPE_FORMAT_R32G32_FLOAT;
 	case 115: return PIPE_FORMAT_R16G16B16A16_FLOAT;
 	case 125: return PIPE_FORMAT_R32G32B32A32_FLOAT;
+	case 43: return PIPE_FORMAT_B5G5R5A1_UNORM;
+	/* Extended-range display formats (BGR10_XR and its private 32-bit
+	 * relatives 550/551; boot 51: CoreAnimation renders the display in
+	 * them). The Mali has no XR encoding: they are stored as plain
+	 * BGRA8, and the kernel presents their 'b3a8' surfaces as BGRA. */
+	case 550:
+	case 554: return PIPE_FORMAT_B8G8R8A8_UNORM;
+	case 551:
+	case 555: return PIPE_FORMAT_B8G8R8A8_SRGB;
 	default: return PIPE_FORMAT_NONE;
 	}
 }

@@ -1312,7 +1312,7 @@ index 55d0057..dee6635 100644
  	int32_t rc = sweet_psci_cpu_on(cpu->phys_id, entry, getCPUNumber());
  	IOLog(CPU_PORT_NAME " CPU: cpu=%u PSCI CPU_ON rc=%d\n", getCPUNumber(), rc);
 diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
-index 356ff51..7bb5f08 100644
+index 356ff51..0104871 100644
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
 @@ -48,6 +48,7 @@ extern "C" int sweet_console_muted;     /* osfmk/console/serial_console.c */
@@ -1476,7 +1476,7 @@ index 356ff51..7bb5f08 100644
  	setProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");
  	setProperty("external", false);
  	setProperty("DisplayPipePlaneBaseAlignment", 64ULL, 32);
-@@ -302,6 +392,1387 @@ get32(const uint8_t *p, uint32_t off)
+@@ -302,6 +392,1395 @@ get32(const uint8_t *p, uint32_t off)
  	return v;
  }
  
@@ -2859,12 +2859,20 @@ index 356ff51..7bb5f08 100644
 +	IOLog("S8 MALI: Metal device published (S8MaliMetal.bundle / S8MaliDevice)\n");
 +	acc->release();
 +}
++/* Layouts the GPU present reads as BGRA8: BGRA, and 'b3a8', the
++ * extended-range surface CoreAnimation renders the display into with
++ * the Metal plugin, which stores it as BGRA8 (boot 51). */
++static inline bool
++s8gpu_bgra_layout(uint32_t f)
++{
++	return f == SWEET_FB_FORMAT_BGRA || f == 0x62336138;
++}
 +#endif
 +
  static uint32_t sweet_fb_swaps_logged;
  static uint64_t sweet_fb_swap_count;
  
-@@ -318,7 +1789,19 @@ AppleCLCD::swap(const uint8_t *rec)
+@@ -318,7 +1797,19 @@ AppleCLCD::swap(const uint8_t *rec)
  	IOLockLock(fLock);
  	memcpy(fPending, rec, SWEET_FB_SWAP_REC_SIZE);
  	fDirty = true;
@@ -2884,7 +2892,7 @@ index 356ff51..7bb5f08 100644
  	if ((++sweet_fb_swap_count % 1000) == 0) {
  		IOLog("SWEET FB: %llu swaps\n", sweet_fb_swap_count);
  	}
-@@ -328,6 +1811,13 @@ void
+@@ -328,6 +1819,13 @@ void
  AppleCLCD::present(const uint8_t *rec)
  {
  	uint32_t mask = get32(rec, 0x104);
@@ -2898,7 +2906,7 @@ index 356ff51..7bb5f08 100644
  
  
  	if (!fConsolePaused) {
-@@ -369,6 +1859,50 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -369,6 +1867,50 @@ AppleCLCD::present(const uint8_t *rec)
  		}
  		uintptr_t src = s->kernelAddress();
  		uint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;
@@ -2932,7 +2940,7 @@ index 356ff51..7bb5f08 100644
 +			    s->elementHeight == 1 && s->memory != NULL && end <= s->memory->getLength()) {
 +				if (s8gpu_ready && sx == 0 && sy == 0 && dx == 0 && dy == 0 &&
 +				    w == (int32_t)fLogicalW && h == (int32_t)fLogicalH &&
-+				    s->pixelFormat == SWEET_FB_FORMAT_BGRA &&
++				    s8gpu_bgra_layout(s->pixelFormat) &&
 +				    s8gpu_present(s->memory, s->id, s->offset, src + s->offset, s->bytesPerRow,
 +				    (uint32_t)w, (uint32_t)h)) {
 +					s->release();
@@ -2949,13 +2957,13 @@ index 356ff51..7bb5f08 100644
  		if (w <= 0 || h <= 0) {
  			w = (int32_t)s->width;
  			h = (int32_t)s->height;
-@@ -410,6 +1944,19 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -410,6 +1952,19 @@ AppleCLCD::present(const uint8_t *rec)
  		    s->memory == NULL || last > s->memory->getLength()) {
  			src = 0;
  		}
 +#if defined(DREAMLTE)
 +		if (src != 0 && bpe == 4 && s8gpu_ready && sx == 0 && sy == 0 && dx == 0 && dy == 0 &&
-+		    w == (int32_t)fWidth && h == (int32_t)fHeight && s->pixelFormat == SWEET_FB_FORMAT_BGRA) {
++		    w == (int32_t)fWidth && h == (int32_t)fHeight && s8gpu_bgra_layout(s->pixelFormat)) {
 +			if (s8gpu_present(s->memory, s->id, s->offset, src + s->offset, s->bytesPerRow,
 +			    (uint32_t)w, (uint32_t)h)) {
 +				s->release();
@@ -2969,7 +2977,7 @@ index 356ff51..7bb5f08 100644
  		if (src != 0 && bpe == 4) {
  			for (int32_t y = 0; y < h; y++) {
  				memcpy((void *)(fPixels + (uint64_t)(dy + y) * fRowBytes + (uint64_t)dx * 4),
-@@ -419,6 +1966,11 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -419,6 +1974,11 @@ AppleCLCD::present(const uint8_t *rec)
  		}
  		s->release();
  	}

@@ -1,8 +1,8 @@
 diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
-index 7bb5f08..35dacfd 100644
+index 0104871..4013bde 100644
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
-@@ -1811,6 +1811,7 @@ void
+@@ -1819,6 +1819,7 @@ void
  AppleCLCD::present(const uint8_t *rec)
  {
  	uint32_t mask = get32(rec, 0x104);
@@ -10,7 +10,7 @@ index 7bb5f08..35dacfd 100644
  	IOLockLock(fPresentLock);
  #if defined(DREAMLTE)
  	uint64_t t0 = mach_absolute_time();
-@@ -1818,6 +1819,7 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -1826,6 +1827,7 @@ AppleCLCD::present(const uint8_t *rec)
  	sweet_fb_trigger(false);
  	uint64_t t1 = mach_absolute_time();
  #endif
@@ -18,7 +18,7 @@ index 7bb5f08..35dacfd 100644
  
  
  	if (!fConsolePaused) {
-@@ -1970,6 +1972,25 @@ AppleCLCD::present(const uint8_t *rec)
+@@ -1978,6 +1980,25 @@ AppleCLCD::present(const uint8_t *rec)
  	sweet_fb_trigger(true);
  	sweet_fb_stat(t0, t1, mach_absolute_time());
  #endif
