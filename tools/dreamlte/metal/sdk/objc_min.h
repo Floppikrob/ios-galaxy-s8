@@ -34,6 +34,7 @@ __attribute__((objc_root_class))
 - (id)copy;
 - (Class)class;
 - (BOOL)respondsToSelector:(SEL)sel;
+- (BOOL)isKindOfClass:(Class)cls;
 - (id)forwardingTargetForSelector:(SEL)sel;
 + (BOOL)resolveInstanceMethod:(SEL)sel;
 @end

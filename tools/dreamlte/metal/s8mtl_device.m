@@ -126,10 +126,16 @@ S8_FORWARDING
 
 - (id)newHeapWithDescriptor:(id)desc
 {
-	(void)desc;
-	s8_log("MTL newHeapWithDescriptor: not supported yet (nil)");
-	return nil;
+	static unsigned logged;
+	S8Heap *h = [[S8Heap alloc] initWithDevice:self descriptor:desc];
+	if (logged++ < 8)
+		s8_log("MTL heap: %lu KiB, storage %lu", (unsigned long)(h ? h->_size >> 10 : 0),
+		    (unsigned long)(h ? h->_storage : 0));
+	return h;
 }
+
+/* IORegistry entry ID of the accelerator (stable per boot). */
+- (uint64_t)registryID { return 0x100000000ULL | _s8port; }
 
 /* ---- shaders and pipelines ---- */
 
@@ -176,6 +182,19 @@ static id s8_error(const char *what)
 	p->_blending = [ca isBlendingEnabled];
 	p->_id = ++count;
 	S8Function *vs = p->_vertex, *fs = p->_fragment;
+	/* Functions from other libraries (SpringBoard's own shaders, compiled
+	 * by MTLCompilerService, boot 51) are Metal's objects, not ours: no
+	 * GPU pipeline for them (their draws are skipped). */
+	BOOL foreign = (vs != nil && ![vs isKindOfClass:[S8Function class]]) ||
+	    (fs != nil && ![fs isKindOfClass:[S8Function class]]);
+	if (foreign) {
+		static unsigned logged;
+		if (logged++ < 20)
+			s8_log("MTL pipeline %u: foreign functions %s %s / %s %s (no GPU pipeline)", p->_id,
+			    vs ? class_getName(object_getClass(vs)) : "-", vs ? [[(id)vs name] UTF8String] : "",
+			    fs ? class_getName(object_getClass(fs)) : "-", fs ? [[(id)fs name] UTF8String] : "");
+		return p;
+	}
 	s8_log("MTL pipeline %u: vs %s fs %s fmt %lu blend %d", p->_id,
 	    vs ? [vs->_name UTF8String] : "-", fs ? [fs->_name UTF8String] : "-",
 	    (unsigned long)p->_colorFormat, p->_blending);

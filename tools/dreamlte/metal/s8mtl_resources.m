@@ -286,6 +286,68 @@ static void s8_copy_rows(uint8_t *dst, NSUInteger dstPitch, const uint8_t *src, 
 
 @end
 
+/* ---- heaps ---- */
+
+@implementation S8Heap
+
+- (instancetype)initWithDevice:(id)device descriptor:(id)desc
+{
+	self = [super init];
+	if (self == nil)
+		return nil;
+	_s8device = device;
+	_size = [desc size];
+	_storage = [desc storageMode];
+	_cpuCache = [desc cpuCacheMode];
+	_hazard = [desc hazardTrackingMode];
+	_type = [desc type];
+	return self;
+}
+
+S8_FORWARDING
+
+- (id)device { return _s8device; }
+- (NSUInteger)size { return _size; }
+- (NSUInteger)usedSize { return _used; }
+- (NSUInteger)currentAllocatedSize { return _size; }
+- (NSUInteger)maxAvailableSizeWithAlignment:(NSUInteger)alignment { (void)alignment; return _size > _used ? _size - _used : 0; }
+- (NSUInteger)storageMode { return _storage; }
+- (NSUInteger)cpuCacheMode { return _cpuCache; }
+- (NSUInteger)hazardTrackingMode { return _hazard; }
+- (NSUInteger)resourceOptions { return _storage << 4 | _cpuCache | _hazard << 8; }
+- (NSUInteger)type { return _type; }
+- (NSUInteger)setPurgeableState:(NSUInteger)state { (void)state; return 2; }
+
+- (id)newBufferWithLength:(NSUInteger)length options:(NSUInteger)options
+{
+	S8Buffer *b = [[S8Buffer alloc] initWithDevice:_s8device length:length options:options];
+	if (b != nil)
+		_used += length;
+	return b;
+}
+
+- (id)newBufferWithLength:(NSUInteger)length options:(NSUInteger)options offset:(NSUInteger)offset
+{
+	(void)offset;
+	return [self newBufferWithLength:length options:options];
+}
+
+- (id)newTextureWithDescriptor:(id)desc
+{
+	S8Texture *t = [[S8Texture alloc] initWithDevice:_s8device descriptor:desc];
+	if (t != nil)
+		_used += t->_mem.size;
+	return t;
+}
+
+- (id)newTextureWithDescriptor:(id)desc offset:(NSUInteger)offset
+{
+	(void)offset;
+	return [self newTextureWithDescriptor:desc];
+}
+
+@end
+
 /* ---- state objects ---- */
 
 @implementation S8SamplerState

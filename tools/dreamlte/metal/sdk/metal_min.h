@@ -110,6 +110,8 @@ enum { MTLCommandBufferStatusCompleted = 4 };
 - (BOOL)normalizedCoordinates;
 - (float)lodMinClamp;
 - (float)lodMaxClamp;
+- (NSUInteger)size;
+- (NSUInteger)type;
 @end
 
 /* Metal's private base classes (Metal.framework exports them). */

@@ -78,6 +78,8 @@ id s8_forward(id self, SEL sel);
 @end
 @protocol MTLComputePipelineState
 @end
+@protocol MTLHeap
+@end
 
 @interface S8MaliDevice : _MTLDevice <MTLDeviceSPI> {
 @public
@@ -124,6 +126,17 @@ id s8_forward(id self, SEL sel);
 - (instancetype)initWithDevice:(id)device descriptor:(id)desc iosurface:(void *)surface plane:(NSUInteger)plane;
 - (instancetype)initWithDevice:(id)device descriptor:(id)desc buffer:(S8Buffer *)buffer
     offset:(NSUInteger)offset bytesPerRow:(NSUInteger)bpr;
+@end
+
+/* A heap is bookkeeping only: each resource made from it gets its own GPU
+ * memory (SpringBoard aborts when newHeapWithDescriptor: answers nil,
+ * boot 51). */
+@interface S8Heap : _MTLObjectWithLabel <MTLHeap> {
+@public
+	id _s8device;
+	NSUInteger _size, _used, _storage, _cpuCache, _hazard, _type;
+}
+- (instancetype)initWithDevice:(id)device descriptor:(id)desc;
 @end
 
 @interface S8SamplerState : _MTLSamplerState {
