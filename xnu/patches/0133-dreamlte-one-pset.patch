@@ -1,0 +1,16 @@
+diff --git a/osfmk/arm64/machine_routines.c b/osfmk/arm64/machine_routines.c
+index 1ebc543..0107913 100644
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -1051,6 +1051,11 @@ ml_parse_cpu_topology(void)
+ 		 * seen this exact cluster before. If so, then reuse that cluster ID for this CPU.
+ 		 */
+ #if defined(DREAMLTE)
++		/*
++		 * Galaxy S8: the A53 (Aff1 1) and Mongoose (Aff1 0) clusters share one
++		 * pset. The clutch scheduler compiled here is the single-cluster one:
++		 * with two psets it enqueues under the wrong pset lock (cpus=8 panics).
++		 */
+ 		uint32_t phys_cluster_id = 0;
+ #elif HAS_CLUSTER || defined(A5XELTE)
+ 		uint32_t phys_cluster_id = MPIDR_CLUSTER_ID(cpu->phys_id);

@@ -24,7 +24,7 @@ abs=$(aarch64-linux-gnu-readelf -r $objs | grep -c ABS64 || true)
 $CC $CFLAGS -static -T loader.ld -Wl,--build-id=none -Wl,--no-warn-rwx-segments -Wl,-N \
 	out/start.o $objs -o out/loader.elf
 $OBJCOPY -O binary out/loader.elf out/Image
-size=$(aarch64-linux-gnu-nm out/loader.elf | awk '$3=="_end"{print strtonum("0x"$1)}')
+size=$((0x$(aarch64-linux-gnu-nm out/loader.elf | awk '$3=="_end"{print $1}')))	# any awk (mawk has no strtonum)
 truncate -s "$size" out/Image
 echo "out/Image: $(stat -c %s out/Image) bytes"
 if [ $# = 3 ]; then

@@ -1,0 +1,46 @@
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 7bb5f08..35dacfd 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -1811,6 +1811,7 @@ void
+ AppleCLCD::present(const uint8_t *rec)
+ {
+ 	uint32_t mask = get32(rec, 0x104);
++	uint64_t t_wait = mach_absolute_time();
+ 	IOLockLock(fPresentLock);
+ #if defined(DREAMLTE)
+ 	uint64_t t0 = mach_absolute_time();
+@@ -1818,6 +1819,7 @@ AppleCLCD::present(const uint8_t *rec)
+ 	sweet_fb_trigger(false);
+ 	uint64_t t1 = mach_absolute_time();
+ #endif
++	uint64_t t_start = mach_absolute_time();
+ 
+ 
+ 	if (!fConsolePaused) {
+@@ -1970,6 +1972,25 @@ AppleCLCD::present(const uint8_t *rec)
+ 	sweet_fb_trigger(true);
+ 	sweet_fb_stat(t0, t1, mach_absolute_time());
+ #endif
++	/* S8 timing: copy cost and present rate, every 60 presents (26 MHz timebase) */
++	static uint64_t tsum, tmax, wsum, first;
++	static uint32_t tn;
++	uint64_t t_end = mach_absolute_time();
++	tsum += t_end - t_start;
++	wsum += t_start - t_wait;
++	if (t_end - t_start > tmax) {
++		tmax = t_end - t_start;
++	}
++	if (tn++ == 0) {
++		first = t_end;
++	} else if (tn == 61) {
++		IOLog("S8FPS: 60 presents in %llu ms (%llu.%llu fps): copy avg %llu.%llu ms max %llu ms, wait (lock + frame-done) avg %llu.%llu ms\n",
++		    (t_end - first) / 26000, 60ULL * 26000000 * 10 / (t_end - first) / 10, 60ULL * 26000000 * 10 / (t_end - first) % 10,
++		    tsum / 60 / 26000, tsum / 60 / 2600 % 10, tmax / 26000, wsum / 60 / 26000, wsum / 60 / 2600 % 10);
++		tsum = tmax = wsum = 0;
++		tn = 1;
++		first = t_end;
++	}
+ 	IOLockUnlock(fPresentLock);
+ }
+ 

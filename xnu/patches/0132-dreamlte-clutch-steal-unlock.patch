@@ -1,0 +1,23 @@
+diff --git a/osfmk/kern/sched_clutch.c b/osfmk/kern/sched_clutch.c
+index 3657d83..ed0b396 100644
+--- a/osfmk/kern/sched_clutch.c
++++ b/osfmk/kern/sched_clutch.c
+@@ -3105,9 +3105,16 @@ sched_clutch_processor_queue_remove(
+ }
+ 
+ static thread_t
+-sched_clutch_steal_thread(__unused processor_set_t pset)
++sched_clutch_steal_thread(processor_set_t pset)
+ {
+-	/* Thread stealing is not enabled for single cluster clutch scheduler platforms */
++	/*
++	 * Thread stealing is not enabled for single cluster clutch scheduler
++	 * platforms. With two clusters (Galaxy S8: A53 + Mongoose)
++	 * sched_steal_thread_enabled() is true and thread_select() calls this
++	 * expecting the pset lock dropped ("returns with pset lock dropped"):
++	 * returning it held made thread_select re-take it and panic.
++	 */
++	pset_unlock(pset);
+ 	return THREAD_NULL;
+ }
+ 

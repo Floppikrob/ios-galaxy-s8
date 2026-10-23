@@ -1,0 +1,502 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+index 8395837..cf1f15e 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -106,6 +106,7 @@ bsd/dev/random/randomdev.c		standard
+ bsd/dev/memdev.c			standard
+ bsd/dev/sweet_ufs.c			standard
+ bsd/dev/s8_wlan.c			standard
++bsd/dev/s8_cpufreq.c			standard
+ bsd/dev/a5xelte_emmc.c			standard
+ bsd/dev/a5xelte_keys.c			standard
+ bsd/dev/dreamlte_s8.c			standard
+diff --git a/bsd/dev/s8_cpufreq.c b/bsd/dev/s8_cpufreq.c
+new file mode 100644
+index 0000000..5b7db85
+--- /dev/null
++++ b/bsd/dev/s8_cpufreq.c
+@@ -0,0 +1,471 @@
++/* SPDX-License-Identifier: GPL-2.0-only
++ *
++ * Galaxy S8 (dreamlte) CPU frequency through ACPM, the power-management
++ * firmware on the APM core of the Exynos 8895. As in Samsung's 4.4 kernel
++ * (drivers/soc/samsung/acpm/acpm_ipc.c, cal-if/acpm_dvfs.c): the CPU clusters
++ * are ACPM clocks (dvfs_cpucl0 = 2, dvfs_cpucl1 = 3) and a FREQ_REQ on the
++ * DVFS IPC channel (5) makes the firmware set both the PLL and the voltage
++ * from its own table. GPL-2.0 like those sources.
++ *
++ * IPC: the SRAM at 0x16500000 holds the firmware's framework descriptor at
++ * +0x2850; its ipc_channels table gives, per channel, the AP->APM queue
++ * (firmware "rx": rear, front, base) and the APM->AP queue ("tx"). A command
++ * is 4 words; word 0 carries a 6-bit sequence number at bit 16 that the reply
++ * repeats. The doorbell is bit (16 + channel id) of mailbox INTGR0.
++ *
++ * Boot-arg s8cpufreq: unset or 0, only read (channel table, both cluster
++ * rates); KHZ asks the A53 cluster (CPUCL1, ACPM id 3) for that rate;
++ * s8cpufreq_cl=1 targets the Mongoose cluster (CPUCL0, id 2) instead.
++ */
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <kern/clock.h>
++#include <pexpert/pexpert.h>
++#include <libkern/libkern.h>
++#include <pexpert/arm64/board_config.h>
++
++#if defined(ARM64_BOARD_CONFIG_A5XELTE) && defined(DREAMLTE)
++
++extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++
++#define LOG(fmt, ...)   printf("S8CPUFREQ: " fmt "\n", ##__VA_ARGS__)
++
++#define MBOX_PA         0x16440000UL
++#define SRAM_PA         0x16500000UL
++#define SRAM_SIZE       0xb400UL
++#define INITDATA_OFF    0x2850u
++#define INTGR0          0x08
++#define INTCR1          0x20
++#define INTSR1          0x28
++#define DVFS_CHANNEL    5
++#define FREQ_REQ        0
++#define FREQ_GET        1
++#define SEQ_SHIFT       16
++
++/* fw_header/framework.h, all u32 */
++#define FW_IPC_CHANNELS 2       /* struct acpm_framework: word index of ipc_channels */
++#define FW_IPC_AP_MAX   6
++#define CH_WORDS        18      /* struct ipc_channel */
++#define CH_ID           0
++#define CH_RX_REAR      4       /* AP -> APM queue */
++#define CH_RX_FRONT     5
++#define CH_RX_BASE      6
++#define CH_TX_REAR      10      /* APM -> AP queue */
++#define CH_TX_FRONT     11
++#define CH_TX_BASE      12
++#define CH_Q_LEN        13
++#define CH_Q_ELEM       14
++#define CH_AP_POLL      17
++
++/*
++ * The DVFS plugin is not resident in the APM firmware: Samsung's kernel copies
++ * it into the SRAM and attaches it (acpm.c plugins_init(), firmware
++ * exynos8895_acpm_dvfs.fw shipped in its firmware/ directory). That binary
++ * is not part of this repository: a local s8_acpm_dvfs_fw.h (const uint8_t
++ * s8_acpm_dvfs_fw[]) supplies it, else nothing is loaded.
++ */
++#if __has_include("s8_acpm_dvfs_fw.h")
++#include "s8_acpm_dvfs_fw.h"
++#define HAVE_DVFS_FW 1
++#endif
++#define PLUGIN_BYTES    44      /* struct plugin, 32-bit firmware layout */
++#define ACPM_CHANNEL    4       /* the "acpm" node's channel: plugin attach/detach */
++#define DP_ATTACH       (1u << 25)
++#define DP_DETACH       (1u << 24)
++#define PROTO_ID_SHIFT  26
++
++static volatile uint8_t *mbox, *sram;
++static uint32_t ch[CH_WORDS];
++static uint32_t seq;
++
++static inline uint32_t sr(uint32_t o) { return *(volatile uint32_t *)(sram + o); }
++static inline void sw(uint32_t o, uint32_t v) { *(volatile uint32_t *)(sram + o) = v; __asm__ volatile ("dsb sy" ::: "memory"); }
++static inline uint32_t mr(uint32_t o) { return *(volatile uint32_t *)(mbox + o); }
++static inline void mw(uint32_t o, uint32_t v) { *(volatile uint32_t *)(mbox + o) = v; __asm__ volatile ("dsb sy" ::: "memory"); }
++
++/* Send cmd[4], wait (polled) for the reply with the same sequence number; 0 or an errno. */
++/*
++ * TYPE_BUFFER channel (type 2, queue length 1: the DVFS one on this phone): a
++ * single shared slot each way, no queue indices (acpm_ipc.c dequeue_policy()
++ * reads the reply straight from the base). Write the slot, ring, wait for
++ * the channel's bit in INTSR1, read the reply slot, clear the bit.
++ */
++static int
++acpm_call_buffer(uint32_t cmd[4])
++{
++	uint32_t elem = ch[CH_Q_ELEM];
++
++	mw(INTCR1, 1u << ch[CH_ID]);
++	if (++seq == 64) {
++		seq = 1;
++	}
++	cmd[0] |= seq << SEQ_SHIFT;
++	for (unsigned w = 0; w < 4 && w * 4 < elem; w++) {
++		sw(ch[CH_RX_BASE] + w * 4, cmd[w]);
++	}
++	LOG("mbox before: sr0 %#x msr0 %#x mr0 %#x sr1 %#x msr1 %#x mr1 %#x", mr(0x14), mr(0x18), mr(0x10),
++	    mr(INTSR1), mr(0x2c), mr(0x24));
++	mw(INTGR0, (1u << ch[CH_ID]) << 16);
++	delay(100);
++	LOG("mbox after:  sr0 %#x msr0 %#x sr1 %#x; slot %#x %#x %#x %#x", mr(0x14), mr(0x18), mr(INTSR1),
++	    sr(ch[CH_RX_BASE]), sr(ch[CH_RX_BASE] + 4), sr(ch[CH_RX_BASE] + 8), sr(ch[CH_RX_BASE] + 12));
++	for (int t = 0; t < 50000; t++) {       /* 500 ms */
++		if (mr(INTSR1) & (1u << ch[CH_ID])) {
++			for (unsigned w = 0; w < 4 && w * 4 < elem; w++) {
++				cmd[w] = sr(ch[CH_TX_BASE] + w * 4);
++			}
++			mw(INTCR1, 1u << ch[CH_ID]);
++			return 0;
++		}
++		delay(10);
++	}
++	LOG("mbox timeout: sr0 %#x sr1 %#x; reply slot %#x %#x %#x %#x", mr(0x14), mr(INTSR1),
++	    sr(ch[CH_TX_BASE]), sr(ch[CH_TX_BASE] + 4), sr(ch[CH_TX_BASE] + 8), sr(ch[CH_TX_BASE] + 12));
++	return ETIMEDOUT;
++}
++
++/*
++ * The loader's text (Mongoose probe and the rest) is in the TWRP ramoops
++ * console zone, which TWRP may overwrite: copy its MNGS part into our log.
++ */
++static void
++loader_mngs_to_log(void)
++{
++	volatile const char *z = (volatile const char *)ml_io_map(0x92080000UL, 0x80000);
++	if (!z) {
++		return;
++	}
++	const unsigned n = 0x80000 - 12;
++	for (unsigned i = 12; i + 10 < n; i++) {
++		if (z[i] != 'M' || z[i + 1] != 'N' || z[i + 2] != 'G' || z[i + 3] != 'S' || z[i + 4] != ' ') {
++			continue;
++		}
++		char line[160];
++		unsigned l = 0;
++		for (unsigned j = i; j < n && j < i + 1200; j++) {
++			char c = z[j];
++			if (c == '\n' || l == sizeof(line) - 1) {
++				line[l] = 0;
++				printf("S8LOADER: %s\n", line);
++				bool last = j > i + 16 && l >= 15 && strncmp(line, "MNGS probe done", 15) == 0;
++				l = 0;
++				if (last) {
++					return;
++				}
++				continue;
++			}
++			line[l++] = (c >= 32 && c < 127) ? c : '.';
++		}
++		return;
++	}
++	printf("S8LOADER: no MNGS text in the console zone\n");
++}
++
++static int
++acpm_call(uint32_t cmd[4])
++{
++	if (ch[3] == 2) {                       /* type: TYPE_BUFFER */
++		return acpm_call_buffer(cmd);
++	}
++	uint32_t len = ch[CH_Q_LEN], elem = ch[CH_Q_ELEM];
++	uint32_t front = sr(ch[CH_RX_FRONT]), next = (front + 1) % len;
++
++	for (int i = 0; i < 1000 && next == sr(ch[CH_RX_REAR]); i++) {
++		delay(10);
++	}
++	if (next == sr(ch[CH_RX_REAR])) {
++		return EBUSY;
++	}
++	if (++seq == 64) {
++		seq = 1;
++	}
++	cmd[0] |= seq << SEQ_SHIFT;
++	for (unsigned w = 0; w < 4 && w * 4 < elem; w++) {
++		sw(ch[CH_RX_BASE] + elem * front + w * 4, cmd[w]);
++	}
++	sw(ch[CH_RX_FRONT], next);
++	mw(INTGR0, (1u << ch[CH_ID]) << 16);
++
++	for (int t = 0; t < 50000; t++) {       /* 500 ms */
++		uint32_t rear = sr(ch[CH_TX_REAR]), f = sr(ch[CH_TX_FRONT]);
++		for (uint32_t i = rear; i != f; i = (i + 1) % len) {
++			uint32_t w0 = sr(ch[CH_TX_BASE] + elem * i);
++			if (((w0 >> SEQ_SHIFT) & 0x3f) != seq) {
++				continue;
++			}
++			for (unsigned w = 0; w < 4 && w * 4 < elem; w++) {
++				cmd[w] = sr(ch[CH_TX_BASE] + elem * i + w * 4);
++			}
++			if (i != rear) {        /* as acpm_ipc.c: the entry at rear moves into the hole */
++				for (unsigned w = 0; w * 4 < elem; w++) {
++					sw(ch[CH_TX_BASE] + elem * i + w * 4, sr(ch[CH_TX_BASE] + elem * rear + w * 4));
++				}
++			}
++			rear = (rear + 1) % len;
++			sw(ch[CH_TX_REAR], rear);
++			if (rear == sr(ch[CH_TX_FRONT])) {
++				mw(INTCR1, 1u << ch[CH_ID]);
++			}
++			return 0;
++		}
++		delay(10);
++	}
++	return ETIMEDOUT;
++}
++
++static uint32_t chans_off, chans_count;
++static uint32_t fvmap_off;          /* DVFS plugin rate tables, set when it is attached */
++static unsigned dvfs_channel = DVFS_CHANNEL;
++
++static void
++load_channel(unsigned c)
++{
++	for (unsigned w = 0; w < CH_WORDS; w++) {
++		ch[w] = sr(chans_off + (c * CH_WORDS + w) * 4);
++	}
++}
++
++static void
++sram_string(uint32_t off, char *out, unsigned n)
++{
++	unsigned i = 0;
++	for (; off && off + i < SRAM_SIZE && i + 1 < n; i++) {
++		char c = (char)sram[off + i];
++		if (c == 0) {
++			break;
++		}
++		out[i] = (c >= 32 && c < 127) ? c : '.';
++	}
++	out[i] = 0;
++}
++
++/* List the plugins; load and attach the DVFS one if it is not attached yet. */
++static void
++plugins(void)
++{
++	uint32_t table = sr(INITDATA_OFF), count = sr(INITDATA_OFF + 4);
++	for (uint32_t i = 0; i < count && i < 16; i++) {
++		uint32_t b = table + i * PLUGIN_BYTES;
++		uint32_t id = sr(b), base = sr(b + 4), size = sr(b + 32), name = sr(b + 40);
++		uint8_t attached = sram[b + 28], stay = sram[b + 36];
++		char n[48];
++		sram_string(name, n, sizeof(n));
++		LOG("plugin %u: id %u base %#x size %u attached %u stay %u name \"%s\"", i, id, base, size, attached,
++		    stay, n);
++		if (attached && !stay) {
++			/* attached at boot, not meant to stay (acpm.c plugins_init): detach it first */
++			load_channel(ACPM_CHANNEL);
++			uint32_t cmd[4] = { DP_DETACH | (id << PROTO_ID_SHIFT), 0, 0, 0 };
++			int e = acpm_call(cmd);
++			LOG("plugin %u: detach: %d (reply %#x %#x), attached now %u", i, e, cmd[0], cmd[1], sram[b + 28]);
++			continue;
++		}
++#if HAVE_DVFS_FW
++		if (attached || !stay || strncmp(n, "exynos8895_acpm_dvfs", 20) != 0) {
++			continue;
++		}
++		uint32_t at = base & ~1u;
++		if (at == 0 || at + sizeof(s8_acpm_dvfs_fw) > SRAM_SIZE) {
++			LOG("plugin %u: %u bytes do not fit at %#x", i, (unsigned)sizeof(s8_acpm_dvfs_fw), at);
++			continue;
++		}
++		for (uint32_t o = 0; o < sizeof(s8_acpm_dvfs_fw); o += 4) {
++			uint32_t w;
++			memcpy(&w, s8_acpm_dvfs_fw + o, 4);
++			sw(at + o, w);
++		}
++		load_channel(ACPM_CHANNEL);
++		uint32_t cmd[4] = { DP_ATTACH | (id << PROTO_ID_SHIFT), 0, 0, 0 };
++		int e = acpm_call(cmd);
++		LOG("plugin %u: %u bytes loaded at %#x, attach: %d (reply %#x %#x), attached now %u", i,
++		    (unsigned)sizeof(s8_acpm_dvfs_fw), at, e, cmd[0], cmd[1], sram[b + 28]);
++		fvmap_off = at + size;  /* cal-if fvmap_init(base + size) */
++		/* its channel: the one whose owner mask names this plugin (the DT's 5 is not it here) */
++		for (unsigned c = 0; c < chans_count; c++) {
++			if (sr(chans_off + (c * CH_WORDS + 2) * 4) == (1u << id)) {
++				dvfs_channel = c;
++				LOG("plugin %u owns channel %u", i, c);
++				break;
++			}
++		}
++#endif
++	}
++}
++
++/* CMU_CPUCL0 (Mongoose) 0x16800000, CMU_CPUCL1 (A53) 0x16900000: PLL_CON0 at +0x120, PLL1050x/1051x */
++static uint32_t
++pll_mhz(vm_offset_t cmu, uint32_t *raw)
++{
++	uint32_t v = *(volatile uint32_t *)(cmu + 0x120);
++	uint32_t m = (v >> 16) & 0x3ff, pdiv = (v >> 8) & 0x3f, sdiv = v & 7;
++	*raw = v;
++	return (v & (1u << 31)) && pdiv ? (uint32_t)(26ULL * m / ((uint64_t)pdiv << sdiv)) : 0;
++}
++
++static void
++log_plls(const char *when)
++{
++	static vm_offset_t big, little;
++	uint32_t rb, rl;
++	if (!big) {
++		big = ml_io_map(0x16800000UL, 0x1000);
++		little = ml_io_map(0x16900000UL, 0x1000);
++	}
++	uint32_t mb = pll_mhz(big, &rb), ml = pll_mhz(little, &rl);
++	LOG("%s: PLL A53 %u MHz (%#x), PLL Mongoose %u MHz (%#x)", when, ml, rl, mb, rb);
++}
++
++/*
++ * fvmap: the DVFS plugin's rate/voltage tables right after its code in SRAM
++ * (cal-if/fvmap.c): one 24-byte header per ACPM domain (num_of_lv at +1,
++ * init_lv at +8, o_ratevolt at +0x14), rate/volt pairs (kHz, uV) at
++ * fvmap + o_ratevolt. Logs a domain's table; returns its highest rate <= limit.
++ */
++
++
++static uint32_t
++fvmap_pick(uint32_t id, uint32_t limit)
++{
++	if (fvmap_off == 0 || fvmap_off + 24 * (id + 1) > SRAM_SIZE) {
++		return 0;
++	}
++	uint32_t h = fvmap_off + 24 * id;
++	uint32_t lv = sram[h + 1], init = sram[h + 8];
++	uint32_t o_rv = sram[h + 0x14] | (uint32_t)sram[h + 0x15] << 8;      /* o_ratevolt */
++	uint32_t best = 0;
++	LOG("fvmap id %u: %u levels, init level %u, table at +%#x", id, lv, init, o_rv);
++	for (uint32_t i = 0; i < lv && i < 32 && fvmap_off + o_rv + 8 * i + 8 <= SRAM_SIZE; i++) {
++		uint32_t rate = sr(fvmap_off + o_rv + 8 * i), volt = sr(fvmap_off + o_rv + 8 * i + 4);
++		LOG("fvmap id %u lv %u: %u kHz %u uV", id, i, rate, volt);
++		if (rate <= limit && rate > best) {
++			best = rate;
++		}
++	}
++	return best;
++}
++
++static uint32_t
++get_rate(uint32_t id)
++{
++	uint32_t cmd[4] = { id, 0, FREQ_GET, 0 };
++	int e = acpm_call(cmd);
++	return e ? 0 : cmd[1];
++}
++
++void s8_cpufreq_start(void);
++
++void
++s8_cpufreq_start(void)
++{
++	static bool done;
++	uint32_t want = 0, cl = 0;
++
++	if (done) {
++		return;
++	}
++	done = true;
++	loader_mngs_to_log();
++	PE_parse_boot_argn("s8cpufreq", &want, sizeof(want));
++	PE_parse_boot_argn("s8cpufreq_cl", &cl, sizeof(cl));
++	if (want == 1) {        /* "s8cpufreq=1": nothing asked, keep reading only */
++		want = 0;
++	}
++	mbox = (volatile uint8_t *)ml_io_map(MBOX_PA, 0x1000);
++	sram = (volatile uint8_t *)ml_io_map(SRAM_PA, SRAM_SIZE);
++	if (!mbox || !sram) {
++		LOG("map failed");
++		return;
++	}
++	uint32_t chans = sr(INITDATA_OFF + FW_IPC_CHANNELS * 4), apmax = sr(INITDATA_OFF + FW_IPC_AP_MAX * 4);
++	LOG("framework: ipc_channels %#x ap channels %u, intsr1 %#x", chans, apmax, mr(INTSR1));
++	if (apmax <= DVFS_CHANNEL || chans == 0 || chans + (DVFS_CHANNEL + 1) * CH_WORDS * 4 > SRAM_SIZE) {
++		LOG("no DVFS channel, stopping");
++		return;
++	}
++	for (unsigned c = 0; c < apmax && c < 8; c++) {
++		uint32_t b = chans + c * CH_WORDS * 4;
++		LOG("raw ch%u: %x %x %x %x | %x %x %x %x %x %x | %x %x %x %x %x %x %x | %x", c,
++		    sr(b), sr(b + 4), sr(b + 8), sr(b + 12), sr(b + 16), sr(b + 20), sr(b + 24), sr(b + 28), sr(b + 32),
++		    sr(b + 36), sr(b + 40), sr(b + 44), sr(b + 48), sr(b + 52), sr(b + 56), sr(b + 60), sr(b + 64),
++		    sr(b + 68));
++	}
++	for (unsigned w = 0; w < 16; w++) {
++		LOG("initdata[%u] = %#x", w, sr(INITDATA_OFF + w * 4));
++	}
++	chans_off = chans;
++	chans_count = apmax;
++	plugins();
++	load_channel(dvfs_channel);
++	if (ch[CH_RX_REAR] < SRAM_SIZE && ch[CH_TX_REAR] < SRAM_SIZE) {
++		LOG("dvfs queues: ap->apm rear %u front %u, apm->ap rear %u front %u", sr(ch[CH_RX_REAR]),
++		    sr(ch[CH_RX_FRONT]), sr(ch[CH_TX_REAR]), sr(ch[CH_TX_FRONT]));
++	}
++	LOG("dvfs channel: id %u q_len %u elem %u poll %u ap->apm %#x/%#x/%#x apm->ap %#x/%#x/%#x",
++	    ch[CH_ID], ch[CH_Q_LEN], ch[CH_Q_ELEM], ch[CH_AP_POLL], ch[CH_RX_REAR], ch[CH_RX_FRONT], ch[CH_RX_BASE],
++	    ch[CH_TX_REAR], ch[CH_TX_FRONT], ch[CH_TX_BASE]);
++	if (ch[CH_Q_LEN] == 0 || ch[CH_Q_LEN] > 64 || ch[CH_Q_ELEM] < 16 || ch[CH_Q_ELEM] > 64 ||
++	    ch[CH_TX_BASE] >= SRAM_SIZE || ch[CH_RX_BASE] >= SRAM_SIZE) {
++		LOG("implausible channel, stopping");
++		return;
++	}
++	seq = (sr(ch[CH_RX_BASE] + ch[CH_Q_ELEM] * ((sr(ch[CH_RX_FRONT]) + ch[CH_Q_LEN] - 1) % ch[CH_Q_LEN])) >> SEQ_SHIFT) & 0x3f;
++	LOG("ACPM get: Mongoose %u kHz, A53 %u kHz", get_rate(2), get_rate(3));
++	log_plls("before");
++	uint32_t want_big = 0, chan = 0;
++	PE_parse_boot_argn("s8cpufreq_big", &want_big, sizeof(want_big));
++	PE_parse_boot_argn("s8cpufreq_ch", &chan, sizeof(chan));
++	if (want == 0 && want_big == 0) {
++		return;
++	}
++	/*
++	 * Requests go to channel 0 by default: Samsung's acpm_dvfs.ch_num stays 0
++	 * when its channel lookup runs before the cal-if probe, so the vendor
++	 * kernel's DVFS requests use channel index 0 (a queue channel).
++	 */
++	if (chan >= chans_count) {
++		chan = 0;
++	}
++	load_channel(chan);
++	LOG("requests on channel %u (q_len %u type %u)", chan, ch[CH_Q_LEN], ch[3]);
++	/* ACPM ids: dvfs_cpucl0 = 2 is the Mongoose cluster (CPUCL0), dvfs_cpucl1 = 3 the A53s */
++	/*
++	 * Memory (MIF, id 0) and internal bus (INT, id 1) clocks: s8mif / s8int =
++	 * kHz limits, off by default. Raising MIF to its top level froze the phone
++	 * with a display underrun stripe (Samsung coordinates MIF changes with
++	 * DECON; we do not).
++	 */
++	uint32_t want_mif = 0, want_int = 0;
++	PE_parse_boot_argn("s8mif", &want_mif, sizeof(want_mif));
++	PE_parse_boot_argn("s8int", &want_int, sizeof(want_int));
++	static const struct { uint32_t id; const char *name; } dom[4] = {
++		{ 3, "A53" }, { 2, "Mongoose" }, { 0, "MIF" }, { 1, "INT" } };
++	for (int d = 0; d < 4; d++) {
++		uint32_t limit = d == 0 ? want : d == 1 ? want_big : d == 2 ? want_mif : want_int;
++		if (limit == 0) {
++			continue;
++		}
++		uint32_t rate = fvmap_pick(dom[d].id, limit);
++		if (rate == 0) {
++			if (d >= 2) {
++				LOG("%s: no fvmap rate, skipped", dom[d].name);
++				continue;
++			}
++			LOG("%s: no fvmap rate <= %u kHz, asking %u as given", dom[d].name, limit, limit);
++			rate = limit;
++		}
++		LOG("%s: ACPM rate before %u kHz", dom[d].name, get_rate(dom[d].id));
++		uint32_t cmd[4] = { dom[d].id, rate, FREQ_REQ, 0 };
++		int e = acpm_call(cmd);
++		LOG("%s -> %u kHz: %d (reply %#x %#x %#x %#x)", dom[d].name, rate, e, cmd[0], cmd[1], cmd[2], cmd[3]);
++		delay(100000);
++		log_plls("after");
++	}
++}
++
++#elif defined(ARM64_BOARD_CONFIG_A5XELTE)
++void s8_cpufreq_start(void);
++void
++s8_cpufreq_start(void)
++{
++}
++#endif
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index 726e225..cf26359 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -879,6 +879,8 @@ sweet_ufs_rootdev(dev_t *dev)
+ #if defined(ARM64_BOARD_CONFIG_A5XELTE)
+ 	/* boot-arg s8wlan=N (bsd/dev/s8_wlan.c): started once, whether or not a root is found */
+ 	extern void s8_wlan_start(void);
++	extern void s8_cpufreq_start(void);
++	s8_cpufreq_start();             /* boot-arg s8cpufreq=KHZ (bsd/dev/s8_cpufreq.c) */
+ 	s8_wlan_start();
+ #endif
+ 	if (!su.ready) {

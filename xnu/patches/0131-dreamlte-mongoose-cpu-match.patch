@@ -1,0 +1,13 @@
+diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
+index 9a35982..eeaa219 100644
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -49,7 +49,7 @@ const char * gIOKernelConfigTables =
+     "     'IOClass'         = SweetCPU;"
+     "     'IOProviderClass' = IOPlatformDevice;"
+ #if defined(ARM64_BOARD_CONFIG_A5XELTE)
+-    "     'IONameMatch'     = 'arm,cortex-a53';"
++    "     'IONameMatch'     = ('arm,cortex-a53', 'samsung,mongoose-m2');"
+ #else
+     "     'IONameMatch'     = 'qcom,kryo470';"
+ #endif

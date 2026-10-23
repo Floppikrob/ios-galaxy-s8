@@ -292,21 +292,28 @@ dreamlte_touch_start(void)
 	}
 	uint8_t func[3] = {0x30, 0x01, 0x00};                  /* TOUCH_FUNCTION = touch */
 	uint8_t sense = 0x10;                                   /* SENSE_ON */
-	/* Boot 40: the ID read worked, then one enable write failed and touch
-	 * stayed off for the whole boot. Retry after a bus reset. */
+	/*
+	 * Right after its rails come up the controller answers reads but may not
+	 * take writes yet (Linux waits 140 ms for INFO_BOOT_COMPLETE first), and
+	 * on boot 40 a failed write left the bus stuck: retry after a bus reset.
+	 */
 	int tries = 0;
-	while (!s8i2c_xfer(s8ts_i2c, S8TS_ADDR, func, 3, NULL, 0) ||
-	    !s8i2c_xfer(s8ts_i2c, S8TS_ADDR, &sense, 1, NULL, 0)) {
-		if (++tries == 5) {
-			printf("S8 TOUCH: enable sequence failed\n");
-			return;
+	bool f = false, s = false;
+	for (; tries < 20; tries++) {
+		f = s8i2c_xfer(s8ts_i2c, S8TS_ADDR, func, 3, NULL, 0);
+		s = f && s8i2c_xfer(s8ts_i2c, S8TS_ADDR, &sense, 1, NULL, 0);
+		if (s) {
+			break;
 		}
 		s8i2c_reset(s8ts_i2c);
-		delay(20000);
+		delay(50000);
 	}
-	if (tries) {
-		printf("S8 TOUCH: enable sequence ok after %d retries\n", tries);
+	if (!s) {
+		printf("S8 TOUCH: enable sequence failed (%s), int %#x trans %#x\n",
+		    f ? "SENSE_ON" : "TOUCH_FUNCTION", a5touch_read(s8ts_i2c, 0x24), a5touch_read(s8ts_i2c, 0x50));
+		return;
 	}
+	printf("S8 TOUCH: enabled after %d retries\n", tries);
 	if (kernel_thread_start(s8ts_thread, NULL, &thread) == KERN_SUCCESS) {
 		thread_deallocate(thread);
 	} else {

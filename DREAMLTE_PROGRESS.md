@@ -297,7 +297,7 @@ leaves ~1050 of 1690 MHz; Linux sets it through the ACPM DVFS plugin, which
 Linux itself loads from firmware files) and zero-copy scanout from the
 IOSurface (DECON IDMA base, probe in progress).
 
-## Next
+## Next (as of 04b4172, superseded: see the last section)
 
 1. Boot `04b4172` + the eight-core change with `cpus=8 s8mngsdbg=1`: check
    tearing and the Mongoose lines above.
@@ -509,3 +509,189 @@ the kernel, must get GPU memory and run Mali jobs.
   address s/t/r (3 bits each; 0 clamp_to_zero?, 1 clamp_to_edge,
   2 repeat), bits 9/11/13 mag/min/mip linear (decoded from CA's values,
   unverified). Then raise sweetfb_hz to 60.
+
+## s8-network branch (2026-10-21, merged 2026-10-23)
+
+The sections below were written on the `s8-network` branch, in parallel with
+the GPU/Metal work above. Both started from `04b4172`.
+
+## Console filter (patch 0125)
+
+Boot-arg `sweetlog=WORD,WORD,...` draws on the screen only the console lines
+that contain one of the words; `-WORD` hides lines with that word (with only
+`-` words every other line is drawn). A panic is always drawn and the
+persistent log still gets every line. A plain number (`sweetlog=0`/`1`) keeps
+its old meaning (persistent log off/on) and is not a filter. Example:
+`sweetlog=S8WLAN,S8CHG,panic` or `sweetlog=-hfs,-AMFI`. Ported from
+MakrSas/ios-topaz 0112. Not yet built in CI or tried on the phone.
+
+## Wi-Fi step 1 (patch 0126, 2026-10-21)
+
+`bsd/dev/s8_wlan.c`, boot-arg `s8wlan=N` (steps 1..N), written after
+MakrSas/LinuxS8 `pcie-exynos8895.c` + quirk and brcmfmac. Started once when
+the root search begins; with no root found it waits for the steps (max 60 s)
+before the root-device panic. Locally built kernel, BOOT image with
+`ufsroot=NOSUCHPART` (no UFS writes; the test phone carries LinuxS8 Debian).
+
+Phone result (photo), all 5 steps:
+- survey: S-Boot leaves the FSYS1 PCIe gates on (0x200000), PMU PCIe PHY 0;
+- power: WLAN_REG_ON gpj1-3 high (dat 0x2b), PMU PHY control 0x1;
+- link: up on try 3 (LTSSM 0x3607d11); tries 1-2 fail as under Linux;
+- config: endpoint `0x441f14e4`, class 0x280000, BAR0 32 KiB, BAR2 4 MiB;
+- bars: ChipCommon chip id `0x10034361` = BCM4361 rev 3.
+
+Next: firmware + NVRAM download to TCM (rambase 0x170000), wait for the
+shared-RAM address, then msgbuf rings.
+
+## Speed work (2026-10-21, patches 0127-0133, local Mac builds)
+
+Measured with patch 0128 (S8FPS: present rate and copy cost) and 0129
+(S8LOAD per-CPU user/system/idle every 10 s, S8TOP top tasks, S8VM):
+- The panel copy is cheap (5-8 ms per frame); backboardd itself submits
+  only ~0.6-1.5 frames per second.
+- With 4 A53s all CPUs were 100% busy: crash loops (xpcproxy 4862,
+  fairplayd.H2 1296, bluetoothd 1291, nanotimekitcompaniond 1263 launches in
+  one session, each a dyld start + crash report), `vmd` spinning a whole core,
+  launchd ~0.35 core. **0130 `s8noexec=NAME,...`** refuses such programs at
+  exec (no crash report). Used: `s8noexec=vmd,bluetoothd,fairplayd.H2,
+  nanotimekitcompaniond,locationd,WirelessRadioManagerd,CommCenterMobileHelper`.
+- **Mongoose cluster runs: `cpus=8` brings up all eight cores** (plain PSCI
+  CPU_ON + the existing PMU power-up, with the loader's mngs_probe not run).
+  Needed: 0131 (SweetCPU matches `samsung,mongoose-m2`), 0132 (the
+  single-cluster clutch scheduler's steal_thread returned with the pset lock
+  held: thread_select re-took it and panicked), 0133 (both clusters in one
+  pset: the clutch scheduler enqueued under the wrong pset lock with two).
+  The loader's mngs_probe must not run before (it was disabled locally for
+  these boots; it powers the cluster itself).
+- With 8 cores the CPUs are no longer saturated (idle 15-65% while touching),
+  yet backboardd spends ~1.6 CPU-seconds per frame: something per frame is
+  pathologically expensive. Next: profile backboardd.
+- 0127: ACPM. The DVFS plugin is not resident; Samsung's kernel loads
+  exynos8895_acpm_dvfs.fw (from its firmware/ dir) into APM SRAM and
+  attaches it. Loading + detach of plugin 2 + attach of plugin 3 over channel
+  4 works (acknowledged), but FREQ_REQ on the buffer-type channels (3 by owner
+  mask, 5 by DT) is not answered and the PLLs do not change (A53 1053 MHz,
+  Mongoose 1066 MHz). The firmware binary is not in this repository: a local
+  `bsd/dev/s8_acpm_dvfs_fw.h` supplies it.
+- RAM: `S8_DRAM_MIB=1024 make-boot.sh ...` gives XNU 1 GiB (boots fine).
+
+## CPU clocks through ACPM work (2026-10-21, patch 0127)
+
+The DVFS plugin answers on **channel 0** (a queue channel), not on the
+buffer-type channels 3/5: Samsung's acpm_dvfs.ch_num stays 0 when its channel
+lookup runs before the cal-if probe, so the vendor kernel itself uses index 0.
+Rates must be levels of the plugin's fvmap (rate/voltage tables right after
+the plugin in SRAM; header o_ratevolt at +0x14). Read from the phone:
+- A53 (id 3): 2002 1898 1794 **1690** 1456 1248 1053 949 832 715 598 455 MHz
+- Mongoose (id 2): 2808 2704 2652 2574 2496 **2314** 2158 2002 1937 1807 1703
+  1469 1261 1170 1066 962 850 741 MHz
+With `s8cpufreq=1690000 s8cpufreq_big=2314000` the PLLs read back 1690 and
+2314 MHz (from 1053 / 1066). The firmware sets the voltages.
+Raising MIF (id 0) to its top level froze the phone with a display underrun
+stripe: Samsung coordinates MIF switches with DECON. MIF/INT are now only
+touched with explicit `s8mif=`/`s8int=`.
+
+Profile (0134 `s8prof=backboardd`): the remaining frame cost is CoreAnimation's
+software renderer (CA::OGL::SW image_sampler, vAlpha_Blend, memset_pattern16);
+note the sampler also counts parked workqueue threads (workq_kernreturn,
+start_wqthread), which are idle, not busy (S8WQ: ~70 creations per session).
+
+## GPU step 1 (patch 0135, 2026-10-21)
+
+`s8g3d=455000` asks ACPM for the G3D clock (dvfs_g3d, id 4): PLL_G3D reads
+back 455 MHz (0xa08c0411); the firmware sets the voltage. `s8gpu=1` logs:
+pd_g3d status 0x3000f (on), GPU_ID 0x60a00001 (Mali-G71 r0p0), L2 0x7130206,
+tiler 0x809, mem 0x301, MMU 0x2830, AS 0xff, JS 0x7, shader present
+0x17771777 (20 cores), IRQ raw 0x100 (reset completed). Same as LinuxS8's
+panfrost probe.
+ACPM tables read on the phone: MIF (id 0) 2093/2002 (voltage 0: disabled)
+1794 1540 1352 1014 845 676 546 421 286 208 MHz; INT (id 1) 667 533 400 333
+267 178 107 MHz (667 works); G3D (id 4) 839/764/683 (disabled) 572 546 455
+385 338 260 MHz. The MIF freeze above asked for 2093 MHz, a disabled level.
+
+## GPU runs its first job (patch 0135, s8gpu=3)
+
+Soft reset, L2 + 20 shader cores + tiler powered (ready 0x1 / 0x17771777 /
+0x1). Address space 0 with Mali LPAE page tables (4 levels; table = pa | 3,
+leaf = pa | 1 (block) | HAP read 1<<6 | HAP write 2<<6 | SH_OS 2<<8, attr
+index 0; Mali LPAE has stage-1 attributes but stage-2 permissions: the first
+try with AP_UNPRIV/nG faulted 0xC8 on the write), MEMATTR 0x88/0x8d/0x88,
+TRANSCFG legacy. A WRITE_VALUE job (v6 header type 2, Immediate 32) on slot 1
+stores 0xCAFEBABE: job IRQ 0x2, no MMU fault, header exception 0x1, the CPU
+reads 0xcafebabe back. Next: a kernel interface for userspace (panfrost
+ioctls: BO create/mmap, submit, wait) and Mesa panfrost for iOS.
+
+## GPU from userspace, Wi-Fi firmware running, hands-free test boots (2026-10-21)
+
+- **0136 S8GPU** (boot-arg s8gpu=4): IOKit service + user client answering
+  panfrost DRM requests (GET_PARAM, CREATE_BO, MMAP_BO, GET_BO_OFFSET, SUBMIT
+  (synchronous), WAIT_BO, MADVISE); per-client GPU address space (AS 1-7),
+  wired buffers mapped write-combined into the client. tools/dreamlte/
+  s8gpu-test.c (a launchd job in the root) creates two buffers, submits a
+  WRITE_VALUE job: "GPU WROTE IT FROM USERSPACE".
+- 0130 also marks binaries in /usr/local/bin as platform binaries (launchd
+  panics on a non-platform binary among its system jobs).
+- `s8int=667000` (INT bus at its top level while MIF stays low) correlates
+  with SHA-256 data aborts in code-signing page checks: left out.
+- **0126 Wi-Fi step 6**: EROM scan (ChipCommon, 2x D11, ARM CR4 rev 13, PCIe2
+  rev 23, ...), CR4 halted, TCM 1344 KiB, firmware + NVRAM written at
+  rambase 0x170000 through BAR2, ARM released: the firmware publishes its
+  shared area (0x1fc8b4, flags 0x30040007: msgbuf protocol 7). Firmware and
+  NVRAM come from a local header (not in this repository).
+- **0129 s8autotwrp=N**: N seconds after boot the kernel writes the log out
+  and reboots into TWRP (PMU INFORM2 0x12345678, INFORM3 0x12345674, as
+  Samsung's sec_reboot.c, then SWRESET): test boots need no button presses.
+
+## Merge of the two branches and where we stopped (2026-10-23)
+
+The GPU/Metal work (`claude/gracious-hawking-jjkfp0`, up to `fa99d7a`) and
+`s8-network` (up to `be6fc5e`) are merged. Nothing from this merge has been
+built in CI or booted yet.
+
+- `0124` was regenerated with `apply-dreamlte.py` on a local replay of
+  xnu-8796.141.3 + 0001-0123. It matches the Metal branch's 0124 except for
+  the touch enable sequence. That sequence now combines both branches: up to
+  20 tries, a bus reset and 50 ms between tries, and the failing register in
+  the error line.
+- `0125`-`0136` (s8-network) were rebased onto the new 0124 by a 3-way git
+  rebase. Two conflicts came up:
+  - 0128: both stat blocks are kept. The Metal branch's `SWEET FB: 10s` and
+    s8-network's `S8FPS` both measure presents.
+  - 0133: the Metal branch's 0124 already sets `phys_cluster_id = 0` on
+    DREAMLTE, so 0133 only adds the comment.
+- All 0124-0136 apply with plain `git apply` in order, which is the CI path.
+- Two independent GPU interfaces are now in the kernel. They are selected by
+  boot-args:
+  - s8-network: `S8GPU` IOKit user client (panfrost requests, `s8gpu=4`) and
+    `s8_gpu.c` (`s8gpu>=1`).
+  - Metal branch: `/dev/s8mali` (`dreamlte_s8.c`), `sweetfb_gpu=1` and
+    `s8metal=1`.
+
+  Do not enable both at once: each resets and powers the Mali itself.
+- Mongoose: the two branches used different start paths.
+  - s8-network reached eight cores with `cpus=8`. It used XNU's PSCI
+    CPU_ON + PMU power-up, with the loader's `mngs_probe` disabled locally.
+  - The merged loader still runs `mngs_probe` and caps `cpus`. That path has
+    never started a Mongoose core.
+  - New loader boot-arg **`s8mngs=0`**: skips the probe and the cap.
+  - The merged 0124 also runs `cluster0_on` in `SweetCPU::startCPU`. That
+    code is from the Metal branch and is untested.
+- Local-only inputs:
+  - Wi-Fi firmware/NVRAM header (`s8_wlan_fw.h`) and ACPM DVFS firmware
+    header (`s8_acpm_dvfs_fw.h`). Both are `__has_include` optional, so a CI
+    kernel builds without them but does no Wi-Fi step 6 and no CPU clocks.
+  - SDK and Mesa for the Metal plugin.
+
+### Next
+
+1. CI kernel build of the merged tree. For CPU clocks and Wi-Fi, build
+   locally with the firmware headers.
+2. Boot the merged kernel with the known-good boot 46 arguments. Check:
+   - touch, frames, `SWEET FB`/`S8FPS` lines;
+   - then `cpus=8 s8mngs=0` with the s8-network `s8noexec=` list and
+     `s8cpufreq=1690000 s8cpufreq_big=2314000`.
+3. Metal stage 3: `tools/dreamlte/metal/s8mtl_draw.c` (Mali job chain per
+   pass and draw, see "Boot 50 result" above). Then raise `sweetfb_hz` to 60.
+4. A Remote Control session on the user's computer can flash BOOT, reboot
+   (`s8autotwrp=N` returns to TWRP by itself) and pull the logs
+   (`tools/dreamlte/pull-sweetlog.sh`) without the user.

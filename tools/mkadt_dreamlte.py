@@ -24,6 +24,8 @@ DRAM_BASE = 0x880000000
 # 512 MiB, the A5XELTE-proven size: with the whole 2 GiB bank the first S8
 # boot panicked in kmem_range_init (kernel VA claims in the 39-bit 4K layout).
 DRAM_SIZE = 0x20000000
+# S8_DRAM_MIB=N overrides it (testing more RAM; the bank holds 2048 MiB).
+DRAM_SIZE = int(__import__("os").environ.get("S8_DRAM_MIB", DRAM_SIZE >> 20)) << 20
 FB_PHYS, FB_W, FB_H = 0xcc000000, 1440, 2960
 TIMEBASE = 26000000
 
@@ -57,7 +59,7 @@ def cpu_node(logical):
         ('cluster-type', mkadt.u32(0)),
         ('die-cluster-id', mkadt.u32(cluster)),
         ('cluster-core-id', mkadt.u32(logical % 4)),
-        ('l2-cache-id', mkadt.u32(cluster)),
+        ('l2-cache-id', mkadt.u32(0 if a53 else 1)),
         ('l3-cache-id', mkadt.u32(0)),
         ('state', mkadt.cstr('running' if logical == 0 else 'stopped')),
         ('timebase-frequency', mkadt.u32(TIMEBASE)),

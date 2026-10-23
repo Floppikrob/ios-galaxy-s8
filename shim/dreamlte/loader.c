@@ -460,7 +460,10 @@ uint64_t dl_main(uintptr_t dtb, uint64_t el, uint64_t sctlr)
 		pmic_g3d_rail();
 		gpu_probe(kv, out);
 	}
-	cap_cpus(ba, mngs_probe(kv, out, arg_at(ba, "s8mngsdbg=1") >= 0));
+	/* s8mngs=0: no probe, no cap. The s8-network boots reached eight cores
+	 * this way, with XNU's PSCI CPU_ON and PMU power-up alone. */
+	if (arg_at(ba, "s8mngs=0") < 0)
+		cap_cpus(ba, mngs_probe(kv, out, arg_at(ba, "s8mngsdbg=1") >= 0));
 	clean(ba_pa, ba_pa + PAGE_SIZE);
 	/* smp_probe(kv, out) proved the PMU power-up (boot 19); it leaves the
 	 * probed cores' PMU power on, which hid the 0 -> 0xF edge XNU needs. */
