@@ -8,12 +8,13 @@
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 out=$(realpath -m "${1:-$here/out}")
+clang=$(command -v clang-18 || command -v clang)
 b=$out/S8MaliMetal.bundle
 mkdir -p "$b" "$out/obj"
 objs=()
 for src in "$here"/s8mtl_*.m; do
 	o=$out/obj/$(basename "${src%.m}").o
-	clang -target arm64-apple-ios16.0 -O2 -Wall -Wextra -Werror -Wno-objc-root-class \
+	"$clang" -target arm64-apple-ios16.0 -O2 -Wall -Wextra -Werror -Wno-objc-root-class \
 		-Wno-unused-parameter -fno-stack-protector -fobjc-runtime=ios-16.0 -fno-objc-arc \
 		-fno-objc-exceptions -fblocks -nostdlibinc -isystem "$here/../ios/stub" -c "$src" -o "$o"
 	objs+=("$o")
@@ -22,16 +23,16 @@ libs=("$here/../ios/libSystem.tbd")
 if [[ -n ${S8_MESA_LIB:-} ]]; then
 	sdk=$(realpath "${S8_IOS_SDK:?S8_IOS_SDK must name an iPhoneOS SDK}")
 	o=$out/obj/s8mtl_draw.o
-	eval clang -target arm64-apple-ios16.0 "$(cat "${S8_MESA_LIB%.a}.flags")" -std=gnu11 -O2 -Wall -Wextra \
-		-Werror -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers \
+	eval "$(printf '%q' "$clang")" -target arm64-apple-ios16.0 "$(cat "${S8_MESA_LIB%.a}.flags")" -std=gnu11 -O2 \
+		-Wall -Wextra -Werror -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers \
 		-Wno-macro-redefined -Wno-ignored-qualifiers -fno-stack-protector \
-		-c "'$here/s8mtl_draw.c'" -o "'$o'"
+		-c "$(printf '%q' "$here/s8mtl_draw.c")" -o "$(printf '%q' "$o")"
 	objs+=("$o" "$S8_MESA_LIB")
 	libs=("$sdk/usr/lib/libSystem.tbd")
 else
 	# no draw path: answer the draw interface with "unavailable"
 	o=$out/obj/s8mtl_nodraw.o
-	clang -target arm64-apple-ios16.0 -O2 -Wall -Werror -nostdlibinc -isystem "$here/../ios/stub" \
+	"$clang" -target arm64-apple-ios16.0 -O2 -Wall -Werror -nostdlibinc -isystem "$here/../ios/stub" \
 		-DS8_NO_DRAW -x c -c "$here/s8mtl_nodraw.c" -o "$o"
 	objs+=("$o")
 fi

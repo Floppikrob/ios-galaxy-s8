@@ -1,0 +1,5244 @@
+Job Header (8b2128c40):
+  Exception Status: 0x0
+  First Incomplete Task: 0x0
+  Fault Pointer: 0x0
+  Is 64b: true
+  Type: Vertex
+  Barrier: false
+  Invalidate Cache: false
+  Suppress Prefetch: false
+  Enable Texture Mapper: false
+  Relax Dependency 1: false
+  Relax Dependency 2: false
+  Index: 1
+  Dependency 1: 0
+  Dependency 2: 0
+  Next: 0x8b2128d00
+
+Local Storage:
+  TLS Size: 0
+  TLS Initial Stack Pointer Offset: 0
+  WLS Instances: 2147483648
+  WLS Size Base: 0
+  WLS Size Scale: 0
+  TLS Base Pointer: 0x0
+  WLS Base Pointer: 0x0
+
+Shader 0x7fcaa5400000 (GPU VA 8b2001000) sz 67104768
+clause_0:
+ds(0) nbb attr ncph next_attr dwb(0) 
+{
+    *NOP t0
+    +LD_ATTR_IMM.f32.v2 t1, r61, r62, attribute_index:15, @r0
+}
+
+clause_1:
+ds(0) nbb attr ncph next_attr dwb(0) 
+{
+    *NOP t0
+    +LOAD.i32.ubo t1, #0.x, #0.x, @r2
+}
+
+clause_2:
+ds(0) nbb attr ncph next_attr dwb(0) 
+{
+    *FMA.f32 r0:t0, r0, r2, #0.neg
+    +NOP t1
+    *FMA.f32 r1:t0, r1, r2, #0.neg
+    +LOAD.i96.ubo t1, 0x00000010 /* 0.000000 */, 0x0000001f /* 0.000000 */, @r2
+}
+
+clause_5:
+ds(0) nbb attr ncph next_attr dwb(0) 
+{
+    *NOP t0
+    +LOAD.i64.ubo t1, 0x00000000 /* 0.000000 */, 0x0000001f /* 0.000000 */, @r5
+}
+
+clause_7:
+ds(0) nbb attr ncph next_store dwb(0) 
+{
+    *FMA.f32 r0:t0, r0, r5, r2
+    +NOP t1
+    *FMA.f32 r1:t0, r1, r6, r3
+    +NOP t1
+    *MOV.i32 r2:t0, r4
+    +LEA_ATTR_IMM.auto t1, r61, r62, attribute_index:0, @r4
+}
+
+clause_10:
+ds(0) osrb nbb store ncph next_attr 
+{
+    *NOP t0
+    +MOV.i32 r3:t1, 0x3f800000 /* 1.000000 */
+    *NOP t0
+    +ST_CVT.v4 t1, r4, r5, r6, @r0
+}
+
+clause_13:
+ds(0) nbb attr ncph next_attr 
+{
+    *NOP t0
+    +LD_ATTR.f32.v2 t1, r61, r62, 0x00000010 /* 0.000000 */, @r0
+}
+
+clause_15:
+ds(0) nbb attr ncph next_store dwb(0) 
+{
+    *IADDC.i32 t0, #0, 0x00000020 /* 0.000000 */, #0
+    +LEA_ATTR.auto t1, r61, r62, t, @r2
+}
+
+clause_17:
+ds(0) eos store 
+{
+    *NOP t0
+    +ST_CVT.v2 t1, r2, r3, r4, @r0
+}
+
+
+
+State:
+  Shader:
+    Shader: 0x8b2001000
+    Sampler count: 0
+    Texture count: 0
+    Attribute count: 2
+    Varying count: 33
+  Properties:
+    Uniform buffer count: 32
+    Depth source: Minimum
+    Shader contains barrier: false
+    Shader modifies coverage: false
+    Allow forward pixel to kill: false
+    Allow forward pixel to be killed: false
+    Pixel kill operation: Force Early
+    ZS update operation: Force Early
+    Point sprite coord origin max Y: false
+    Stencil from shader: false
+  Depth units: 0.000000
+  Depth factor: 0.000000
+  Depth bias clamp: 0.000000
+  Multisample, Misc:
+    Sample mask: 0
+    Multisample enable: false
+    Multisample late coverage: false
+    Evaluate per-sample: false
+    Fixed-function depth range fixed: false
+    Shader depth range fixed: false
+    Overdraw alpha1: false
+    Overdraw alpha0: false
+    Depth function: Never
+    Depth write mask: false
+    Fixed-function near discard: false
+    Fixed-function far discard: false
+    Fragment near discard: false
+    Fragment far discard: false
+  Stencil Mask, Misc:
+    Stencil mask front: 0
+    Stencil mask back: 0
+    Stencil enable: false
+    Alpha-to-coverage: false
+    Alpha-to-coverage Invert: false
+    Alpha test compare function: Never
+    Force seamless cubemaps: false
+    Front-facing depth bias: false
+    Back-facing depth bias: false
+    Aligned line-ends: false
+    Point snap: false
+  Stencil front:
+    Reference Value: 0
+    Mask: 0
+    Compare Function: Never
+    Stencil Fail: Keep
+    Depth Fail: Keep
+    Depth Pass: Keep
+  Stencil back:
+    Reference Value: 0
+    Mask: 0
+    Compare Function: Never
+    Stencil Fail: Keep
+    Depth Fail: Keep
+    Depth Pass: Keep
+  Preload:
+    Compute:
+      PC: false
+      Local Invocation XY: false
+      Local Invocation Z: false
+      Work group X: false
+      Work group Y: false
+      Work group Z: false
+      Global Invocation X: false
+      Global Invocation Y: true
+      Global Invocation Z: true
+    Vertex:
+      Warp limit: None
+      PC: false
+      Position result address lo: false
+      Position result address hi: false
+      Vertex ID: true
+      Instance ID: true
+    Fragment:
+      PC: false
+      Coverage: false
+      Primitive ID: false
+      Primitive flags: false
+      Fragment position: false
+      Sample mask/ID: true
+    Uniform count: 0
+  Secondary preload:
+    Compute:
+      PC: false
+      Local Invocation XY: false
+      Local Invocation Z: false
+      Work group X: false
+      Work group Y: false
+      Work group Z: false
+      Global Invocation X: false
+      Global Invocation Y: false
+      Global Invocation Z: false
+    Vertex:
+      Warp limit: None
+      PC: false
+      Position result address lo: false
+      Position result address hi: false
+      Vertex ID: false
+      Instance ID: false
+    Fragment:
+      PC: false
+      Coverage: false
+      Primitive ID: false
+      Primitive flags: false
+      Fragment position: false
+      Sample mask/ID: false
+    Uniform count: 0
+  Secondary shader: 0x0
+
+Attribute:
+  Buffer index: 0
+  Offset enable: true
+  Format (v6): RG32F RG01
+  Offset: 0
+Attribute:
+  Buffer index: 0
+  Offset enable: true
+  Format (v6): RG32F RG01
+  Offset: 8
+
+Attribute:
+  Type: 1D
+  Pointer: 0x8b2126000
+  Stride: 0x10
+  Size: 0x40
+  Divisor: 1
+  Divisor R: 0
+  Divisor P: 0
+  Divisor E: 0
+
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 0
+  Offset enable: false
+  Format (v6): RG32F RG01
+  Offset: 0
+
+Varying:
+  Type: 1D
+  Pointer: 0x8b2128b80
+  Stride: 0x8
+  Size: 0x20
+  Divisor: 1
+  Divisor R: 0
+  Divisor P: 0
+  Divisor E: 0
+Varying:
+  Type: 1D
+  Pointer: 0x0
+  Stride: 0x0
+  Size: 0x0
+  Divisor: 1
+  Divisor R: 0
+  Divisor P: 0
+  Divisor E: 0
+
+ubuf_0[64] = s8mali + 34758656;
+ubuf_1[16] = s8mali + 34763328;
+ubuf_2[64] = s8mali + 33555712;
+ubuf_3[64] = s8mali + 33555712;
+ubuf_4[64] = s8mali + 33555712;
+ubuf_5[64] = s8mali + 33555712;
+ubuf_6[64] = s8mali + 33555712;
+ubuf_7[64] = s8mali + 33555712;
+ubuf_8[64] = s8mali + 33555712;
+ubuf_9[64] = s8mali + 33555712;
+ubuf_10[64] = s8mali + 33555712;
+ubuf_11[64] = s8mali + 33555712;
+ubuf_12[64] = s8mali + 33555712;
+ubuf_13[64] = s8mali + 33555712;
+ubuf_14[64] = s8mali + 33555712;
+ubuf_15[64] = s8mali + 33555712;
+ubuf_16[64] = s8mali + 33555712;
+ubuf_17[64] = s8mali + 33555712;
+ubuf_18[64] = s8mali + 33555712;
+ubuf_19[64] = s8mali + 33555712;
+ubuf_20[64] = s8mali + 33555712;
+ubuf_21[64] = s8mali + 33555712;
+ubuf_22[64] = s8mali + 33555712;
+ubuf_23[64] = s8mali + 33555712;
+ubuf_24[64] = s8mali + 33555712;
+ubuf_25[64] = s8mali + 33555712;
+ubuf_26[64] = s8mali + 33555712;
+ubuf_27[64] = s8mali + 33555712;
+ubuf_28[64] = s8mali + 33555712;
+ubuf_29[16] = s8mali + 33562624;
+ubuf_30[256] = s8mali + 34763776;
+ubuf_31[64] = s8mali + 34763408;
+
+Textures 8b2127700:
+
+Samplers 8b2128300:
+
+Vertex Job Payload:
+  Invocation (1, 1, 1) x (1, 4, 1)
+  Invocation:
+    Invocations: 0x3
+    Size Y shift: 0
+    Size Z shift: 0
+    Workgroups X shift: 0
+    Workgroups Y shift: 0
+    Workgroups Z shift: 32
+    Thread group split: 2
+  Vertex Job Parameters:
+    Job Task Split: 5
+  Draw:
+    Four Components Per Vertex: true
+    Draw Descriptor Is 64b: true
+    Occlusion query: Disabled
+    Front face CCW: false
+    Cull front face: false
+    Cull back face: false
+    Flat Shading Vertex: 0
+    Exclude Filtered Perf Counters: false
+    Primitive Barrier: false
+    Clean Fragment Write: false
+    Instance Size: 1
+    Instance Primitive Size: 1
+    Offset start: 0
+    Primitive Index Base: 0
+    Position: 0x0
+    Uniform buffers: 0x8b2127300
+    Textures: 0x8b2127700
+    Samplers: 0x8b2128300
+    Push uniforms: 0x0
+    State: 0x8b2002240
+    Attribute buffers: 0x8b2128b00
+    Attributes: 0x8b2128b30
+    Varying buffers: 0x8b2128b40
+    Varyings: 0x8b2002020
+    Viewport: 0x0
+    Occlusion: 0x0
+    Thread Storage: 0x8b21271c0
+
+Job Header (8b2128d00):
+  Exception Status: 0x0
+  First Incomplete Task: 0x0
+  Fault Pointer: 0x0
+  Is 64b: true
+  Type: Tiler
+  Barrier: false
+  Invalidate Cache: false
+  Suppress Prefetch: false
+  Enable Texture Mapper: false
+  Relax Dependency 1: false
+  Relax Dependency 2: false
+  Index: 2
+  Dependency 1: 1
+  Dependency 2: 0
+  Next: 0x8b21291c0
+
+Local Storage:
+  TLS Size: 0
+  TLS Initial Stack Pointer Offset: 0
+  WLS Instances: 2147483648
+  WLS Size Base: 0
+  WLS Size Scale: 0
+  TLS Base Pointer: 0x0
+  WLS Base Pointer: 0x0
+
+Shader 0x7fcaa5400300 (GPU VA 8b2001300) sz 67104000
+clause_0:
+ds(0) nbb vary ncph next_tex dwb(0) 
+{
+    *IADDC.i32 t0, #0, 0x00000020 /* 0.000000 */, #0
+    +LD_VAR.v2.store.f32.center t1, 0x00000020 /* 0.000000 */, t, @r0
+}
+
+clause_2:
+ds(0) nbb tex ncph next_attr dwb(0) 
+{
+    *NOP t0
+    +TEXS_2D.f32.skip.computed_lod t1, r0, r1, texture_index:0, sampler_index:0, @r0
+}
+
+clause_3:
+ds(0) nbb attr td ncph next_atest dwb(0, 6) 
+{
+    *NOP t0
+    +LOAD.i128.ubo t1, #0.x, #0.x, @r4
+}
+
+clause_4:
+ds(0) nbb atest td ncph next_blend dwb(0, 6, 7) 
+{
+    *FMA.f32 r3:t0, r3, r7, #0.neg
+    +NOP t1
+    *NOP t0
+    +ATEST r60:t1, r60, t0, @r60
+}
+
+clause_6:
+ds(0) eos blend td 
+{
+    *FMA.f32 r0:t0, r0, r4, #0.neg
+    +NOP t1
+    *FMA.f32 r1:t0, r1, r5, #0.neg
+    +NOP t1
+    *FMA.f32 r2:t0, r2, r6, #0.neg
+    +NOP t1
+    *NOP t0
+    +BLEND r48:t1, r60, blend_descriptor_0.x, blend_descriptor_0.y, @r0
+}
+
+
+
+State:
+  Shader:
+    Shader: 0x8b2001300
+    Sampler count: 0
+    Texture count: 0
+    Attribute count: 0
+    Varying count: 33
+  Properties:
+    Uniform buffer count: 1
+    Depth source: Fixed function
+    Shader contains barrier: true
+    Shader modifies coverage: false
+    Allow forward pixel to kill: false
+    Allow forward pixel to be killed: true
+    Pixel kill operation: Force Early
+    ZS update operation: Force Early
+    Point sprite coord origin max Y: false
+    Stencil from shader: false
+  Depth units: 0.000000
+  Depth factor: 0.000000
+  Depth bias clamp: 0.000000
+  Multisample, Misc:
+    Sample mask: 65535
+    Multisample enable: false
+    Multisample late coverage: false
+    Evaluate per-sample: false
+    Fixed-function depth range fixed: true
+    Shader depth range fixed: true
+    Overdraw alpha1: false
+    Overdraw alpha0: false
+    Depth function: Always
+    Depth write mask: false
+    Fixed-function near discard: false
+    Fixed-function far discard: false
+    Fragment near discard: false
+    Fragment far discard: false
+  Stencil Mask, Misc:
+    Stencil mask front: 255
+    Stencil mask back: 255
+    Stencil enable: false
+    Alpha-to-coverage: false
+    Alpha-to-coverage Invert: false
+    Alpha test compare function: Always
+    Force seamless cubemaps: false
+    Front-facing depth bias: false
+    Back-facing depth bias: false
+    Aligned line-ends: false
+    Point snap: false
+  Stencil front:
+    Reference Value: 0
+    Mask: 255
+    Compare Function: Always
+    Stencil Fail: Keep
+    Depth Fail: Keep
+    Depth Pass: Keep
+  Stencil back:
+    Reference Value: 0
+    Mask: 255
+    Compare Function: Always
+    Stencil Fail: Keep
+    Depth Fail: Keep
+    Depth Pass: Keep
+  Preload:
+    Compute:
+      PC: false
+      Local Invocation XY: true
+      Local Invocation Z: false
+      Work group X: false
+      Work group Y: false
+      Work group Z: false
+      Global Invocation X: false
+      Global Invocation Y: false
+      Global Invocation Z: false
+    Vertex:
+      Warp limit: None
+      PC: false
+      Position result address lo: false
+      Position result address hi: false
+      Vertex ID: false
+      Instance ID: false
+    Fragment:
+      PC: false
+      Coverage: true
+      Primitive ID: false
+      Primitive flags: false
+      Fragment position: false
+      Sample mask/ID: false
+    Uniform count: 0
+  Secondary preload:
+    Compute:
+      PC: false
+      Local Invocation XY: false
+      Local Invocation Z: false
+      Work group X: false
+      Work group Y: false
+      Work group Z: false
+      Global Invocation X: false
+      Global Invocation Y: false
+      Global Invocation Z: false
+    Vertex:
+      Warp limit: None
+      PC: false
+      Position result address lo: false
+      Position result address hi: false
+      Vertex ID: false
+      Instance ID: false
+    Fragment:
+      PC: false
+      Coverage: false
+      Primitive ID: false
+      Primitive flags: false
+      Fragment position: false
+      Sample mask/ID: false
+    Uniform count: 0
+  Secondary shader: 0x0
+
+Blend RT 0:
+  Load Destination: true
+  Alpha To One: false
+  Enable: true
+  sRGB: false
+  Round to FB precision: true
+  Blend Constant: 0
+  Equation:
+    RGB:
+      A: Src
+      Negate A: false
+      B: Dest
+      Negate B: false
+      C: Src Alpha
+      Invert C: true
+    Alpha:
+      A: Src
+      Negate A: false
+      B: Dest
+      Negate B: false
+      C: Src Alpha
+      Invert C: true
+    Color Mask: 15
+  Internal:
+    Mode: Fixed-Function
+    Shader:
+      Return Value: 88
+      PC: 17749632
+    Fixed-Function:
+      Num Comps: 4
+      Alpha Zero NOP: false
+      Alpha One Store: true
+      RT: 0
+      Conversion:
+        Format (v6): RGBA8 TB RGBA
+        Raw: false
+        Register Format: F32
+Viewport:
+  Minimum X: -inf
+  Minimum Y: -inf
+  Maximum X: inf
+  Maximum Y: inf
+  Minimum Z: 0.000000
+  Maximum Z: 1.000000
+  Scissor Minimum X: 0
+  Scissor Minimum Y: 0
+  Scissor Maximum X: 255
+  Scissor Maximum Y: 127
+
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 0
+  Offset enable: false
+  Format (v6): RG32F RG01
+  Offset: 0
+
+Varying:
+  Type: 1D
+  Pointer: 0x8b2128b80
+  Stride: 0x8
+  Size: 0x20
+  Divisor: 1
+  Divisor R: 0
+  Divisor P: 0
+  Divisor E: 0
+Varying:
+  Type: 1D
+  Pointer: 0x0
+  Stride: 0x0
+  Size: 0x0
+  Divisor: 1
+  Divisor R: 0
+  Divisor P: 0
+  Divisor E: 0
+
+ubuf_0[16] = s8mali + 34763392;
+
+Textures 8b2127d00:
+
+Samplers 8b2128700:
+
+Tiler Job Payload:
+  Invocation (1, 1, 1) x (1, 4, 1)
+  Invocation:
+    Invocations: 0x3
+    Size Y shift: 0
+    Size Z shift: 0
+    Workgroups X shift: 0
+    Workgroups Y shift: 0
+    Workgroups Z shift: 32
+    Thread group split: 2
+  Primitive:
+    Draw mode: Triangle strip
+    Index type: None
+    Point size array format: None
+    Primitive Index Enable: false
+    Primitive Index Writeback: false
+    First provoking vertex: true
+    Low Depth Cull: true
+    High Depth Cull: true
+    Secondary Shader: false
+    Primitive restart: None
+    Job Task Split: 6
+    Base vertex offset: 0
+    Primitive Restart Index: 0x0
+    Index count: 0x4
+    Indices: 0x0
+  Draw:
+    Four Components Per Vertex: true
+    Draw Descriptor Is 64b: true
+    Occlusion query: Disabled
+    Front face CCW: true
+    Cull front face: false
+    Cull back face: false
+    Flat Shading Vertex: 0
+    Exclude Filtered Perf Counters: false
+    Primitive Barrier: false
+    Clean Fragment Write: false
+    Instance Size: 1
+    Instance Primitive Size: 2
+    Offset start: 0
+    Primitive Index Base: 0
+    Position: 0x0
+    Uniform buffers: 0x8b2127500
+    Textures: 0x8b2127d00
+    Samplers: 0x8b2128700
+    Push uniforms: 0x0
+    State: 0x8b2128bc0
+    Attribute buffers: 0x0
+    Attributes: 0x0
+    Varying buffers: 0x8b2128b40
+    Varyings: 0x8b2002130
+    Viewport: 0x8b21272e0
+    Occlusion: 0x0
+    Thread Storage: 0x8b21271c0
+  Primitive Size:
+    Fixed Sized: 1.000000
+    Size Array: 0x3f800000
+  Tiler Heap:
+    Size: 0x2000000
+    Base: 0x8b0000000
+    Bottom: 0x8b0000000
+    Top: 0x8b2000000
+  Tiler Context @8b21270c0:
+    Polygon List: 0x0
+    Hierarchy Mask: 255
+    Sample Pattern: Single-sampled
+    Update Cost Table: false
+    FB Width: 256
+    FB Height: 128
+    Heap: 0x8b2127180
+    Weights:
+      Weight0: 0
+      Weight1: 0
+      Weight2: 0
+      Weight3: 0
+      Weight4: 0
+      Weight5: 0
+      Weight6: 0
+      Weight7: 0
+    State:
+      Word0: 0x0
+      Word1: 0x0
+      Word2: 0x0
+      Word3: 0x0
+      Word4: 0x0
+      Word5: 0x0
+      Word6: 0x0
+      Word7: 0x0
+      Word8: 0x0
+      Word9: 0x0
+      Word10: 0x0
+      Word11: 0x0
+      Word12: 0x0
+      Word13: 0x0
+      Word14: 0x0
+      Word15: 0x0
+
+Job Header (8b21291c0):
+  Exception Status: 0x0
+  First Incomplete Task: 0x0
+  Fault Pointer: 0x0
+  Is 64b: true
+  Type: Vertex
+  Barrier: false
+  Invalidate Cache: false
+  Suppress Prefetch: false
+  Enable Texture Mapper: false
+  Relax Dependency 1: false
+  Relax Dependency 2: false
+  Index: 3
+  Dependency 1: 0
+  Dependency 2: 0
+  Next: 0x8b2129280
+
+Local Storage:
+  TLS Size: 0
+  TLS Initial Stack Pointer Offset: 0
+  WLS Instances: 2147483648
+  WLS Size Base: 0
+  WLS Size Scale: 0
+  TLS Base Pointer: 0x0
+  WLS Base Pointer: 0x0
+
+Shader 0x7fcaa5400000 (GPU VA 8b2001000) sz 67104768
+clause_0:
+ds(0) nbb attr ncph next_attr dwb(0) 
+{
+    *NOP t0
+    +LD_ATTR_IMM.f32.v2 t1, r61, r62, attribute_index:15, @r0
+}
+
+clause_1:
+ds(0) nbb attr ncph next_attr dwb(0) 
+{
+    *NOP t0
+    +LOAD.i32.ubo t1, #0.x, #0.x, @r2
+}
+
+clause_2:
+ds(0) nbb attr ncph next_attr dwb(0) 
+{
+    *FMA.f32 r0:t0, r0, r2, #0.neg
+    +NOP t1
+    *FMA.f32 r1:t0, r1, r2, #0.neg
+    +LOAD.i96.ubo t1, 0x00000010 /* 0.000000 */, 0x0000001f /* 0.000000 */, @r2
+}
+
+clause_5:
+ds(0) nbb attr ncph next_attr dwb(0) 
+{
+    *NOP t0
+    +LOAD.i64.ubo t1, 0x00000000 /* 0.000000 */, 0x0000001f /* 0.000000 */, @r5
+}
+
+clause_7:
+ds(0) nbb attr ncph next_store dwb(0) 
+{
+    *FMA.f32 r0:t0, r0, r5, r2
+    +NOP t1
+    *FMA.f32 r1:t0, r1, r6, r3
+    +NOP t1
+    *MOV.i32 r2:t0, r4
+    +LEA_ATTR_IMM.auto t1, r61, r62, attribute_index:0, @r4
+}
+
+clause_10:
+ds(0) osrb nbb store ncph next_attr 
+{
+    *NOP t0
+    +MOV.i32 r3:t1, 0x3f800000 /* 1.000000 */
+    *NOP t0
+    +ST_CVT.v4 t1, r4, r5, r6, @r0
+}
+
+clause_13:
+ds(0) nbb attr ncph next_attr 
+{
+    *NOP t0
+    +LD_ATTR.f32.v2 t1, r61, r62, 0x00000010 /* 0.000000 */, @r0
+}
+
+clause_15:
+ds(0) nbb attr ncph next_store dwb(0) 
+{
+    *IADDC.i32 t0, #0, 0x00000020 /* 0.000000 */, #0
+    +LEA_ATTR.auto t1, r61, r62, t, @r2
+}
+
+clause_17:
+ds(0) eos store 
+{
+    *NOP t0
+    +ST_CVT.v2 t1, r2, r3, r4, @r0
+}
+
+
+
+State:
+  Shader:
+    Shader: 0x8b2001000
+    Sampler count: 0
+    Texture count: 0
+    Attribute count: 2
+    Varying count: 33
+  Properties:
+    Uniform buffer count: 32
+    Depth source: Minimum
+    Shader contains barrier: false
+    Shader modifies coverage: false
+    Allow forward pixel to kill: false
+    Allow forward pixel to be killed: false
+    Pixel kill operation: Force Early
+    ZS update operation: Force Early
+    Point sprite coord origin max Y: false
+    Stencil from shader: false
+  Depth units: 0.000000
+  Depth factor: 0.000000
+  Depth bias clamp: 0.000000
+  Multisample, Misc:
+    Sample mask: 0
+    Multisample enable: false
+    Multisample late coverage: false
+    Evaluate per-sample: false
+    Fixed-function depth range fixed: false
+    Shader depth range fixed: false
+    Overdraw alpha1: false
+    Overdraw alpha0: false
+    Depth function: Never
+    Depth write mask: false
+    Fixed-function near discard: false
+    Fixed-function far discard: false
+    Fragment near discard: false
+    Fragment far discard: false
+  Stencil Mask, Misc:
+    Stencil mask front: 0
+    Stencil mask back: 0
+    Stencil enable: false
+    Alpha-to-coverage: false
+    Alpha-to-coverage Invert: false
+    Alpha test compare function: Never
+    Force seamless cubemaps: false
+    Front-facing depth bias: false
+    Back-facing depth bias: false
+    Aligned line-ends: false
+    Point snap: false
+  Stencil front:
+    Reference Value: 0
+    Mask: 0
+    Compare Function: Never
+    Stencil Fail: Keep
+    Depth Fail: Keep
+    Depth Pass: Keep
+  Stencil back:
+    Reference Value: 0
+    Mask: 0
+    Compare Function: Never
+    Stencil Fail: Keep
+    Depth Fail: Keep
+    Depth Pass: Keep
+  Preload:
+    Compute:
+      PC: false
+      Local Invocation XY: false
+      Local Invocation Z: false
+      Work group X: false
+      Work group Y: false
+      Work group Z: false
+      Global Invocation X: false
+      Global Invocation Y: true
+      Global Invocation Z: true
+    Vertex:
+      Warp limit: None
+      PC: false
+      Position result address lo: false
+      Position result address hi: false
+      Vertex ID: true
+      Instance ID: true
+    Fragment:
+      PC: false
+      Coverage: false
+      Primitive ID: false
+      Primitive flags: false
+      Fragment position: false
+      Sample mask/ID: true
+    Uniform count: 0
+  Secondary preload:
+    Compute:
+      PC: false
+      Local Invocation XY: false
+      Local Invocation Z: false
+      Work group X: false
+      Work group Y: false
+      Work group Z: false
+      Global Invocation X: false
+      Global Invocation Y: false
+      Global Invocation Z: false
+    Vertex:
+      Warp limit: None
+      PC: false
+      Position result address lo: false
+      Position result address hi: false
+      Vertex ID: false
+      Instance ID: false
+    Fragment:
+      PC: false
+      Coverage: false
+      Primitive ID: false
+      Primitive flags: false
+      Fragment position: false
+      Sample mask/ID: false
+    Uniform count: 0
+  Secondary shader: 0x0
+
+Attribute:
+  Buffer index: 0
+  Offset enable: true
+  Format (v6): RG32F RG01
+  Offset: 0
+Attribute:
+  Buffer index: 0
+  Offset enable: true
+  Format (v6): RG32F RG01
+  Offset: 8
+
+Attribute:
+  Type: 1D
+  Pointer: 0x8b2126000
+  Stride: 0x10
+  Size: 0x40
+  Divisor: 1
+  Divisor R: 0
+  Divisor P: 0
+  Divisor E: 0
+
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 0
+  Offset enable: false
+  Format (v6): RG32F RG01
+  Offset: 0
+
+Varying:
+  Type: 1D
+  Pointer: 0x8b2129100
+  Stride: 0x8
+  Size: 0x20
+  Divisor: 1
+  Divisor R: 0
+  Divisor P: 0
+  Divisor E: 0
+Varying:
+  Type: 1D
+  Pointer: 0x0
+  Stride: 0x0
+  Size: 0x0
+  Divisor: 1
+  Divisor R: 0
+  Divisor P: 0
+  Divisor E: 0
+
+ubuf_0[64] = s8mali + 34758656;
+ubuf_1[16] = s8mali + 34763328;
+ubuf_2[64] = s8mali + 33555712;
+ubuf_3[64] = s8mali + 33555712;
+ubuf_4[64] = s8mali + 33555712;
+ubuf_5[64] = s8mali + 33555712;
+ubuf_6[64] = s8mali + 33555712;
+ubuf_7[64] = s8mali + 33555712;
+ubuf_8[64] = s8mali + 33555712;
+ubuf_9[64] = s8mali + 33555712;
+ubuf_10[64] = s8mali + 33555712;
+ubuf_11[64] = s8mali + 33555712;
+ubuf_12[64] = s8mali + 33555712;
+ubuf_13[64] = s8mali + 33555712;
+ubuf_14[64] = s8mali + 33555712;
+ubuf_15[64] = s8mali + 33555712;
+ubuf_16[64] = s8mali + 33555712;
+ubuf_17[64] = s8mali + 33555712;
+ubuf_18[64] = s8mali + 33555712;
+ubuf_19[64] = s8mali + 33555712;
+ubuf_20[64] = s8mali + 33555712;
+ubuf_21[64] = s8mali + 33555712;
+ubuf_22[64] = s8mali + 33555712;
+ubuf_23[64] = s8mali + 33555712;
+ubuf_24[64] = s8mali + 33555712;
+ubuf_25[64] = s8mali + 33555712;
+ubuf_26[64] = s8mali + 33555712;
+ubuf_27[64] = s8mali + 33555712;
+ubuf_28[64] = s8mali + 33555712;
+ubuf_29[16] = s8mali + 33562624;
+ubuf_30[256] = s8mali + 34763776;
+ubuf_31[64] = s8mali + 34770448;
+
+Textures 8b2127700:
+
+Samplers 8b2128300:
+
+Vertex Job Payload:
+  Invocation (1, 1, 1) x (1, 4, 1)
+  Invocation:
+    Invocations: 0x3
+    Size Y shift: 0
+    Size Z shift: 0
+    Workgroups X shift: 0
+    Workgroups Y shift: 0
+    Workgroups Z shift: 32
+    Thread group split: 2
+  Vertex Job Parameters:
+    Job Task Split: 5
+  Draw:
+    Four Components Per Vertex: true
+    Draw Descriptor Is 64b: true
+    Occlusion query: Disabled
+    Front face CCW: false
+    Cull front face: false
+    Cull back face: false
+    Flat Shading Vertex: 0
+    Exclude Filtered Perf Counters: false
+    Primitive Barrier: false
+    Clean Fragment Write: false
+    Instance Size: 1
+    Instance Primitive Size: 1
+    Offset start: 0
+    Primitive Index Base: 0
+    Position: 0x0
+    Uniform buffers: 0x8b2128e50
+    Textures: 0x8b2127700
+    Samplers: 0x8b2128300
+    Push uniforms: 0x0
+    State: 0x8b2002240
+    Attribute buffers: 0x8b2129060
+    Attributes: 0x8b2129090
+    Varying buffers: 0x8b21290a0
+    Varyings: 0x8b2002020
+    Viewport: 0x0
+    Occlusion: 0x0
+    Thread Storage: 0x8b21271c0
+
+Job Header (8b2129280):
+  Exception Status: 0x0
+  First Incomplete Task: 0x0
+  Fault Pointer: 0x0
+  Is 64b: true
+  Type: Tiler
+  Barrier: false
+  Invalidate Cache: false
+  Suppress Prefetch: false
+  Enable Texture Mapper: false
+  Relax Dependency 1: false
+  Relax Dependency 2: false
+  Index: 4
+  Dependency 1: 3
+  Dependency 2: 2
+  Next: 0x0
+
+Local Storage:
+  TLS Size: 0
+  TLS Initial Stack Pointer Offset: 0
+  WLS Instances: 2147483648
+  WLS Size Base: 0
+  WLS Size Scale: 0
+  TLS Base Pointer: 0x0
+  WLS Base Pointer: 0x0
+
+Shader 0x7fcaa5400300 (GPU VA 8b2001300) sz 67104000
+clause_0:
+ds(0) nbb vary ncph next_tex dwb(0) 
+{
+    *IADDC.i32 t0, #0, 0x00000020 /* 0.000000 */, #0
+    +LD_VAR.v2.store.f32.center t1, 0x00000020 /* 0.000000 */, t, @r0
+}
+
+clause_2:
+ds(0) nbb tex ncph next_attr dwb(0) 
+{
+    *NOP t0
+    +TEXS_2D.f32.skip.computed_lod t1, r0, r1, texture_index:0, sampler_index:0, @r0
+}
+
+clause_3:
+ds(0) nbb attr td ncph next_atest dwb(0, 6) 
+{
+    *NOP t0
+    +LOAD.i128.ubo t1, #0.x, #0.x, @r4
+}
+
+clause_4:
+ds(0) nbb atest td ncph next_blend dwb(0, 6, 7) 
+{
+    *FMA.f32 r3:t0, r3, r7, #0.neg
+    +NOP t1
+    *NOP t0
+    +ATEST r60:t1, r60, t0, @r60
+}
+
+clause_6:
+ds(0) eos blend td 
+{
+    *FMA.f32 r0:t0, r0, r4, #0.neg
+    +NOP t1
+    *FMA.f32 r1:t0, r1, r5, #0.neg
+    +NOP t1
+    *FMA.f32 r2:t0, r2, r6, #0.neg
+    +NOP t1
+    *NOP t0
+    +BLEND r48:t1, r60, blend_descriptor_0.x, blend_descriptor_0.y, @r0
+}
+
+
+
+State:
+  Shader:
+    Shader: 0x8b2001300
+    Sampler count: 0
+    Texture count: 0
+    Attribute count: 0
+    Varying count: 33
+  Properties:
+    Uniform buffer count: 1
+    Depth source: Fixed function
+    Shader contains barrier: true
+    Shader modifies coverage: false
+    Allow forward pixel to kill: false
+    Allow forward pixel to be killed: true
+    Pixel kill operation: Force Early
+    ZS update operation: Force Early
+    Point sprite coord origin max Y: false
+    Stencil from shader: false
+  Depth units: 0.000000
+  Depth factor: 0.000000
+  Depth bias clamp: 0.000000
+  Multisample, Misc:
+    Sample mask: 65535
+    Multisample enable: false
+    Multisample late coverage: false
+    Evaluate per-sample: false
+    Fixed-function depth range fixed: true
+    Shader depth range fixed: true
+    Overdraw alpha1: false
+    Overdraw alpha0: false
+    Depth function: Always
+    Depth write mask: false
+    Fixed-function near discard: false
+    Fixed-function far discard: false
+    Fragment near discard: false
+    Fragment far discard: false
+  Stencil Mask, Misc:
+    Stencil mask front: 255
+    Stencil mask back: 255
+    Stencil enable: false
+    Alpha-to-coverage: false
+    Alpha-to-coverage Invert: false
+    Alpha test compare function: Always
+    Force seamless cubemaps: false
+    Front-facing depth bias: false
+    Back-facing depth bias: false
+    Aligned line-ends: false
+    Point snap: false
+  Stencil front:
+    Reference Value: 0
+    Mask: 255
+    Compare Function: Always
+    Stencil Fail: Keep
+    Depth Fail: Keep
+    Depth Pass: Keep
+  Stencil back:
+    Reference Value: 0
+    Mask: 255
+    Compare Function: Always
+    Stencil Fail: Keep
+    Depth Fail: Keep
+    Depth Pass: Keep
+  Preload:
+    Compute:
+      PC: false
+      Local Invocation XY: true
+      Local Invocation Z: false
+      Work group X: false
+      Work group Y: false
+      Work group Z: false
+      Global Invocation X: false
+      Global Invocation Y: false
+      Global Invocation Z: false
+    Vertex:
+      Warp limit: None
+      PC: false
+      Position result address lo: false
+      Position result address hi: false
+      Vertex ID: false
+      Instance ID: false
+    Fragment:
+      PC: false
+      Coverage: true
+      Primitive ID: false
+      Primitive flags: false
+      Fragment position: false
+      Sample mask/ID: false
+    Uniform count: 0
+  Secondary preload:
+    Compute:
+      PC: false
+      Local Invocation XY: false
+      Local Invocation Z: false
+      Work group X: false
+      Work group Y: false
+      Work group Z: false
+      Global Invocation X: false
+      Global Invocation Y: false
+      Global Invocation Z: false
+    Vertex:
+      Warp limit: None
+      PC: false
+      Position result address lo: false
+      Position result address hi: false
+      Vertex ID: false
+      Instance ID: false
+    Fragment:
+      PC: false
+      Coverage: false
+      Primitive ID: false
+      Primitive flags: false
+      Fragment position: false
+      Sample mask/ID: false
+    Uniform count: 0
+  Secondary shader: 0x0
+
+Blend RT 0:
+  Load Destination: true
+  Alpha To One: false
+  Enable: true
+  sRGB: false
+  Round to FB precision: true
+  Blend Constant: 0
+  Equation:
+    RGB:
+      A: Src
+      Negate A: false
+      B: Dest
+      Negate B: false
+      C: Src Alpha
+      Invert C: true
+    Alpha:
+      A: Src
+      Negate A: false
+      B: Dest
+      Negate B: false
+      C: Src Alpha
+      Invert C: true
+    Color Mask: 15
+  Internal:
+    Mode: Fixed-Function
+    Shader:
+      Return Value: 88
+      PC: 17749632
+    Fixed-Function:
+      Num Comps: 4
+      Alpha Zero NOP: false
+      Alpha One Store: true
+      RT: 0
+      Conversion:
+        Format (v6): RGBA8 TB RGBA
+        Raw: false
+        Register Format: F32
+Viewport:
+  Minimum X: -inf
+  Minimum Y: -inf
+  Maximum X: inf
+  Maximum Y: inf
+  Minimum Z: 0.000000
+  Maximum Z: 1.000000
+  Scissor Minimum X: 0
+  Scissor Minimum Y: 0
+  Scissor Maximum X: 255
+  Scissor Maximum Y: 127
+
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 0
+  Offset enable: false
+  Format (v6): RG32F RG01
+  Offset: 0
+
+Varying:
+  Type: 1D
+  Pointer: 0x8b2129100
+  Stride: 0x8
+  Size: 0x20
+  Divisor: 1
+  Divisor R: 0
+  Divisor P: 0
+  Divisor E: 0
+Varying:
+  Type: 1D
+  Pointer: 0x0
+  Stride: 0x0
+  Size: 0x0
+  Divisor: 1
+  Divisor R: 0
+  Divisor P: 0
+  Divisor E: 0
+
+ubuf_0[16] = s8mali + 34763392;
+
+Textures 8b2127d00:
+
+Samplers 8b2128700:
+
+Tiler Job Payload:
+  Invocation (1, 1, 1) x (1, 4, 1)
+  Invocation:
+    Invocations: 0x3
+    Size Y shift: 0
+    Size Z shift: 0
+    Workgroups X shift: 0
+    Workgroups Y shift: 0
+    Workgroups Z shift: 32
+    Thread group split: 2
+  Primitive:
+    Draw mode: Triangles
+    Index type: UINT16
+    Point size array format: None
+    Primitive Index Enable: false
+    Primitive Index Writeback: false
+    First provoking vertex: true
+    Low Depth Cull: true
+    High Depth Cull: true
+    Secondary Shader: false
+    Primitive restart: None
+    Job Task Split: 6
+    Base vertex offset: 0
+    Primitive Restart Index: 0x0
+    Index count: 0x6
+    Indices: 0x8b2128e00
+  Draw:
+    Four Components Per Vertex: true
+    Draw Descriptor Is 64b: true
+    Occlusion query: Disabled
+    Front face CCW: true
+    Cull front face: false
+    Cull back face: false
+    Flat Shading Vertex: 0
+    Exclude Filtered Perf Counters: false
+    Primitive Barrier: false
+    Clean Fragment Write: false
+    Instance Size: 1
+    Instance Primitive Size: 2
+    Offset start: 0
+    Primitive Index Base: 0
+    Position: 0x0
+    Uniform buffers: 0x8b2128f50
+    Textures: 0x8b2127d00
+    Samplers: 0x8b2128700
+    Push uniforms: 0x0
+    State: 0x8b2129140
+    Attribute buffers: 0x0
+    Attributes: 0x0
+    Varying buffers: 0x8b21290a0
+    Varyings: 0x8b2002130
+    Viewport: 0x8b21272e0
+    Occlusion: 0x0
+    Thread Storage: 0x8b21271c0
+  Primitive Size:
+    Fixed Sized: 1.000000
+    Size Array: 0x3f800000
+  Tiler Heap:
+    Size: 0x2000000
+    Base: 0x8b0000000
+    Bottom: 0x8b0000000
+    Top: 0x8b2000000
+  Tiler Context @8b21270c0:
+    Polygon List: 0x0
+    Hierarchy Mask: 255
+    Sample Pattern: Single-sampled
+    Update Cost Table: false
+    FB Width: 256
+    FB Height: 128
+    Heap: 0x8b2127180
+    Weights:
+      Weight0: 0
+      Weight1: 0
+      Weight2: 0
+      Weight3: 0
+      Weight4: 0
+      Weight5: 0
+      Weight6: 0
+      Weight7: 0
+    State:
+      Word0: 0x0
+      Word1: 0x0
+      Word2: 0x0
+      Word3: 0x0
+      Word4: 0x0
+      Word5: 0x0
+      Word6: 0x0
+      Word7: 0x0
+      Word8: 0x0
+      Word9: 0x0
+      Word10: 0x0
+      Word11: 0x0
+      Word12: 0x0
+      Word13: 0x0
+      Word14: 0x0
+      Word15: 0x0
+
+Job Header (8b2127200):
+  Exception Status: 0x0
+  First Incomplete Task: 0x0
+  Fault Pointer: 0x0
+  Is 64b: true
+  Type: Fragment
+  Barrier: false
+  Invalidate Cache: false
+  Suppress Prefetch: false
+  Enable Texture Mapper: false
+  Relax Dependency 1: false
+  Relax Dependency 2: false
+  Index: 1
+  Dependency 1: 0
+  Dependency 2: 0
+  Next: 0x0
+
+Parameters:
+  Pre Frame 0: Always
+  Pre Frame 1: Never
+  Post Frame: Never
+  Sample Locations: 0x8b2000000
+  Frame Shader DCDs: 0x8b2129380
+  Width: 256
+  Height: 128
+  Bound Min X: 0
+  Bound Min Y: 0
+  Bound Max X: 255
+  Bound Max Y: 127
+  Sample Count: 1
+  Sample Pattern: Single-sampled
+  Tie-Break Rule: MINUS_180_IN_0_OUT
+  Effective Tile Size: 256
+  X Downsampling Scale: 0
+  Y Downsampling Scale: 0
+  Render Target Count: 1
+  Color Buffer Allocation: 1024
+  S Clear: 0
+  S Write Enable: false
+  S Preload Enable: false
+  S Unload Enable: false
+  Z Internal Format: D24
+  Z Write Enable: false
+  Z Preload Enable: false
+  Z Unload Enable: false
+  Has ZS CRC Extension: false
+  Empty Tile Read Enable: false
+  Empty Tile Write Enable: false
+  CRC Read Enable: false
+  CRC Write Enable: false
+  Z Clear: 0.000000
+  Tiler: 0x8b21270c0
+Sample locations @8b2000000:
+  (0, 0),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (0, 0),
+Pre frame 0 @8b2129380 (mode=1):
+Local Storage:
+  TLS Size: 0
+  TLS Initial Stack Pointer Offset: 0
+  WLS Instances: 2147483648
+  WLS Size Base: 0
+  WLS Size Scale: 0
+  TLS Base Pointer: 0x0
+  WLS Base Pointer: 0x0
+
+Shader 0x7fcaa5626000 (GPU VA 8b2227000) sz 64851968
+clause_0:
+ds(0) nbb tex td ncph next_atest dwb(0, 6) 
+{
+    *U16_TO_U32 t0, r59.h1
+    +MOV.i32 r2:t1, #0.x
+    *U16_TO_U32 t0, r59
+    +TEXC.skip t1, t, t0, 0xf4186800 /* -48299468572758396805464230723584.000000 */, @r2
+}
+
+clause_3:
+ds(0) nbb atest td ncph next_blend dwb(0, 6, 7) 
+{
+    *NOP t0
+    +ATEST r60:t1, r60, r5, @r60
+}
+
+clause_4:
+ds(0) eos blend td 
+{
+    *MOV.i32 r0:t0, r2
+    +MOV.i32 r1:t1, r3
+    *MOV.i32 r2:t0, r4
+    +MOV.i32 r3:t1, r5
+    *NOP t0
+    +BLEND r48:t1, r60, blend_descriptor_0.x, blend_descriptor_0.y, @r0
+}
+
+
+
+State:
+  Shader:
+    Shader: 0x8b2227000
+    Sampler count: 0
+    Texture count: 0
+    Attribute count: 0
+    Varying count: 0
+  Properties:
+    Uniform buffer count: 0
+    Depth source: Fixed function
+    Shader contains barrier: false
+    Shader modifies coverage: false
+    Allow forward pixel to kill: true
+    Allow forward pixel to be killed: true
+    Pixel kill operation: Force Early
+    ZS update operation: Force Early
+    Point sprite coord origin max Y: false
+    Stencil from shader: false
+  Depth units: 0.000000
+  Depth factor: 0.000000
+  Depth bias clamp: 0.000000
+  Multisample, Misc:
+    Sample mask: 65535
+    Multisample enable: false
+    Multisample late coverage: false
+    Evaluate per-sample: false
+    Fixed-function depth range fixed: false
+    Shader depth range fixed: false
+    Overdraw alpha1: false
+    Overdraw alpha0: false
+    Depth function: Always
+    Depth write mask: false
+    Fixed-function near discard: false
+    Fixed-function far discard: false
+    Fragment near discard: false
+    Fragment far discard: false
+  Stencil Mask, Misc:
+    Stencil mask front: 255
+    Stencil mask back: 255
+    Stencil enable: false
+    Alpha-to-coverage: false
+    Alpha-to-coverage Invert: false
+    Alpha test compare function: Never
+    Force seamless cubemaps: false
+    Front-facing depth bias: false
+    Back-facing depth bias: false
+    Aligned line-ends: false
+    Point snap: false
+  Stencil front:
+    Reference Value: 0
+    Mask: 255
+    Compare Function: Always
+    Stencil Fail: Replace
+    Depth Fail: Replace
+    Depth Pass: Replace
+  Stencil back:
+    Reference Value: 0
+    Mask: 255
+    Compare Function: Always
+    Stencil Fail: Replace
+    Depth Fail: Replace
+    Depth Pass: Replace
+  Preload:
+    Compute:
+      PC: false
+      Local Invocation XY: true
+      Local Invocation Z: false
+      Work group X: false
+      Work group Y: false
+      Work group Z: true
+      Global Invocation X: false
+      Global Invocation Y: false
+      Global Invocation Z: false
+    Vertex:
+      Warp limit: None
+      PC: false
+      Position result address lo: false
+      Position result address hi: true
+      Vertex ID: false
+      Instance ID: false
+    Fragment:
+      PC: false
+      Coverage: true
+      Primitive ID: false
+      Primitive flags: false
+      Fragment position: true
+      Sample mask/ID: false
+    Uniform count: 0
+  Secondary preload:
+    Compute:
+      PC: false
+      Local Invocation XY: false
+      Local Invocation Z: false
+      Work group X: false
+      Work group Y: false
+      Work group Z: false
+      Global Invocation X: false
+      Global Invocation Y: false
+      Global Invocation Z: false
+    Vertex:
+      Warp limit: None
+      PC: false
+      Position result address lo: false
+      Position result address hi: false
+      Vertex ID: false
+      Instance ID: false
+    Fragment:
+      PC: false
+      Coverage: false
+      Primitive ID: false
+      Primitive flags: false
+      Fragment position: false
+      Sample mask/ID: false
+    Uniform count: 0
+  Secondary shader: 0x0
+
+Blend RT 0:
+  Load Destination: false
+  Alpha To One: false
+  Enable: true
+  sRGB: false
+  Round to FB precision: true
+  Blend Constant: 0
+  Equation:
+    RGB:
+      A: Src
+      Negate A: false
+      B: Src
+      Negate B: false
+      C: Zero
+      Invert C: false
+    Alpha:
+      A: Src
+      Negate A: false
+      B: Src
+      Negate B: false
+      C: Zero
+      Invert C: false
+    Color Mask: 15
+  Internal:
+    Mode: Opaque
+    Shader:
+      Return Value: 24
+      PC: 17749632
+    Fixed-Function:
+      Num Comps: 4
+      Alpha Zero NOP: false
+      Alpha One Store: false
+      RT: 0
+      Conversion:
+        Format (v6): RGBA8 TB RGBA
+        Raw: false
+        Register Format: F32
+Viewport:
+  Minimum X: -inf
+  Minimum Y: -inf
+  Maximum X: inf
+  Maximum Y: inf
+  Minimum Z: 0.000000
+  Maximum Z: 1.000000
+  Scissor Minimum X: 0
+  Scissor Minimum Y: 0
+  Scissor Maximum X: 255
+  Scissor Maximum Y: 127
+
+Textures 8b2129560:
+
+Samplers 8b21295a0:
+
+Framebuffer @8b2127000:
+  Parameters:
+    Pre Frame 0: Always
+    Pre Frame 1: Never
+    Post Frame: Never
+    Sample Locations: 0x8b2000000
+    Frame Shader DCDs: 0x8b2129380
+    Width: 256
+    Height: 128
+    Bound Min X: 0
+    Bound Min Y: 0
+    Bound Max X: 255
+    Bound Max Y: 127
+    Sample Count: 1
+    Sample Pattern: Single-sampled
+    Tie-Break Rule: MINUS_180_IN_0_OUT
+    Effective Tile Size: 256
+    X Downsampling Scale: 0
+    Y Downsampling Scale: 0
+    Render Target Count: 1
+    Color Buffer Allocation: 1024
+    S Clear: 0
+    S Write Enable: false
+    S Preload Enable: false
+    S Unload Enable: false
+    Z Internal Format: D24
+    Z Write Enable: false
+    Z Preload Enable: false
+    Z Unload Enable: false
+    Has ZS CRC Extension: false
+    Empty Tile Read Enable: false
+    Empty Tile Write Enable: false
+    CRC Read Enable: false
+    CRC Write Enable: false
+    Z Clear: 0.000000
+    Tiler: 0x8b21270c0
+  Tiler Heap:
+    Size: 0x2000000
+    Base: 0x8b0000000
+    Bottom: 0x8b0000000
+    Top: 0x8b2000000
+  Tiler Context @8b21270c0:
+    Polygon List: 0x0
+    Hierarchy Mask: 255
+    Sample Pattern: Single-sampled
+    Update Cost Table: false
+    FB Width: 256
+    FB Height: 128
+    Heap: 0x8b2127180
+    Weights:
+      Weight0: 0
+      Weight1: 0
+      Weight2: 0
+      Weight3: 0
+      Weight4: 0
+      Weight5: 0
+      Weight6: 0
+      Weight7: 0
+    State:
+      Word0: 0x0
+      Word1: 0x0
+      Word2: 0x0
+      Word3: 0x0
+      Word4: 0x0
+      Word5: 0x0
+      Word6: 0x0
+      Word7: 0x0
+      Word8: 0x0
+      Word9: 0x0
+      Word10: 0x0
+      Word11: 0x0
+      Word12: 0x0
+      Word13: 0x0
+      Word14: 0x0
+      Word15: 0x0
+
+Color Render Targets @8b2127080:
+  Linear RGB Color Render Target 0:
+    Internal Buffer Offset: 0
+    YUV Enable: false
+    Dithered Clear: false
+    Internal Format: R8G8B8A8
+    Write Enable: true
+    Writeback Format: R8G8B8A8
+    Writeback Endianness: Little Endian
+    Writeback Block Format: Linear
+    Writeback MSAA: Single
+    sRGB: false
+    Dithering Enable: false
+    Swizzle: 1546 (BGRA)
+    Clean Pixel Write Enable: false
+    Writeback buffer:
+      Base: 0x8b2102000
+      Row Stride: 0x400
+      Surface Stride: 0x0
+    Clear:
+      Color 0: 0x0
+      Color 1: 0x0
+      Color 2: 0x0
+      Color 3: 0x0
+
+Fragment Job Payload:
+  Bound Min X: 0
+  Bound Min Y: 0
+  Bound Max X: 15
+  Bound Max Y: 7
+  Has Tile Enable Map: false
+  Framebuffer: 0x8b2127001
+  Tile Enable Map: 0x0
+  Tile Enable Map Row Stride: 0
+
+Job Header (8b2128c40):
+  Exception Status: 0x0
+  First Incomplete Task: 0x0
+  Fault Pointer: 0x0
+  Is 64b: true
+  Type: Vertex
+  Barrier: false
+  Invalidate Cache: false
+  Suppress Prefetch: false
+  Enable Texture Mapper: false
+  Relax Dependency 1: false
+  Relax Dependency 2: false
+  Index: 1
+  Dependency 1: 0
+  Dependency 2: 0
+  Next: 0x8b2128d00
+
+Local Storage:
+  TLS Size: 0
+  TLS Initial Stack Pointer Offset: 0
+  WLS Instances: 2147483648
+  WLS Size Base: 0
+  WLS Size Scale: 0
+  TLS Base Pointer: 0x0
+  WLS Base Pointer: 0x0
+
+Shader 0x7fcaa5400000 (GPU VA 8b2001000) sz 67104768
+clause_0:
+ds(0) nbb attr ncph next_attr dwb(0) 
+{
+    *NOP t0
+    +LD_ATTR_IMM.f32.v2 t1, r61, r62, attribute_index:15, @r0
+}
+
+clause_1:
+ds(0) nbb attr ncph next_attr dwb(0) 
+{
+    *NOP t0
+    +LOAD.i32.ubo t1, #0.x, #0.x, @r2
+}
+
+clause_2:
+ds(0) nbb attr ncph next_attr dwb(0) 
+{
+    *FMA.f32 r0:t0, r0, r2, #0.neg
+    +NOP t1
+    *FMA.f32 r1:t0, r1, r2, #0.neg
+    +LOAD.i96.ubo t1, 0x00000010 /* 0.000000 */, 0x0000001f /* 0.000000 */, @r2
+}
+
+clause_5:
+ds(0) nbb attr ncph next_attr dwb(0) 
+{
+    *NOP t0
+    +LOAD.i64.ubo t1, 0x00000000 /* 0.000000 */, 0x0000001f /* 0.000000 */, @r5
+}
+
+clause_7:
+ds(0) nbb attr ncph next_store dwb(0) 
+{
+    *FMA.f32 r0:t0, r0, r5, r2
+    +NOP t1
+    *FMA.f32 r1:t0, r1, r6, r3
+    +NOP t1
+    *MOV.i32 r2:t0, r4
+    +LEA_ATTR_IMM.auto t1, r61, r62, attribute_index:0, @r4
+}
+
+clause_10:
+ds(0) osrb nbb store ncph next_attr 
+{
+    *NOP t0
+    +MOV.i32 r3:t1, 0x3f800000 /* 1.000000 */
+    *NOP t0
+    +ST_CVT.v4 t1, r4, r5, r6, @r0
+}
+
+clause_13:
+ds(0) nbb attr ncph next_attr 
+{
+    *NOP t0
+    +LD_ATTR.f32.v2 t1, r61, r62, 0x00000010 /* 0.000000 */, @r0
+}
+
+clause_15:
+ds(0) nbb attr ncph next_store dwb(0) 
+{
+    *IADDC.i32 t0, #0, 0x00000020 /* 0.000000 */, #0
+    +LEA_ATTR.auto t1, r61, r62, t, @r2
+}
+
+clause_17:
+ds(0) eos store 
+{
+    *NOP t0
+    +ST_CVT.v2 t1, r2, r3, r4, @r0
+}
+
+
+
+State:
+  Shader:
+    Shader: 0x8b2001000
+    Sampler count: 0
+    Texture count: 0
+    Attribute count: 2
+    Varying count: 33
+  Properties:
+    Uniform buffer count: 32
+    Depth source: Minimum
+    Shader contains barrier: false
+    Shader modifies coverage: false
+    Allow forward pixel to kill: false
+    Allow forward pixel to be killed: false
+    Pixel kill operation: Force Early
+    ZS update operation: Force Early
+    Point sprite coord origin max Y: false
+    Stencil from shader: false
+  Depth units: 0.000000
+  Depth factor: 0.000000
+  Depth bias clamp: 0.000000
+  Multisample, Misc:
+    Sample mask: 0
+    Multisample enable: false
+    Multisample late coverage: false
+    Evaluate per-sample: false
+    Fixed-function depth range fixed: false
+    Shader depth range fixed: false
+    Overdraw alpha1: false
+    Overdraw alpha0: false
+    Depth function: Never
+    Depth write mask: false
+    Fixed-function near discard: false
+    Fixed-function far discard: false
+    Fragment near discard: false
+    Fragment far discard: false
+  Stencil Mask, Misc:
+    Stencil mask front: 0
+    Stencil mask back: 0
+    Stencil enable: false
+    Alpha-to-coverage: false
+    Alpha-to-coverage Invert: false
+    Alpha test compare function: Never
+    Force seamless cubemaps: false
+    Front-facing depth bias: false
+    Back-facing depth bias: false
+    Aligned line-ends: false
+    Point snap: false
+  Stencil front:
+    Reference Value: 0
+    Mask: 0
+    Compare Function: Never
+    Stencil Fail: Keep
+    Depth Fail: Keep
+    Depth Pass: Keep
+  Stencil back:
+    Reference Value: 0
+    Mask: 0
+    Compare Function: Never
+    Stencil Fail: Keep
+    Depth Fail: Keep
+    Depth Pass: Keep
+  Preload:
+    Compute:
+      PC: false
+      Local Invocation XY: false
+      Local Invocation Z: false
+      Work group X: false
+      Work group Y: false
+      Work group Z: false
+      Global Invocation X: false
+      Global Invocation Y: true
+      Global Invocation Z: true
+    Vertex:
+      Warp limit: None
+      PC: false
+      Position result address lo: false
+      Position result address hi: false
+      Vertex ID: true
+      Instance ID: true
+    Fragment:
+      PC: false
+      Coverage: false
+      Primitive ID: false
+      Primitive flags: false
+      Fragment position: false
+      Sample mask/ID: true
+    Uniform count: 0
+  Secondary preload:
+    Compute:
+      PC: false
+      Local Invocation XY: false
+      Local Invocation Z: false
+      Work group X: false
+      Work group Y: false
+      Work group Z: false
+      Global Invocation X: false
+      Global Invocation Y: false
+      Global Invocation Z: false
+    Vertex:
+      Warp limit: None
+      PC: false
+      Position result address lo: false
+      Position result address hi: false
+      Vertex ID: false
+      Instance ID: false
+    Fragment:
+      PC: false
+      Coverage: false
+      Primitive ID: false
+      Primitive flags: false
+      Fragment position: false
+      Sample mask/ID: false
+    Uniform count: 0
+  Secondary shader: 0x0
+
+Attribute:
+  Buffer index: 0
+  Offset enable: true
+  Format (v6): RG32F RG01
+  Offset: 0
+Attribute:
+  Buffer index: 0
+  Offset enable: true
+  Format (v6): RG32F RG01
+  Offset: 8
+
+Attribute:
+  Type: 1D
+  Pointer: 0x8b2126000
+  Stride: 0x10
+  Size: 0x40
+  Divisor: 1
+  Divisor R: 0
+  Divisor P: 0
+  Divisor E: 0
+
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 0
+  Offset enable: false
+  Format (v6): RG32F RG01
+  Offset: 0
+
+Varying:
+  Type: 1D
+  Pointer: 0x8b2128b80
+  Stride: 0x8
+  Size: 0x20
+  Divisor: 1
+  Divisor R: 0
+  Divisor P: 0
+  Divisor E: 0
+Varying:
+  Type: 1D
+  Pointer: 0x0
+  Stride: 0x0
+  Size: 0x0
+  Divisor: 1
+  Divisor R: 0
+  Divisor P: 0
+  Divisor E: 0
+
+ubuf_0[64] = s8mali + 34758656;
+ubuf_1[16] = s8mali + 34763328;
+ubuf_2[64] = s8mali + 33555712;
+ubuf_3[64] = s8mali + 33555712;
+ubuf_4[64] = s8mali + 33555712;
+ubuf_5[64] = s8mali + 33555712;
+ubuf_6[64] = s8mali + 33555712;
+ubuf_7[64] = s8mali + 33555712;
+ubuf_8[64] = s8mali + 33555712;
+ubuf_9[64] = s8mali + 33555712;
+ubuf_10[64] = s8mali + 33555712;
+ubuf_11[64] = s8mali + 33555712;
+ubuf_12[64] = s8mali + 33555712;
+ubuf_13[64] = s8mali + 33555712;
+ubuf_14[64] = s8mali + 33555712;
+ubuf_15[64] = s8mali + 33555712;
+ubuf_16[64] = s8mali + 33555712;
+ubuf_17[64] = s8mali + 33555712;
+ubuf_18[64] = s8mali + 33555712;
+ubuf_19[64] = s8mali + 33555712;
+ubuf_20[64] = s8mali + 33555712;
+ubuf_21[64] = s8mali + 33555712;
+ubuf_22[64] = s8mali + 33555712;
+ubuf_23[64] = s8mali + 33555712;
+ubuf_24[64] = s8mali + 33555712;
+ubuf_25[64] = s8mali + 33555712;
+ubuf_26[64] = s8mali + 33555712;
+ubuf_27[64] = s8mali + 33555712;
+ubuf_28[64] = s8mali + 33555712;
+ubuf_29[16] = s8mali + 33562624;
+ubuf_30[256] = s8mali + 34763776;
+ubuf_31[64] = s8mali + 34763408;
+
+Textures 8b2127700:
+
+Samplers 8b2128300:
+
+Vertex Job Payload:
+  Invocation (1, 1, 1) x (1, 4, 1)
+  Invocation:
+    Invocations: 0x3
+    Size Y shift: 0
+    Size Z shift: 0
+    Workgroups X shift: 0
+    Workgroups Y shift: 0
+    Workgroups Z shift: 32
+    Thread group split: 2
+  Vertex Job Parameters:
+    Job Task Split: 5
+  Draw:
+    Four Components Per Vertex: true
+    Draw Descriptor Is 64b: true
+    Occlusion query: Disabled
+    Front face CCW: false
+    Cull front face: false
+    Cull back face: false
+    Flat Shading Vertex: 0
+    Exclude Filtered Perf Counters: false
+    Primitive Barrier: false
+    Clean Fragment Write: false
+    Instance Size: 1
+    Instance Primitive Size: 1
+    Offset start: 0
+    Primitive Index Base: 0
+    Position: 0x0
+    Uniform buffers: 0x8b2127300
+    Textures: 0x8b2127700
+    Samplers: 0x8b2128300
+    Push uniforms: 0x0
+    State: 0x8b2002240
+    Attribute buffers: 0x8b2128b00
+    Attributes: 0x8b2128b30
+    Varying buffers: 0x8b2128b40
+    Varyings: 0x8b2002020
+    Viewport: 0x0
+    Occlusion: 0x0
+    Thread Storage: 0x8b21271c0
+
+Job Header (8b2128d00):
+  Exception Status: 0x0
+  First Incomplete Task: 0x0
+  Fault Pointer: 0x0
+  Is 64b: true
+  Type: Tiler
+  Barrier: false
+  Invalidate Cache: false
+  Suppress Prefetch: false
+  Enable Texture Mapper: false
+  Relax Dependency 1: false
+  Relax Dependency 2: false
+  Index: 2
+  Dependency 1: 1
+  Dependency 2: 0
+  Next: 0x8b21291c0
+
+Local Storage:
+  TLS Size: 0
+  TLS Initial Stack Pointer Offset: 0
+  WLS Instances: 2147483648
+  WLS Size Base: 0
+  WLS Size Scale: 0
+  TLS Base Pointer: 0x0
+  WLS Base Pointer: 0x0
+
+Shader 0x7fcaa5400300 (GPU VA 8b2001300) sz 67104000
+clause_0:
+ds(0) nbb vary ncph next_tex dwb(0) 
+{
+    *IADDC.i32 t0, #0, 0x00000020 /* 0.000000 */, #0
+    +LD_VAR.v2.store.f32.center t1, 0x00000020 /* 0.000000 */, t, @r0
+}
+
+clause_2:
+ds(0) nbb tex ncph next_attr dwb(0) 
+{
+    *NOP t0
+    +TEXS_2D.f32.skip.computed_lod t1, r0, r1, texture_index:0, sampler_index:0, @r0
+}
+
+clause_3:
+ds(0) nbb attr td ncph next_atest dwb(0, 6) 
+{
+    *NOP t0
+    +LOAD.i128.ubo t1, #0.x, #0.x, @r4
+}
+
+clause_4:
+ds(0) nbb atest td ncph next_blend dwb(0, 6, 7) 
+{
+    *FMA.f32 r3:t0, r3, r7, #0.neg
+    +NOP t1
+    *NOP t0
+    +ATEST r60:t1, r60, t0, @r60
+}
+
+clause_6:
+ds(0) eos blend td 
+{
+    *FMA.f32 r0:t0, r0, r4, #0.neg
+    +NOP t1
+    *FMA.f32 r1:t0, r1, r5, #0.neg
+    +NOP t1
+    *FMA.f32 r2:t0, r2, r6, #0.neg
+    +NOP t1
+    *NOP t0
+    +BLEND r48:t1, r60, blend_descriptor_0.x, blend_descriptor_0.y, @r0
+}
+
+
+
+State:
+  Shader:
+    Shader: 0x8b2001300
+    Sampler count: 0
+    Texture count: 0
+    Attribute count: 0
+    Varying count: 33
+  Properties:
+    Uniform buffer count: 1
+    Depth source: Fixed function
+    Shader contains barrier: true
+    Shader modifies coverage: false
+    Allow forward pixel to kill: false
+    Allow forward pixel to be killed: true
+    Pixel kill operation: Force Early
+    ZS update operation: Force Early
+    Point sprite coord origin max Y: false
+    Stencil from shader: false
+  Depth units: 0.000000
+  Depth factor: 0.000000
+  Depth bias clamp: 0.000000
+  Multisample, Misc:
+    Sample mask: 65535
+    Multisample enable: false
+    Multisample late coverage: false
+    Evaluate per-sample: false
+    Fixed-function depth range fixed: true
+    Shader depth range fixed: true
+    Overdraw alpha1: false
+    Overdraw alpha0: false
+    Depth function: Always
+    Depth write mask: false
+    Fixed-function near discard: false
+    Fixed-function far discard: false
+    Fragment near discard: false
+    Fragment far discard: false
+  Stencil Mask, Misc:
+    Stencil mask front: 255
+    Stencil mask back: 255
+    Stencil enable: false
+    Alpha-to-coverage: false
+    Alpha-to-coverage Invert: false
+    Alpha test compare function: Always
+    Force seamless cubemaps: false
+    Front-facing depth bias: false
+    Back-facing depth bias: false
+    Aligned line-ends: false
+    Point snap: false
+  Stencil front:
+    Reference Value: 0
+    Mask: 255
+    Compare Function: Always
+    Stencil Fail: Keep
+    Depth Fail: Keep
+    Depth Pass: Keep
+  Stencil back:
+    Reference Value: 0
+    Mask: 255
+    Compare Function: Always
+    Stencil Fail: Keep
+    Depth Fail: Keep
+    Depth Pass: Keep
+  Preload:
+    Compute:
+      PC: false
+      Local Invocation XY: true
+      Local Invocation Z: false
+      Work group X: false
+      Work group Y: false
+      Work group Z: false
+      Global Invocation X: false
+      Global Invocation Y: false
+      Global Invocation Z: false
+    Vertex:
+      Warp limit: None
+      PC: false
+      Position result address lo: false
+      Position result address hi: false
+      Vertex ID: false
+      Instance ID: false
+    Fragment:
+      PC: false
+      Coverage: true
+      Primitive ID: false
+      Primitive flags: false
+      Fragment position: false
+      Sample mask/ID: false
+    Uniform count: 0
+  Secondary preload:
+    Compute:
+      PC: false
+      Local Invocation XY: false
+      Local Invocation Z: false
+      Work group X: false
+      Work group Y: false
+      Work group Z: false
+      Global Invocation X: false
+      Global Invocation Y: false
+      Global Invocation Z: false
+    Vertex:
+      Warp limit: None
+      PC: false
+      Position result address lo: false
+      Position result address hi: false
+      Vertex ID: false
+      Instance ID: false
+    Fragment:
+      PC: false
+      Coverage: false
+      Primitive ID: false
+      Primitive flags: false
+      Fragment position: false
+      Sample mask/ID: false
+    Uniform count: 0
+  Secondary shader: 0x0
+
+Blend RT 0:
+  Load Destination: true
+  Alpha To One: false
+  Enable: true
+  sRGB: false
+  Round to FB precision: true
+  Blend Constant: 0
+  Equation:
+    RGB:
+      A: Src
+      Negate A: false
+      B: Dest
+      Negate B: false
+      C: Src Alpha
+      Invert C: true
+    Alpha:
+      A: Src
+      Negate A: false
+      B: Dest
+      Negate B: false
+      C: Src Alpha
+      Invert C: true
+    Color Mask: 15
+  Internal:
+    Mode: Fixed-Function
+    Shader:
+      Return Value: 88
+      PC: 17749632
+    Fixed-Function:
+      Num Comps: 4
+      Alpha Zero NOP: false
+      Alpha One Store: true
+      RT: 0
+      Conversion:
+        Format (v6): RGBA8 TB RGBA
+        Raw: false
+        Register Format: F32
+Viewport:
+  Minimum X: -inf
+  Minimum Y: -inf
+  Maximum X: inf
+  Maximum Y: inf
+  Minimum Z: 0.000000
+  Maximum Z: 1.000000
+  Scissor Minimum X: 0
+  Scissor Minimum Y: 0
+  Scissor Maximum X: 255
+  Scissor Maximum Y: 127
+
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 0
+  Offset enable: false
+  Format (v6): RG32F RG01
+  Offset: 0
+
+Varying:
+  Type: 1D
+  Pointer: 0x8b2128b80
+  Stride: 0x8
+  Size: 0x20
+  Divisor: 1
+  Divisor R: 0
+  Divisor P: 0
+  Divisor E: 0
+Varying:
+  Type: 1D
+  Pointer: 0x0
+  Stride: 0x0
+  Size: 0x0
+  Divisor: 1
+  Divisor R: 0
+  Divisor P: 0
+  Divisor E: 0
+
+ubuf_0[16] = s8mali + 34763392;
+
+Textures 8b2127d00:
+
+Samplers 8b2128700:
+
+Tiler Job Payload:
+  Invocation (1, 1, 1) x (1, 4, 1)
+  Invocation:
+    Invocations: 0x3
+    Size Y shift: 0
+    Size Z shift: 0
+    Workgroups X shift: 0
+    Workgroups Y shift: 0
+    Workgroups Z shift: 32
+    Thread group split: 2
+  Primitive:
+    Draw mode: Triangle strip
+    Index type: None
+    Point size array format: None
+    Primitive Index Enable: false
+    Primitive Index Writeback: false
+    First provoking vertex: true
+    Low Depth Cull: true
+    High Depth Cull: true
+    Secondary Shader: false
+    Primitive restart: None
+    Job Task Split: 6
+    Base vertex offset: 0
+    Primitive Restart Index: 0x0
+    Index count: 0x4
+    Indices: 0x0
+  Draw:
+    Four Components Per Vertex: true
+    Draw Descriptor Is 64b: true
+    Occlusion query: Disabled
+    Front face CCW: true
+    Cull front face: false
+    Cull back face: false
+    Flat Shading Vertex: 0
+    Exclude Filtered Perf Counters: false
+    Primitive Barrier: false
+    Clean Fragment Write: false
+    Instance Size: 1
+    Instance Primitive Size: 2
+    Offset start: 0
+    Primitive Index Base: 0
+    Position: 0x0
+    Uniform buffers: 0x8b2127500
+    Textures: 0x8b2127d00
+    Samplers: 0x8b2128700
+    Push uniforms: 0x0
+    State: 0x8b2128bc0
+    Attribute buffers: 0x0
+    Attributes: 0x0
+    Varying buffers: 0x8b2128b40
+    Varyings: 0x8b2002130
+    Viewport: 0x8b21272e0
+    Occlusion: 0x0
+    Thread Storage: 0x8b21271c0
+  Primitive Size:
+    Fixed Sized: 1.000000
+    Size Array: 0x3f800000
+  Tiler Heap:
+    Size: 0x2000000
+    Base: 0x8b0000000
+    Bottom: 0x8b0000000
+    Top: 0x8b2000000
+  Tiler Context @8b21270c0:
+    Polygon List: 0x0
+    Hierarchy Mask: 255
+    Sample Pattern: Single-sampled
+    Update Cost Table: false
+    FB Width: 256
+    FB Height: 128
+    Heap: 0x8b2127180
+    Weights:
+      Weight0: 0
+      Weight1: 0
+      Weight2: 0
+      Weight3: 0
+      Weight4: 0
+      Weight5: 0
+      Weight6: 0
+      Weight7: 0
+    State:
+      Word0: 0x0
+      Word1: 0x0
+      Word2: 0x0
+      Word3: 0x0
+      Word4: 0x0
+      Word5: 0x0
+      Word6: 0x0
+      Word7: 0x0
+      Word8: 0x0
+      Word9: 0x0
+      Word10: 0x0
+      Word11: 0x0
+      Word12: 0x0
+      Word13: 0x0
+      Word14: 0x0
+      Word15: 0x0
+
+Job Header (8b21291c0):
+  Exception Status: 0x0
+  First Incomplete Task: 0x0
+  Fault Pointer: 0x0
+  Is 64b: true
+  Type: Vertex
+  Barrier: false
+  Invalidate Cache: false
+  Suppress Prefetch: false
+  Enable Texture Mapper: false
+  Relax Dependency 1: false
+  Relax Dependency 2: false
+  Index: 3
+  Dependency 1: 0
+  Dependency 2: 0
+  Next: 0x8b2129280
+
+Local Storage:
+  TLS Size: 0
+  TLS Initial Stack Pointer Offset: 0
+  WLS Instances: 2147483648
+  WLS Size Base: 0
+  WLS Size Scale: 0
+  TLS Base Pointer: 0x0
+  WLS Base Pointer: 0x0
+
+Shader 0x7fcaa5400000 (GPU VA 8b2001000) sz 67104768
+clause_0:
+ds(0) nbb attr ncph next_attr dwb(0) 
+{
+    *NOP t0
+    +LD_ATTR_IMM.f32.v2 t1, r61, r62, attribute_index:15, @r0
+}
+
+clause_1:
+ds(0) nbb attr ncph next_attr dwb(0) 
+{
+    *NOP t0
+    +LOAD.i32.ubo t1, #0.x, #0.x, @r2
+}
+
+clause_2:
+ds(0) nbb attr ncph next_attr dwb(0) 
+{
+    *FMA.f32 r0:t0, r0, r2, #0.neg
+    +NOP t1
+    *FMA.f32 r1:t0, r1, r2, #0.neg
+    +LOAD.i96.ubo t1, 0x00000010 /* 0.000000 */, 0x0000001f /* 0.000000 */, @r2
+}
+
+clause_5:
+ds(0) nbb attr ncph next_attr dwb(0) 
+{
+    *NOP t0
+    +LOAD.i64.ubo t1, 0x00000000 /* 0.000000 */, 0x0000001f /* 0.000000 */, @r5
+}
+
+clause_7:
+ds(0) nbb attr ncph next_store dwb(0) 
+{
+    *FMA.f32 r0:t0, r0, r5, r2
+    +NOP t1
+    *FMA.f32 r1:t0, r1, r6, r3
+    +NOP t1
+    *MOV.i32 r2:t0, r4
+    +LEA_ATTR_IMM.auto t1, r61, r62, attribute_index:0, @r4
+}
+
+clause_10:
+ds(0) osrb nbb store ncph next_attr 
+{
+    *NOP t0
+    +MOV.i32 r3:t1, 0x3f800000 /* 1.000000 */
+    *NOP t0
+    +ST_CVT.v4 t1, r4, r5, r6, @r0
+}
+
+clause_13:
+ds(0) nbb attr ncph next_attr 
+{
+    *NOP t0
+    +LD_ATTR.f32.v2 t1, r61, r62, 0x00000010 /* 0.000000 */, @r0
+}
+
+clause_15:
+ds(0) nbb attr ncph next_store dwb(0) 
+{
+    *IADDC.i32 t0, #0, 0x00000020 /* 0.000000 */, #0
+    +LEA_ATTR.auto t1, r61, r62, t, @r2
+}
+
+clause_17:
+ds(0) eos store 
+{
+    *NOP t0
+    +ST_CVT.v2 t1, r2, r3, r4, @r0
+}
+
+
+
+State:
+  Shader:
+    Shader: 0x8b2001000
+    Sampler count: 0
+    Texture count: 0
+    Attribute count: 2
+    Varying count: 33
+  Properties:
+    Uniform buffer count: 32
+    Depth source: Minimum
+    Shader contains barrier: false
+    Shader modifies coverage: false
+    Allow forward pixel to kill: false
+    Allow forward pixel to be killed: false
+    Pixel kill operation: Force Early
+    ZS update operation: Force Early
+    Point sprite coord origin max Y: false
+    Stencil from shader: false
+  Depth units: 0.000000
+  Depth factor: 0.000000
+  Depth bias clamp: 0.000000
+  Multisample, Misc:
+    Sample mask: 0
+    Multisample enable: false
+    Multisample late coverage: false
+    Evaluate per-sample: false
+    Fixed-function depth range fixed: false
+    Shader depth range fixed: false
+    Overdraw alpha1: false
+    Overdraw alpha0: false
+    Depth function: Never
+    Depth write mask: false
+    Fixed-function near discard: false
+    Fixed-function far discard: false
+    Fragment near discard: false
+    Fragment far discard: false
+  Stencil Mask, Misc:
+    Stencil mask front: 0
+    Stencil mask back: 0
+    Stencil enable: false
+    Alpha-to-coverage: false
+    Alpha-to-coverage Invert: false
+    Alpha test compare function: Never
+    Force seamless cubemaps: false
+    Front-facing depth bias: false
+    Back-facing depth bias: false
+    Aligned line-ends: false
+    Point snap: false
+  Stencil front:
+    Reference Value: 0
+    Mask: 0
+    Compare Function: Never
+    Stencil Fail: Keep
+    Depth Fail: Keep
+    Depth Pass: Keep
+  Stencil back:
+    Reference Value: 0
+    Mask: 0
+    Compare Function: Never
+    Stencil Fail: Keep
+    Depth Fail: Keep
+    Depth Pass: Keep
+  Preload:
+    Compute:
+      PC: false
+      Local Invocation XY: false
+      Local Invocation Z: false
+      Work group X: false
+      Work group Y: false
+      Work group Z: false
+      Global Invocation X: false
+      Global Invocation Y: true
+      Global Invocation Z: true
+    Vertex:
+      Warp limit: None
+      PC: false
+      Position result address lo: false
+      Position result address hi: false
+      Vertex ID: true
+      Instance ID: true
+    Fragment:
+      PC: false
+      Coverage: false
+      Primitive ID: false
+      Primitive flags: false
+      Fragment position: false
+      Sample mask/ID: true
+    Uniform count: 0
+  Secondary preload:
+    Compute:
+      PC: false
+      Local Invocation XY: false
+      Local Invocation Z: false
+      Work group X: false
+      Work group Y: false
+      Work group Z: false
+      Global Invocation X: false
+      Global Invocation Y: false
+      Global Invocation Z: false
+    Vertex:
+      Warp limit: None
+      PC: false
+      Position result address lo: false
+      Position result address hi: false
+      Vertex ID: false
+      Instance ID: false
+    Fragment:
+      PC: false
+      Coverage: false
+      Primitive ID: false
+      Primitive flags: false
+      Fragment position: false
+      Sample mask/ID: false
+    Uniform count: 0
+  Secondary shader: 0x0
+
+Attribute:
+  Buffer index: 0
+  Offset enable: true
+  Format (v6): RG32F RG01
+  Offset: 0
+Attribute:
+  Buffer index: 0
+  Offset enable: true
+  Format (v6): RG32F RG01
+  Offset: 8
+
+Attribute:
+  Type: 1D
+  Pointer: 0x8b2126000
+  Stride: 0x10
+  Size: 0x40
+  Divisor: 1
+  Divisor R: 0
+  Divisor P: 0
+  Divisor E: 0
+
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 0
+  Offset enable: false
+  Format (v6): RG32F RG01
+  Offset: 0
+
+Varying:
+  Type: 1D
+  Pointer: 0x8b2129100
+  Stride: 0x8
+  Size: 0x20
+  Divisor: 1
+  Divisor R: 0
+  Divisor P: 0
+  Divisor E: 0
+Varying:
+  Type: 1D
+  Pointer: 0x0
+  Stride: 0x0
+  Size: 0x0
+  Divisor: 1
+  Divisor R: 0
+  Divisor P: 0
+  Divisor E: 0
+
+ubuf_0[64] = s8mali + 34758656;
+ubuf_1[16] = s8mali + 34763328;
+ubuf_2[64] = s8mali + 33555712;
+ubuf_3[64] = s8mali + 33555712;
+ubuf_4[64] = s8mali + 33555712;
+ubuf_5[64] = s8mali + 33555712;
+ubuf_6[64] = s8mali + 33555712;
+ubuf_7[64] = s8mali + 33555712;
+ubuf_8[64] = s8mali + 33555712;
+ubuf_9[64] = s8mali + 33555712;
+ubuf_10[64] = s8mali + 33555712;
+ubuf_11[64] = s8mali + 33555712;
+ubuf_12[64] = s8mali + 33555712;
+ubuf_13[64] = s8mali + 33555712;
+ubuf_14[64] = s8mali + 33555712;
+ubuf_15[64] = s8mali + 33555712;
+ubuf_16[64] = s8mali + 33555712;
+ubuf_17[64] = s8mali + 33555712;
+ubuf_18[64] = s8mali + 33555712;
+ubuf_19[64] = s8mali + 33555712;
+ubuf_20[64] = s8mali + 33555712;
+ubuf_21[64] = s8mali + 33555712;
+ubuf_22[64] = s8mali + 33555712;
+ubuf_23[64] = s8mali + 33555712;
+ubuf_24[64] = s8mali + 33555712;
+ubuf_25[64] = s8mali + 33555712;
+ubuf_26[64] = s8mali + 33555712;
+ubuf_27[64] = s8mali + 33555712;
+ubuf_28[64] = s8mali + 33555712;
+ubuf_29[16] = s8mali + 33562624;
+ubuf_30[256] = s8mali + 34763776;
+ubuf_31[64] = s8mali + 34770448;
+
+Textures 8b2127700:
+
+Samplers 8b2128300:
+
+Vertex Job Payload:
+  Invocation (1, 1, 1) x (1, 4, 1)
+  Invocation:
+    Invocations: 0x3
+    Size Y shift: 0
+    Size Z shift: 0
+    Workgroups X shift: 0
+    Workgroups Y shift: 0
+    Workgroups Z shift: 32
+    Thread group split: 2
+  Vertex Job Parameters:
+    Job Task Split: 5
+  Draw:
+    Four Components Per Vertex: true
+    Draw Descriptor Is 64b: true
+    Occlusion query: Disabled
+    Front face CCW: false
+    Cull front face: false
+    Cull back face: false
+    Flat Shading Vertex: 0
+    Exclude Filtered Perf Counters: false
+    Primitive Barrier: false
+    Clean Fragment Write: false
+    Instance Size: 1
+    Instance Primitive Size: 1
+    Offset start: 0
+    Primitive Index Base: 0
+    Position: 0x0
+    Uniform buffers: 0x8b2128e50
+    Textures: 0x8b2127700
+    Samplers: 0x8b2128300
+    Push uniforms: 0x0
+    State: 0x8b2002240
+    Attribute buffers: 0x8b2129060
+    Attributes: 0x8b2129090
+    Varying buffers: 0x8b21290a0
+    Varyings: 0x8b2002020
+    Viewport: 0x0
+    Occlusion: 0x0
+    Thread Storage: 0x8b21271c0
+
+Job Header (8b2129280):
+  Exception Status: 0x0
+  First Incomplete Task: 0x0
+  Fault Pointer: 0x0
+  Is 64b: true
+  Type: Tiler
+  Barrier: false
+  Invalidate Cache: false
+  Suppress Prefetch: false
+  Enable Texture Mapper: false
+  Relax Dependency 1: false
+  Relax Dependency 2: false
+  Index: 4
+  Dependency 1: 3
+  Dependency 2: 2
+  Next: 0x0
+
+Local Storage:
+  TLS Size: 0
+  TLS Initial Stack Pointer Offset: 0
+  WLS Instances: 2147483648
+  WLS Size Base: 0
+  WLS Size Scale: 0
+  TLS Base Pointer: 0x0
+  WLS Base Pointer: 0x0
+
+Shader 0x7fcaa5400300 (GPU VA 8b2001300) sz 67104000
+clause_0:
+ds(0) nbb vary ncph next_tex dwb(0) 
+{
+    *IADDC.i32 t0, #0, 0x00000020 /* 0.000000 */, #0
+    +LD_VAR.v2.store.f32.center t1, 0x00000020 /* 0.000000 */, t, @r0
+}
+
+clause_2:
+ds(0) nbb tex ncph next_attr dwb(0) 
+{
+    *NOP t0
+    +TEXS_2D.f32.skip.computed_lod t1, r0, r1, texture_index:0, sampler_index:0, @r0
+}
+
+clause_3:
+ds(0) nbb attr td ncph next_atest dwb(0, 6) 
+{
+    *NOP t0
+    +LOAD.i128.ubo t1, #0.x, #0.x, @r4
+}
+
+clause_4:
+ds(0) nbb atest td ncph next_blend dwb(0, 6, 7) 
+{
+    *FMA.f32 r3:t0, r3, r7, #0.neg
+    +NOP t1
+    *NOP t0
+    +ATEST r60:t1, r60, t0, @r60
+}
+
+clause_6:
+ds(0) eos blend td 
+{
+    *FMA.f32 r0:t0, r0, r4, #0.neg
+    +NOP t1
+    *FMA.f32 r1:t0, r1, r5, #0.neg
+    +NOP t1
+    *FMA.f32 r2:t0, r2, r6, #0.neg
+    +NOP t1
+    *NOP t0
+    +BLEND r48:t1, r60, blend_descriptor_0.x, blend_descriptor_0.y, @r0
+}
+
+
+
+State:
+  Shader:
+    Shader: 0x8b2001300
+    Sampler count: 0
+    Texture count: 0
+    Attribute count: 0
+    Varying count: 33
+  Properties:
+    Uniform buffer count: 1
+    Depth source: Fixed function
+    Shader contains barrier: true
+    Shader modifies coverage: false
+    Allow forward pixel to kill: false
+    Allow forward pixel to be killed: true
+    Pixel kill operation: Force Early
+    ZS update operation: Force Early
+    Point sprite coord origin max Y: false
+    Stencil from shader: false
+  Depth units: 0.000000
+  Depth factor: 0.000000
+  Depth bias clamp: 0.000000
+  Multisample, Misc:
+    Sample mask: 65535
+    Multisample enable: false
+    Multisample late coverage: false
+    Evaluate per-sample: false
+    Fixed-function depth range fixed: true
+    Shader depth range fixed: true
+    Overdraw alpha1: false
+    Overdraw alpha0: false
+    Depth function: Always
+    Depth write mask: false
+    Fixed-function near discard: false
+    Fixed-function far discard: false
+    Fragment near discard: false
+    Fragment far discard: false
+  Stencil Mask, Misc:
+    Stencil mask front: 255
+    Stencil mask back: 255
+    Stencil enable: false
+    Alpha-to-coverage: false
+    Alpha-to-coverage Invert: false
+    Alpha test compare function: Always
+    Force seamless cubemaps: false
+    Front-facing depth bias: false
+    Back-facing depth bias: false
+    Aligned line-ends: false
+    Point snap: false
+  Stencil front:
+    Reference Value: 0
+    Mask: 255
+    Compare Function: Always
+    Stencil Fail: Keep
+    Depth Fail: Keep
+    Depth Pass: Keep
+  Stencil back:
+    Reference Value: 0
+    Mask: 255
+    Compare Function: Always
+    Stencil Fail: Keep
+    Depth Fail: Keep
+    Depth Pass: Keep
+  Preload:
+    Compute:
+      PC: false
+      Local Invocation XY: true
+      Local Invocation Z: false
+      Work group X: false
+      Work group Y: false
+      Work group Z: false
+      Global Invocation X: false
+      Global Invocation Y: false
+      Global Invocation Z: false
+    Vertex:
+      Warp limit: None
+      PC: false
+      Position result address lo: false
+      Position result address hi: false
+      Vertex ID: false
+      Instance ID: false
+    Fragment:
+      PC: false
+      Coverage: true
+      Primitive ID: false
+      Primitive flags: false
+      Fragment position: false
+      Sample mask/ID: false
+    Uniform count: 0
+  Secondary preload:
+    Compute:
+      PC: false
+      Local Invocation XY: false
+      Local Invocation Z: false
+      Work group X: false
+      Work group Y: false
+      Work group Z: false
+      Global Invocation X: false
+      Global Invocation Y: false
+      Global Invocation Z: false
+    Vertex:
+      Warp limit: None
+      PC: false
+      Position result address lo: false
+      Position result address hi: false
+      Vertex ID: false
+      Instance ID: false
+    Fragment:
+      PC: false
+      Coverage: false
+      Primitive ID: false
+      Primitive flags: false
+      Fragment position: false
+      Sample mask/ID: false
+    Uniform count: 0
+  Secondary shader: 0x0
+
+Blend RT 0:
+  Load Destination: true
+  Alpha To One: false
+  Enable: true
+  sRGB: false
+  Round to FB precision: true
+  Blend Constant: 0
+  Equation:
+    RGB:
+      A: Src
+      Negate A: false
+      B: Dest
+      Negate B: false
+      C: Src Alpha
+      Invert C: true
+    Alpha:
+      A: Src
+      Negate A: false
+      B: Dest
+      Negate B: false
+      C: Src Alpha
+      Invert C: true
+    Color Mask: 15
+  Internal:
+    Mode: Fixed-Function
+    Shader:
+      Return Value: 88
+      PC: 17749632
+    Fixed-Function:
+      Num Comps: 4
+      Alpha Zero NOP: false
+      Alpha One Store: true
+      RT: 0
+      Conversion:
+        Format (v6): RGBA8 TB RGBA
+        Raw: false
+        Register Format: F32
+Viewport:
+  Minimum X: -inf
+  Minimum Y: -inf
+  Maximum X: inf
+  Maximum Y: inf
+  Minimum Z: 0.000000
+  Maximum Z: 1.000000
+  Scissor Minimum X: 0
+  Scissor Minimum Y: 0
+  Scissor Maximum X: 255
+  Scissor Maximum Y: 127
+
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 1
+  Offset enable: false
+  Format (v6): Snap 4 RGBA
+  Offset: 0
+Varying:
+  Buffer index: 0
+  Offset enable: false
+  Format (v6): RG32F RG01
+  Offset: 0
+
+Varying:
+  Type: 1D
+  Pointer: 0x8b2129100
+  Stride: 0x8
+  Size: 0x20
+  Divisor: 1
+  Divisor R: 0
+  Divisor P: 0
+  Divisor E: 0
+Varying:
+  Type: 1D
+  Pointer: 0x0
+  Stride: 0x0
+  Size: 0x0
+  Divisor: 1
+  Divisor R: 0
+  Divisor P: 0
+  Divisor E: 0
+
+ubuf_0[16] = s8mali + 34763392;
+
+Textures 8b2127d00:
+
+Samplers 8b2128700:
+
+Tiler Job Payload:
+  Invocation (1, 1, 1) x (1, 4, 1)
+  Invocation:
+    Invocations: 0x3
+    Size Y shift: 0
+    Size Z shift: 0
+    Workgroups X shift: 0
+    Workgroups Y shift: 0
+    Workgroups Z shift: 32
+    Thread group split: 2
+  Primitive:
+    Draw mode: Triangles
+    Index type: UINT16
+    Point size array format: None
+    Primitive Index Enable: false
+    Primitive Index Writeback: false
+    First provoking vertex: true
+    Low Depth Cull: true
+    High Depth Cull: true
+    Secondary Shader: false
+    Primitive restart: None
+    Job Task Split: 6
+    Base vertex offset: 0
+    Primitive Restart Index: 0x0
+    Index count: 0x6
+    Indices: 0x8b2128e00
+  Draw:
+    Four Components Per Vertex: true
+    Draw Descriptor Is 64b: true
+    Occlusion query: Disabled
+    Front face CCW: true
+    Cull front face: false
+    Cull back face: false
+    Flat Shading Vertex: 0
+    Exclude Filtered Perf Counters: false
+    Primitive Barrier: false
+    Clean Fragment Write: false
+    Instance Size: 1
+    Instance Primitive Size: 2
+    Offset start: 0
+    Primitive Index Base: 0
+    Position: 0x0
+    Uniform buffers: 0x8b2128f50
+    Textures: 0x8b2127d00
+    Samplers: 0x8b2128700
+    Push uniforms: 0x0
+    State: 0x8b2129140
+    Attribute buffers: 0x0
+    Attributes: 0x0
+    Varying buffers: 0x8b21290a0
+    Varyings: 0x8b2002130
+    Viewport: 0x8b21272e0
+    Occlusion: 0x0
+    Thread Storage: 0x8b21271c0
+  Primitive Size:
+    Fixed Sized: 1.000000
+    Size Array: 0x3f800000
+  Tiler Heap:
+    Size: 0x2000000
+    Base: 0x8b0000000
+    Bottom: 0x8b0000000
+    Top: 0x8b2000000
+  Tiler Context @8b21270c0:
+    Polygon List: 0x0
+    Hierarchy Mask: 255
+    Sample Pattern: Single-sampled
+    Update Cost Table: false
+    FB Width: 256
+    FB Height: 128
+    Heap: 0x8b2127180
+    Weights:
+      Weight0: 0
+      Weight1: 0
+      Weight2: 0
+      Weight3: 0
+      Weight4: 0
+      Weight5: 0
+      Weight6: 0
+      Weight7: 0
+    State:
+      Word0: 0x0
+      Word1: 0x0
+      Word2: 0x0
+      Word3: 0x0
+      Word4: 0x0
+      Word5: 0x0
+      Word6: 0x0
+      Word7: 0x0
+      Word8: 0x0
+      Word9: 0x0
+      Word10: 0x0
+      Word11: 0x0
+      Word12: 0x0
+      Word13: 0x0
+      Word14: 0x0
+      Word15: 0x0
+
+Job Header (8b2127200):
+  Exception Status: 0x0
+  First Incomplete Task: 0x0
+  Fault Pointer: 0x0
+  Is 64b: true
+  Type: Fragment
+  Barrier: false
+  Invalidate Cache: false
+  Suppress Prefetch: false
+  Enable Texture Mapper: false
+  Relax Dependency 1: false
+  Relax Dependency 2: false
+  Index: 1
+  Dependency 1: 0
+  Dependency 2: 0
+  Next: 0x0
+
+Parameters:
+  Pre Frame 0: Never
+  Pre Frame 1: Never
+  Post Frame: Never
+  Sample Locations: 0x8b2000000
+  Frame Shader DCDs: 0x0
+  Width: 256
+  Height: 128
+  Bound Min X: 0
+  Bound Min Y: 0
+  Bound Max X: 255
+  Bound Max Y: 127
+  Sample Count: 1
+  Sample Pattern: Single-sampled
+  Tie-Break Rule: MINUS_180_IN_0_OUT
+  Effective Tile Size: 256
+  X Downsampling Scale: 0
+  Y Downsampling Scale: 0
+  Render Target Count: 1
+  Color Buffer Allocation: 1024
+  S Clear: 0
+  S Write Enable: false
+  S Preload Enable: false
+  S Unload Enable: false
+  Z Internal Format: D24
+  Z Write Enable: false
+  Z Preload Enable: false
+  Z Unload Enable: false
+  Has ZS CRC Extension: false
+  Empty Tile Read Enable: false
+  Empty Tile Write Enable: false
+  CRC Read Enable: false
+  CRC Write Enable: false
+  Z Clear: 0.000000
+  Tiler: 0x8b21270c0
+Sample locations @8b2000000:
+  (0, 0),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (42277, 42277),
+  (0, 0),
+Framebuffer @8b2127000:
+  Parameters:
+    Pre Frame 0: Never
+    Pre Frame 1: Never
+    Post Frame: Never
+    Sample Locations: 0x8b2000000
+    Frame Shader DCDs: 0x0
+    Width: 256
+    Height: 128
+    Bound Min X: 0
+    Bound Min Y: 0
+    Bound Max X: 255
+    Bound Max Y: 127
+    Sample Count: 1
+    Sample Pattern: Single-sampled
+    Tie-Break Rule: MINUS_180_IN_0_OUT
+    Effective Tile Size: 256
+    X Downsampling Scale: 0
+    Y Downsampling Scale: 0
+    Render Target Count: 1
+    Color Buffer Allocation: 1024
+    S Clear: 0
+    S Write Enable: false
+    S Preload Enable: false
+    S Unload Enable: false
+    Z Internal Format: D24
+    Z Write Enable: false
+    Z Preload Enable: false
+    Z Unload Enable: false
+    Has ZS CRC Extension: false
+    Empty Tile Read Enable: false
+    Empty Tile Write Enable: false
+    CRC Read Enable: false
+    CRC Write Enable: false
+    Z Clear: 0.000000
+    Tiler: 0x8b21270c0
+  Tiler Heap:
+    Size: 0x2000000
+    Base: 0x8b0000000
+    Bottom: 0x8b0000000
+    Top: 0x8b2000000
+  Tiler Context @8b21270c0:
+    Polygon List: 0x0
+    Hierarchy Mask: 255
+    Sample Pattern: Single-sampled
+    Update Cost Table: false
+    FB Width: 256
+    FB Height: 128
+    Heap: 0x8b2127180
+    Weights:
+      Weight0: 0
+      Weight1: 0
+      Weight2: 0
+      Weight3: 0
+      Weight4: 0
+      Weight5: 0
+      Weight6: 0
+      Weight7: 0
+    State:
+      Word0: 0x0
+      Word1: 0x0
+      Word2: 0x0
+      Word3: 0x0
+      Word4: 0x0
+      Word5: 0x0
+      Word6: 0x0
+      Word7: 0x0
+      Word8: 0x0
+      Word9: 0x0
+      Word10: 0x0
+      Word11: 0x0
+      Word12: 0x0
+      Word13: 0x0
+      Word14: 0x0
+      Word15: 0x0
+
+Color Render Targets @8b2127080:
+  Linear RGB Color Render Target 0:
+    Internal Buffer Offset: 0
+    YUV Enable: false
+    Dithered Clear: false
+    Internal Format: R8G8B8A8
+    Write Enable: true
+    Writeback Format: R8G8B8A8
+    Writeback Endianness: Little Endian
+    Writeback Block Format: Linear
+    Writeback MSAA: Single
+    sRGB: false
+    Dithering Enable: false
+    Swizzle: 1546 (BGRA)
+    Clean Pixel Write Enable: true
+    Writeback buffer:
+      Base: 0x8b2102000
+      Row Stride: 0x400
+      Surface Stride: 0x0
+    Clear:
+      Color 0: 0xffff0000
+      Color 1: 0xffff0000
+      Color 2: 0xffff0000
+      Color 3: 0xffff0000
+
+Fragment Job Payload:
+  Bound Min X: 0
+  Bound Min Y: 0
+  Bound Max X: 15
+  Bound Max Y: 7
+  Has Tile Enable Map: false
+  Framebuffer: 0x8b2127001
+  Tile Enable Map: 0x0
+  Tile Enable Map Row Stride: 0
+
+Buffer: s8mali gpu 8b0000000
+
+000000  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+*
+2000000  80 00 80 00 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+2000010  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+*
+2000080  80 00 80 00 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+2000090  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+*
+2000400  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+*
+2000440  00 04 00 B2 08 00 00 00 40 00 00 00 00 00 00 00 
+2000450  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+*
+2000480  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2000490  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+20004A0  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+*
+2000500  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+*
+2000540  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+*
+2001000  4A 00 00 20 02 1C CB 80 23 AF 00 C0 08 08 80 10 
+2001010  4B 00 00 00 44 18 CB 80 93 34 00 C0 48 08 80 10 
+2001020  29 00 41 00 84 44 06 20 90 65 07 C0 48 08 80 10 
+2001030  03 40 00 10 84 40 06 20 B0 54 01 00 00 00 00 60 
+2001040  71 01 00 00 F0 01 00 00 00 00 00 00 00 00 00 00 
+2001050  0B 40 00 00 44 18 CB 80 B3 3C 00 C0 A8 08 80 10 
+2001060  70 00 00 00 F0 01 00 00 00 00 00 00 00 00 00 00 
+2001070  29 00 82 00 8A 41 04 00 90 65 07 C0 88 08 80 30 
+2001080  21 00 C0 10 8C 41 04 00 90 65 07 08 7C D2 0F 5A 
+2001090  44 00 00 00 00 00 00 00 00 00 30 E0 11 80 00 C0 
+20010A0  29 40 00 00 44 18 CB 80 B7 65 07 C0 18 00 80 11 
+20010B0  03 00 83 41 0A 1B CB 80 23 7A 02 00 00 00 00 C0 
+20010C0  71 00 00 00 00 00 00 F8 03 00 00 00 00 00 00 30 
+20010D0  0A 40 00 20 02 1C CB 80 23 B5 00 C0 08 00 80 10 
+20010E0  70 00 00 00 00 01 00 00 00 00 00 00 00 00 00 00 
+20010F0  0E 40 00 20 02 5C E7 3F 21 13 02 C0 48 08 80 30 
+2001100  70 00 00 00 00 02 00 00 00 00 00 00 00 00 00 00 
+2001110  4E 00 04 21 06 1E CB 80 23 6A 02 00 00 00 80 01 
+2001120  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+*
+2001190  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+*
+2001290  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+*
+2001300  0A 40 00 00 44 58 E7 3F 75 07 04 C0 08 08 40 18 
+2001310  70 00 00 00 00 02 00 00 00 00 00 00 00 00 00 00 
+2001320  4A 00 00 00 02 1C CB 80 23 08 06 C0 08 08 C0 10 
+2001330  4B 00 00 00 44 18 CB 80 93 44 00 C0 8C 08 82 68 
+2001340  29 00 3C 3F 8E 46 06 20 90 65 07 C0 8C 0F 46 4B 
+2001350  43 05 C3 C0 0B 18 CB 80 C3 3D 02 00 00 00 00 C0 
+2001360  29 00 30 0C 88 46 06 20 90 65 07 00 04 00 40 02 
+2001370  21 00 00 10 8A 40 06 20 90 65 07 08 02 61 04 32 
+2001380  45 08 82 C0 0B 18 CB 80 83 A5 02 08 64 D9 01 38 
+2001390  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+*
+20013E0  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+*
+20014E0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+*
+2002020  01 20 9A 17 00 00 00 00 01 20 9A 17 00 00 00 00 
+*
+2002120  00 20 EC 2B 00 00 00 00 A5 A5 A5 A5 A5 A5 A5 A5 
+2002130  01 20 9A 17 00 00 00 00 01 20 9A 17 00 00 00 00 
+*
+2002230  00 20 EC 2B 00 00 00 00 A5 A5 A5 A5 A5 A5 A5 A5 
+2002240  00 10 00 B2 08 00 00 00 00 00 00 00 02 00 21 00 
+2002250  20 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2002260  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2002270  00 60 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2002280  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+*
+2126000  00 00 80 BF 00 00 80 BF 00 00 00 00 00 00 80 3F 
+2126010  00 00 80 3F 00 00 80 BF 00 00 80 3F 00 00 80 3F 
+2126020  00 00 80 BF 00 00 80 3F 00 00 00 00 00 00 00 00 
+2126030  00 00 80 3F 00 00 80 3F 00 00 80 3F 00 00 00 00 
+2126040  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+*
+2127010  00 00 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127020  FF 00 7F 00 00 00 00 00 FF 00 7F 00 80 10 00 01 
+2127030  00 00 01 00 00 00 00 00 C0 70 12 B2 08 00 00 00 
+2127040  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+*
+2127080  00 00 00 04 99 08 0A 86 00 00 00 00 00 00 00 00 
+2127090  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21270A0  00 20 10 B2 08 00 00 00 00 04 00 00 00 00 00 00 
+21270B0  00 00 FF FF 00 00 FF FF 00 00 FF FF 00 00 FF FF 
+21270C0  00 00 00 00 00 00 00 00 FF 00 00 00 FF 00 7F 00 
+21270D0  00 00 00 00 00 00 00 00 80 71 12 B2 08 00 00 00 
+21270E0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+*
+2127180  00 00 00 00 00 00 00 02 00 00 00 B0 08 00 00 00 
+2127190  00 00 00 B0 08 00 00 00 00 00 00 B2 08 00 00 00 
+21271A0  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+*
+21271C0  00 00 00 00 1F 00 00 00 00 00 00 00 00 00 00 00 
+21271D0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21271E0  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+*
+2127200  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2127210  13 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2127220  00 00 00 00 0F 00 07 00 01 70 12 B2 08 00 00 00 
+2127230  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2127240  00 00 80 3F 00 00 80 3F 00 00 80 3F 00 00 80 3F 
+2127250  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+*
+2127280  00 00 80 3F 00 00 00 3F 00 00 80 3E 00 00 80 3F 
+2127290  00 00 00 43 00 00 80 C2 00 00 80 3F 00 00 00 00 
+21272A0  00 00 00 43 00 00 80 42 00 00 00 00 00 00 00 00 
+21272B0  88 D6 0E 01 88 D6 0E 00 00 00 00 00 00 00 00 00 
+21272C0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21272D0  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+21272E0  00 00 80 FF 00 00 80 FF 00 00 80 7F 00 00 80 7F 
+21272F0  00 00 00 00 00 00 80 3F 00 00 00 00 FF 00 7F 00 
+2127300  03 00 60 12 B2 08 00 00 00 40 72 12 B2 08 00 00 
+2127310  03 00 05 00 B2 08 00 00 03 00 05 00 B2 08 00 00 
+*
+21273E0  03 00 05 00 B2 08 00 00 00 00 20 00 B2 08 00 00 
+21273F0  0F 00 74 12 B2 08 00 00 03 90 72 12 B2 08 00 00 
+2127400  00 60 12 B2 08 00 00 00 40 72 12 B2 08 00 00 00 
+2127410  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+*
+21274F0  00 00 00 00 00 00 00 00 A5 A5 A5 A5 A5 A5 A5 A5 
+2127500  00 80 72 12 B2 08 00 00 03 00 05 00 B2 08 00 00 
+2127510  03 00 05 00 B2 08 00 00 03 00 05 00 B2 08 00 00 
+*
+21275E0  03 00 05 00 B2 08 00 00 00 10 20 00 B2 08 00 00 
+21275F0  0F 00 76 12 B2 08 00 00 03 90 72 12 B2 08 00 00 
+2127600  80 72 12 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127610  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+*
+21276F0  00 00 00 00 00 00 00 00 A5 A5 A5 A5 A5 A5 A5 A5 
+2127700  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127710  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127720  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127730  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127740  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127750  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127760  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127770  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127780  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127790  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+21277A0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+21277B0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+21277C0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+21277D0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+21277E0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+21277F0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127800  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127810  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127820  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127830  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127840  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127850  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127860  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127870  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127880  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127890  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+21278A0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+21278B0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+21278C0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+21278D0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+21278E0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+21278F0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127900  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127910  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127920  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127930  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127940  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127950  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127960  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127970  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127980  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127990  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+21279A0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+21279B0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+21279C0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+21279D0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+21279E0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+21279F0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127A00  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127A10  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127A20  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127A30  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127A40  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127A50  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127A60  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127A70  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127A80  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127A90  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127AA0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127AB0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127AC0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127AD0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127AE0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127AF0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127B00  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+*
+2127D00  22 28 D8 2E 3F 00 3F 00 88 26 00 00 00 00 00 00 
+2127D10  00 81 12 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127D20  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127D30  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127D40  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127D50  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127D60  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127D70  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127D80  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127D90  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127DA0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127DB0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127DC0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127DD0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127DE0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127DF0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127E00  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127E10  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127E20  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127E30  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127E40  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127E50  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127E60  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127E70  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127E80  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127E90  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127EA0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127EB0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127EC0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127ED0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127EE0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127EF0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127F00  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127F10  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127F20  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127F30  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127F40  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127F50  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127F60  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127F70  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127F80  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127F90  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127FA0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127FB0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127FC0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127FD0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2127FE0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2127FF0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2128000  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2128010  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2128020  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2128030  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2128040  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2128050  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2128060  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2128070  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2128080  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+2128090  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+21280A0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+21280B0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+21280C0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+21280D0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+21280E0  22 20 DA 2E 00 00 00 00 88 26 00 00 00 00 00 00 
+21280F0  40 04 00 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2128100  00 20 12 B2 08 00 00 00 00 01 00 00 00 00 00 00 
+2128110  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+*
+2128300  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128310  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128320  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128330  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128340  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128350  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128360  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128370  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128380  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128390  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21283A0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+21283B0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21283C0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+21283D0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21283E0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+21283F0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128400  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128410  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128420  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128430  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128440  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128450  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128460  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128470  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128480  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128490  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21284A0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+21284B0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21284C0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+21284D0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21284E0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+21284F0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128500  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128510  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128520  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128530  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128540  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128550  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128560  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128570  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128580  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128590  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21285A0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+21285B0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21285C0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+21285D0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21285E0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+21285F0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128600  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128610  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128620  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128630  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128640  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128650  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128660  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128670  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128680  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128690  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21286A0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+21286B0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21286C0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+21286D0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21286E0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+21286F0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128700  01 99 29 06 00 00 00 00 00 00 00 00 00 00 00 00 
+2128710  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128720  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128730  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128740  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128750  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128760  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128770  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128780  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128790  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21287A0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+21287B0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21287C0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+21287D0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21287E0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+21287F0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128800  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128810  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128820  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128830  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128840  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128850  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128860  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128870  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128880  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128890  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21288A0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+21288B0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21288C0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+21288D0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21288E0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+21288F0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128900  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128910  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128920  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128930  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128940  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128950  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128960  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128970  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128980  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128990  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21289A0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+21289B0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21289C0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+21289D0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21289E0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+21289F0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128A00  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128A10  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128A20  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128A30  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128A40  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128A50  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128A60  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128A70  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128A80  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128A90  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128AA0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128AB0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128AC0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128AD0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128AE0  01 99 29 1E 00 00 00 00 00 00 00 00 00 00 00 00 
+2128AF0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128B00  01 60 12 B2 08 00 00 00 10 00 00 00 40 00 00 00 
+2128B10  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+*
+2128B30  00 22 EC 2B 00 00 00 00 00 22 EC 2B 08 00 00 00 
+2128B40  81 8B 12 B2 08 00 00 00 08 00 00 00 20 00 00 00 
+2128B50  01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+*
+2128B70  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128B80  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+*
+2128BC0  00 13 00 B2 08 00 00 00 00 00 00 00 00 00 21 00 
+2128BD0  01 0A 10 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128BE0  FF FF 18 07 FF FF E0 00 00 FF 07 00 00 FF 07 00 
+2128BF0  80 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128C00  01 0A 00 00 32 2D D3 F0 5A 00 00 00 88 D6 0E 01 
+2128C10  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+*
+2128C40  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128C50  0B 00 01 00 00 00 00 00 00 8D 12 B2 08 00 00 00 
+2128C60  03 00 00 00 00 00 00 28 00 00 00 14 00 00 00 00 
+2128C70  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128C80  03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128C90  00 00 00 00 00 00 00 00 00 73 12 B2 08 00 00 00 
+2128CA0  00 77 12 B2 08 00 00 00 00 83 12 B2 08 00 00 00 
+2128CB0  00 00 00 00 00 00 00 00 40 22 00 B2 08 00 00 00 
+2128CC0  00 8B 12 B2 08 00 00 00 30 8B 12 B2 08 00 00 00 
+2128CD0  40 8B 12 B2 08 00 00 00 20 20 00 B2 08 00 00 00 
+2128CE0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128CF0  C0 71 12 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2128D00  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128D10  0F 00 02 00 01 00 00 00 C0 91 12 B2 08 00 00 00 
+2128D20  03 00 00 00 00 00 00 28 0A 80 03 18 00 00 00 00 
+2128D30  00 00 00 00 03 00 00 00 00 00 00 00 00 00 00 00 
+2128D40  00 00 80 3F 00 00 00 00 C0 70 12 B2 08 00 00 00 
+2128D50  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+*
+2128D80  23 00 00 01 00 00 00 00 00 00 00 00 00 00 00 00 
+2128D90  00 00 00 00 00 00 00 00 00 75 12 B2 08 00 00 00 
+2128DA0  00 7D 12 B2 08 00 00 00 00 87 12 B2 08 00 00 00 
+2128DB0  00 00 00 00 00 00 00 00 C0 8B 12 B2 08 00 00 00 
+2128DC0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128DD0  40 8B 12 B2 08 00 00 00 30 21 00 B2 08 00 00 00 
+2128DE0  E0 72 12 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2128DF0  C0 71 12 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2128E00  00 00 01 00 02 00 02 00 01 00 03 00 A5 A5 A5 A5 
+2128E10  00 00 00 43 00 00 80 C2 00 00 80 3F 00 00 00 00 
+2128E20  00 00 00 43 00 00 80 42 00 00 00 00 00 00 00 00 
+2128E30  88 D6 0E 01 88 D6 0E 00 00 00 00 00 00 00 00 00 
+2128E40  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2128E50  03 00 60 12 B2 08 00 00 00 40 72 12 B2 08 00 00 
+2128E60  03 00 05 00 B2 08 00 00 03 00 05 00 B2 08 00 00 
+*
+2128F30  03 00 05 00 B2 08 00 00 00 00 20 00 B2 08 00 00 
+2128F40  0F 00 74 12 B2 08 00 00 03 10 8E 12 B2 08 00 00 
+2128F50  00 80 72 12 B2 08 00 00 03 00 05 00 B2 08 00 00 
+2128F60  03 00 05 00 B2 08 00 00 03 00 05 00 B2 08 00 00 
+*
+2129030  03 00 05 00 B2 08 00 00 00 10 20 00 B2 08 00 00 
+2129040  0F 00 76 12 B2 08 00 00 03 10 8E 12 B2 08 00 00 
+2129050  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+2129060  01 60 12 B2 08 00 00 00 10 00 00 00 40 00 00 00 
+2129070  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+*
+2129090  00 22 EC 2B 00 00 00 00 00 22 EC 2B 08 00 00 00 
+21290A0  01 91 12 B2 08 00 00 00 08 00 00 00 20 00 00 00 
+21290B0  01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+*
+21290D0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21290E0  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+*
+2129140  00 13 00 B2 08 00 00 00 00 00 00 00 00 00 21 00 
+2129150  01 0A 10 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2129160  FF FF 18 07 FF FF E0 00 00 FF 07 00 00 FF 07 00 
+2129170  80 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2129180  01 0A 00 00 32 2D D3 F0 5A 00 00 00 88 D6 0E 01 
+2129190  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+*
+21291C0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21291D0  0B 00 03 00 00 00 00 00 80 92 12 B2 08 00 00 00 
+21291E0  03 00 00 00 00 00 00 28 00 00 00 14 00 00 00 00 
+21291F0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2129200  03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2129210  00 00 00 00 00 00 00 00 50 8E 12 B2 08 00 00 00 
+2129220  00 77 12 B2 08 00 00 00 00 83 12 B2 08 00 00 00 
+2129230  00 00 00 00 00 00 00 00 40 22 00 B2 08 00 00 00 
+2129240  60 90 12 B2 08 00 00 00 90 90 12 B2 08 00 00 00 
+2129250  A0 90 12 B2 08 00 00 00 20 20 00 B2 08 00 00 00 
+2129260  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2129270  C0 71 12 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2129280  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2129290  0F 00 04 00 03 00 02 00 00 00 00 00 00 00 00 00 
+21292A0  03 00 00 00 00 00 00 28 08 82 03 18 00 00 00 00 
+21292B0  00 00 00 00 05 00 00 00 00 8E 12 B2 08 00 00 00 
+21292C0  00 00 80 3F 00 00 00 00 C0 70 12 B2 08 00 00 00 
+21292D0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+*
+2129300  23 00 00 01 00 00 00 00 00 00 00 00 00 00 00 00 
+2129310  00 00 00 00 00 00 00 00 50 8F 12 B2 08 00 00 00 
+2129320  00 7D 12 B2 08 00 00 00 00 87 12 B2 08 00 00 00 
+2129330  00 00 00 00 00 00 00 00 40 91 12 B2 08 00 00 00 
+2129340  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2129350  A0 90 12 B2 08 00 00 00 30 21 00 B2 08 00 00 00 
+2129360  E0 72 12 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2129370  C0 71 12 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2129380  03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2129390  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21293A0  60 95 12 B2 08 00 00 00 A0 95 12 B2 08 00 00 00 
+21293B0  00 00 00 00 00 00 00 00 00 95 12 B2 08 00 00 00 
+21293C0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+*
+21293E0  C0 95 12 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+21293F0  C0 71 12 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2129400  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+*
+2129500  00 70 22 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2129510  00 02 18 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2129520  FF FF 00 07 FF FF 00 00 00 FF 4F 02 00 FF 4F 02 
+2129530  80 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2129540  00 0A 00 00 22 21 12 F0 19 00 00 00 88 D6 0E 01 
+2129550  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+2129560  22 28 D8 2E FF 00 7F 00 88 26 00 00 00 00 00 00 
+2129570  80 95 12 B2 08 00 00 00 00 00 00 00 00 00 00 00 
+2129580  00 20 10 B2 08 00 00 00 00 04 00 00 00 00 00 00 
+2129590  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+21295A0  01 99 29 1C 00 00 00 00 00 00 00 00 00 00 00 00 
+21295B0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+21295C0  00 00 80 FF 00 00 80 FF 00 00 80 7F 00 00 80 7F 
+21295D0  00 00 00 00 00 00 80 3F 00 00 00 00 FF 00 7F 00 
+21295E0  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+*
+2227000  29 00 00 B0 43 C0 66 80 B3 65 07 C0 4C 08 C2 68 
+2227010  03 40 82 B0 2B 40 66 80 CF CD 05 00 00 00 00 C0 
+2227020  71 00 00 00 00 80 86 41 0F 00 00 00 00 00 00 00 
+2227030  4E 05 3C 5F F8 1E CB 80 07 3D 02 C0 8C 0F 46 4B 
+2227040  29 00 30 2C 86 46 CB 80 A7 65 07 00 04 00 40 02 
+2227050  21 00 01 40 8A 47 CB 80 A7 65 47 18 04 DE C3 58 
+2227060  44 00 00 00 00 00 00 00 00 00 30 E0 60 A9 00 C0 
+2227070  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+*
+22270C0  A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 A5 
+*
+22271C0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+*
+5FFFFF0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+
+

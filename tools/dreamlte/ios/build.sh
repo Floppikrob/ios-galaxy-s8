@@ -7,8 +7,9 @@ cd "$(dirname "$0")"
 out=${1:-out}
 mkdir -p "$out"
 CFLAGS="-target arm64-apple-ios16.0 -O2 -Wall -Wextra -Werror -fno-stack-protector -ffreestanding -nostdlibinc -isystem stub"
+clang=$(command -v clang-18 || command -v clang)
 for p in s8gputest; do
-	clang $CFLAGS -c $p.c -o "$out/$p.o"
+	"$clang" $CFLAGS -c $p.c -o "$out/$p.o"
 	ld64.lld-18 -arch arm64 -platform_version ios 16.0 16.0 -adhoc_codesign \
 		-o "$out/$p" "$out/$p.o" libSystem.tbd
 	echo "$out/$p: $(stat -c %s "$out/$p") bytes"

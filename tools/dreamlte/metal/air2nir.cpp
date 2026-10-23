@@ -33,7 +33,9 @@
  *    the name's index in the varying table passed with -v (same table for
  *    all shaders of a build);
  *  - render target i -> FRAG_RESULT_DATA0 + i;
- *  - viewport scale/offset -> UBO S8_UBO_SYSVALS (vec3 scale, vec3 offset).
+ *  - UBO S8_UBO_SYSVALS: viewport scale at 0 and offset at 16 (vec3 each),
+ *    render target conversions at 32 + (rt * 2 + is16) * 4, the draw's
+ *    first vertex at 96, texture sizes at 128 + index * 8.
  */
 #include <llvm/Analysis/ValueTracking.h>
 #include <llvm/Bitcode/BitcodeReader.h>
@@ -83,6 +85,10 @@ using namespace llvm;
 #define S8_UBO_ADDRS   30
 #define S8_UBO_SYSVALS 31
 #define S8_INLINE_SAMPLER_BASE 16
+/* UBO S8_UBO_SYSVALS layout (shared with s8mtl_draw.c) */
+#define S8_SV_VERTEX_OFFSET 96         /* u32 */
+#define S8_SV_TEX_SIZE 128             /* 32 x { u32 width, height } */
+#define S8_SV_SIZE (128 + 32 * 8)
 #define S8_NULL_TEXTURE 31        /* bound to a 1x1 transparent black texture */
 
 static void fail(const std::string &msg)
@@ -1485,6 +1491,13 @@ static bool lower_sysvals(nir_builder *b, nir_intrinsic_instr *intr, void *data)
 	switch (intr->intrinsic) {
 	case nir_intrinsic_load_viewport_scale: off = 0; break;
 	case nir_intrinsic_load_viewport_offset: off = 16; break;
+	case nir_intrinsic_load_raw_vertex_offset_pan:
+		/* first vertex (or lowest index) of the draw: vertex_id =
+		 * raw_vertex_id + this (pan_lower_vertex_id) */
+		b->cursor = nir_before_instr(&intr->instr);
+		nir_def_replace(&intr->def, s8_load_ubo(b, 1, 32, nir_imm_int(b, S8_UBO_SYSVALS),
+		    nir_imm_int(b, S8_SV_VERTEX_OFFSET), 4));
+		return true;
 	case nir_intrinsic_load_rt_conversion_pan: {
 		/* framebuffer fetch: the driver stores the render targets' internal
 		 * conversion words (pan_blend_get_internal_desc >> 32) at 32 +
@@ -1500,6 +1513,43 @@ static bool lower_sysvals(nir_builder *b, nir_intrinsic_instr *intr, void *data)
 	b->cursor = nir_before_instr(&intr->instr);
 	nir_def *v = s8_load_ubo(b, 3, 32, nir_imm_int(b, S8_UBO_SYSVALS), nir_imm_int(b, off), 16);
 	nir_def_replace(&intr->def, v);
+	return true;
+}
+
+/* Texture size queries: the driver writes each bound texture's width and
+ * height (u32 each) into UBO S8_UBO_SYSVALS at S8_SV_TEX_SIZE + index * 8;
+ * only level 0 is stored, so the lod just shifts. */
+static bool lower_txs(nir_builder *b, nir_instr *instr, void *data)
+{
+	(void)data;
+	if (instr->type != nir_instr_type_tex)
+		return false;
+	nir_tex_instr *tex = nir_instr_as_tex(instr);
+	if (tex->op != nir_texop_txs && tex->op != nir_texop_query_levels)
+		return false;
+	b->cursor = nir_before_instr(instr);
+	if (tex->op == nir_texop_query_levels) {
+		nir_def_replace(&tex->def, nir_imm_int(b, 1));
+		return true;
+	}
+	nir_def *index = nir_imm_int(b, tex->texture_index);
+	int off = nir_tex_instr_src_index(tex, nir_tex_src_texture_offset);
+	if (off >= 0)
+		index = nir_iadd(b, index, nir_u2u32(b, tex->src[off].src.ssa));
+	nir_def *size = s8_load_ubo(b, 2, 32, nir_imm_int(b, S8_UBO_SYSVALS),
+	    nir_iadd_imm(b, nir_imul_imm(b, index, 8), S8_SV_TEX_SIZE), 8);
+	int lod = nir_tex_instr_src_index(tex, nir_tex_src_lod);
+	if (lod >= 0)
+		size = nir_umax(b, nir_ushr(b, size, nir_u2u32(b, tex->src[lod].src.ssa)), nir_imm_int(b, 1));
+	nir_def *res = size;
+	unsigned n = tex->def.num_components;
+	if (n == 1)
+		res = nir_channel(b, size, 0);
+	else if (n > 2)
+		res = nir_vec3(b, nir_channel(b, size, 0), nir_channel(b, size, 1), nir_imm_int(b, 1));
+	if (tex->def.bit_size != 32)
+		res = nir_u2uN(b, res, tex->def.bit_size);
+	nir_def_replace(&tex->def, res);
 	return true;
 }
 
@@ -1553,6 +1603,56 @@ static uint32_t regfmt(nir_alu_type t)
 	case nir_type_uint16: return MALI_REGISTER_FILE_FORMAT_U16;
 	default: return 0;
 	}
+}
+
+/* Self-test pair for the driver (tools/dreamlte/metal/test): "@test_vs"
+ * takes float2 position (attribute 0) and float2 texcoord (attribute 1),
+ * scales the position by constant buffer 0's first float and passes the
+ * texcoord on as varying slot VAR0; "@test_fs" samples texture 0 with
+ * sampler 0 there and multiplies by constant buffer 0's float4. They use
+ * the same ABI as translated Metal shaders. */
+static nir_variable *test_var(nir_shader *s, nir_variable_mode mode, const char *name, const glsl_type *t,
+    int location)
+{
+	nir_variable *v = nir_variable_create(s, mode, t, name);
+	v->data.location = location;
+	v->data.driver_location = location;
+	return v;
+}
+
+static nir_shader *test_shader(bool vertex)
+{
+	nir_builder b = nir_builder_init_simple_shader(vertex ? MESA_SHADER_VERTEX : MESA_SHADER_FRAGMENT,
+	    pan_shader_get_compiler_options(6), vertex ? "s8-test-vs" : "s8-test-fs");
+	nir_def *k = s8_load_ubo(&b, 4, 32, nir_imm_int(&b, 0), nir_imm_int(&b, 0), 16);
+	if (vertex) {
+		nir_def *pos = nir_load_var(&b, test_var(b.shader, nir_var_shader_in, "pos", glsl_vec_type(2),
+		    VERT_ATTRIB_GENERIC0));
+		nir_def *tc = nir_load_var(&b, test_var(b.shader, nir_var_shader_in, "tc", glsl_vec_type(2),
+		    VERT_ATTRIB_GENERIC0 + 1));
+		nir_def *p = nir_fmul(&b, pos, nir_channel(&b, k, 0));
+		nir_store_var(&b, test_var(b.shader, nir_var_shader_out, "position", glsl_vec4_type(), VARYING_SLOT_POS),
+		    nir_vec4(&b, nir_channel(&b, p, 0), nir_channel(&b, p, 1), nir_imm_float(&b, 0), nir_imm_float(&b, 1)), 0xf);
+		nir_store_var(&b, test_var(b.shader, nir_var_shader_out, "tc", glsl_vec_type(2), VARYING_SLOT_VAR0), tc, 0x3);
+	} else {
+		nir_variable *in = test_var(b.shader, nir_var_shader_in, "tc", glsl_vec_type(2), VARYING_SLOT_VAR0);
+		in->data.interpolation = INTERP_MODE_SMOOTH;
+		nir_def *tc = nir_load_var(&b, in);
+		nir_tex_instr *tex = nir_tex_instr_create(b.shader, 1);
+		tex->op = nir_texop_tex;
+		tex->dest_type = nir_type_float32;
+		tex->sampler_dim = GLSL_SAMPLER_DIM_2D;
+		tex->coord_components = 2;
+		tex->src[0] = nir_tex_src_for_ssa(nir_tex_src_coord, tc);
+		tex->texture_index = 0;
+		tex->sampler_index = 0;
+		nir_def_init(&tex->instr, &tex->def, 4, 32);
+		nir_builder_instr_insert(&b, &tex->instr);
+		nir_store_var(&b, test_var(b.shader, nir_var_shader_out, "color", glsl_vec4_type(), FRAG_RESULT_DATA0),
+		    nir_fmul(&b, &tex->def, k), 0xf);
+		b.shader->info.num_textures = 1;
+	}
+	return b.shader;
 }
 
 /* air2nir output (little endian):
@@ -1618,6 +1718,9 @@ int main(int argc, char **argv)
 		/* the driver's frame shader for MTLLoadActionLoad (lib = unused) */
 		stage = MESA_SHADER_FRAGMENT;
 		s = preload_shader();
+	} else if (fname == "@test_vs" || fname == "@test_fs") {
+		stage = fname == "@test_vs" ? MESA_SHADER_VERTEX : MESA_SHADER_FRAGMENT;
+		s = test_shader(stage == MESA_SHADER_VERTEX);
 	} else {
 		MetallibFunction *fn = nullptr;
 		funcs = read_metallib(lib);
@@ -1659,6 +1762,7 @@ int main(int argc, char **argv)
 	if (stage == MESA_SHADER_VERTEX)
 		NIR_PASS(_, s, pan_nir_lower_static_noperspective, 0);
 	NIR_PASS(_, s, nir_shader_intrinsics_pass, lower_sysvals, nir_metadata_control_flow, nullptr);
+	NIR_PASS(_, s, nir_shader_instructions_pass, lower_txs, nir_metadata_control_flow, nullptr);
 	/* Resource counts follow the highest index used. */
 	unsigned ntex = 0, nsamp = 0, nubo = 0;
 	nir_foreach_function_impl(impl, s) {

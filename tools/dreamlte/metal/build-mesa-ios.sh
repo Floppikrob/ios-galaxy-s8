@@ -44,14 +44,18 @@ for e in json.load(open(os.path.join(bld, 'compile_commands.json'))):
         break
 PY
 )
-cc="clang -target arm64-apple-ios16.0 -isysroot $sdk -I$here/ios-stub -I$src/src/util -I$src/src/util/format -I$bld/src/util/format -Wno-everything -fno-stack-protector"
+# Paths are shell-quoted (they may contain spaces): every use goes through eval.
+q() { printf '%q' "$1"; }
+clang=$(command -v clang-18 || command -v clang)
+inc="-isysroot $(q "$sdk") -I$(q "$here/ios-stub") -I$(q "$src/src/util") -I$(q "$src/src/util/format") -I$(q "$bld/src/util/format")"
+cc="$(q "$clang") -target arm64-apple-ios16.0 $inc -Wno-everything -fno-stack-protector"
 # The same flags compile s8mtl_draw.c (metal/build.sh reads them from here).
-echo "-isysroot $sdk -I$here/ios-stub -I$src/src/util -I$src/src/util/format -I$bld/src/util/format -I$src/src/panfrost/lib $flags -DPAN_ARCH=6" > "${out%.a}.flags"
+echo "$inc -I$(q "$src/src/panfrost/lib") $flags -DPAN_ARCH=6" > "${out%.a}.flags"
 objs=()
 compile() {     # compile SRC TAG [extra flags]
 	local s=$1 tag=$2; shift 2
 	local o=$obj/$tag-$(basename "${s%.*}").o
-	eval $cc $flags "$@" -c "$s" -o "$o" || { echo "FAILED $s"; return 0; }
+	eval $cc $flags "$@" -c "$(q "$s")" -o "$(q "$o")" || { echo "FAILED $s"; return 0; }
 	objs+=("$o")
 }
 for f in pan_desc pan_texture pan_mod; do

@@ -56,6 +56,10 @@
 #define S8_NULL_TEXTURE 31
 #define S8_SAMPLER_COUNT 32
 #define S8_INLINE_SAMPLER_BASE 16
+/* UBO S8_UBO_SYSVALS layout (air2nir.cpp) */
+#define S8_SV_VERTEX_OFFSET 96
+#define S8_SV_TEX_SIZE  128
+#define S8_SV_SIZE      (128 + 32 * 8)
 
 #define S8_CACHE_PATH   "/System/Library/Extensions/S8MaliMetal.bundle/quartzcore.s8sc"
 #define S8_TILER_HEAP   (32u << 20)
@@ -195,7 +199,7 @@ struct s8_shader {
 	unsigned stage;                 /* 0 vertex, 4 fragment */
 	unsigned work_regs, attribute_count, ubo_count, texture_count, sampler_count;
 	unsigned nvar;
-	struct { uint32_t location, format; } var[32];
+	struct { uint32_t location, format; } var[64];   /* one per slot up to the highest */
 	unsigned ninline;
 	uint64_t inline_state[16];
 	uint32_t fs_flags;              /* 1 discard, 2 frag coord, 4 depth, 8 reads fb */
@@ -275,7 +279,7 @@ static int s8_parse_shader(struct s8_shader *s, const uint8_t *b, uint32_t size)
 	s->texture_count = U32();
 	s->sampler_count = U32();
 	s->nvar = U32();
-	if (s->nvar > 32)
+	if (s->nvar > 64)
 		return -1;
 	for (unsigned i = 0; i < s->nvar; i++) {
 		s->var[i].location = U32();
@@ -377,10 +381,14 @@ int s8d_init(void)
 		s8_log("MTL draw: no GPU (/dev/s8mali)");
 		goto out;
 	}
-	int fd = open(S8_CACHE_PATH, O_RDONLY);
+	const char *path = S8_CACHE_PATH;
+#ifdef S8_TEST
+	path = getenv("S8_TEST_CACHE");         /* test/draw-test.c */
+#endif
+	int fd = open(path, O_RDONLY);
 	struct stat st;
 	if (fd < 0 || fstat(fd, &st) != 0 || st.st_size < 12) {
-		s8_log("MTL draw: no shader cache %s", S8_CACHE_PATH);
+		s8_log("MTL draw: no shader cache %s", path);
 		if (fd >= 0)
 			close(fd);
 		goto out;
@@ -419,6 +427,7 @@ int s8d_init(void)
 	/* Null texture: 1x1 transparent black RGBA8 at +0x400, its surface at
 	 * +0x440, its descriptor at +0x480. */
 	memset(st8 + 0x400, 0, 64);
+	memset(st8 + 0x500, 0, 64);     /* unbound UBOs */
 	pan_cast_and_pack(st8 + 0x440, SURFACE_WITH_STRIDE, cfg) {
 		cfg.pointer = s8g.statics.gpu + 0x400;
 		cfg.row_stride = 64;
@@ -697,10 +706,10 @@ static int s8_link(struct s8d_pipeline *p)
 	unsigned offset[VARYING_SLOT_MAX] = { 0 };
 	const struct s8_shader *vs = p->vs, *fs = p->fs;
 	for (unsigned i = 0; i < vs->nvar; i++)
-		if (vs->var[i].location < VARYING_SLOT_MAX)
+		if (vs->var[i].location < VARYING_SLOT_MAX && vs->var[i].format)
 			out[vs->var[i].location] = vs->var[i].format;
 	for (unsigned i = 0; fs && i < fs->nvar; i++)
-		if (fs->var[i].location < VARYING_SLOT_MAX)
+		if (fs->var[i].location < VARYING_SLOT_MAX && fs->var[i].format)
 			in[fs->var[i].location] = fs->var[i].format;
 	memset(p->link.stride, 0, sizeof(p->link.stride));
 	if (out[VARYING_SLOT_POS])
@@ -728,12 +737,16 @@ static int s8_link(struct s8d_pipeline *p)
 			return -1;
 		struct mali_attribute_packed *attrs = a.cpu;
 		for (unsigned i = 0; i < s->nvar; i++) {
+			/* entries are indexed by location; unused ones are (0, NONE) */
 			gl_varying_slot loc = s->var[i].location;
 			enum pipe_format pf = loc < VARYING_SLOT_MAX ? fmts[loc] : PIPE_FORMAT_NONE;
-			bool special = loc == VARYING_SLOT_POS || loc == VARYING_SLOT_PSIZ;
+			bool special = s->var[i].format != PIPE_FORMAT_NONE &&
+			    (loc == VARYING_SLOT_POS || loc == VARYING_SLOT_PSIZ);
+			if (s->var[i].format == PIPE_FORMAT_NONE)
+				pf = PIPE_FORMAT_NONE;
 			pan_pack(&attrs[i], ATTRIBUTE, cfg) {
 				if (!special && pf == PIPE_FORMAT_NONE) {
-					cfg.format = s8_varying_hw(loc, PIPE_FORMAT_NONE);
+					cfg.format = (MALI_CONSTANT << 12) | PAN_V6_SWIZZLE(0, 0, 0, 0);
 				} else {
 					cfg.buffer_index = s8_varying_buf(loc);
 					cfg.offset = special ? 0 : offset[loc];
@@ -1168,11 +1181,11 @@ static void s8_pack_texture(void *desc, void *surface, uint64_t surface_gpu, con
 /* Texture table: 32 descriptors, unbound ones are the null texture. */
 static uint64_t s8_texture_table(struct s8d_cmdbuf *cb, struct s8_stage_state *s, const struct s8_shader *sh)
 {
+	/* (the compiler's texture_count stays 0: always bind the full table) */
+	(void)sh;
 	if (s->textures_desc)
 		return s->textures_desc;
-	unsigned n = sh->texture_count ? S8_TEX_COUNT : 0;
-	if (n == 0)
-		return 0;
+	unsigned n = S8_TEX_COUNT;
 	struct s8_ptr d = s8_alloc_descs(&cb->arena, n, TEXTURE);
 	struct s8_ptr surf = s8_alloc_descs(&cb->arena, n, SURFACE_WITH_STRIDE);
 	if (!d.cpu || !surf.cpu)
@@ -1193,8 +1206,6 @@ static uint64_t s8_sampler_table(struct s8d_cmdbuf *cb, struct s8_stage_state *s
 {
 	if (s->samplers_desc && s->for_pipeline == cb->pipeline)
 		return s->samplers_desc;
-	if (sh->sampler_count == 0 && sh->ninline == 0)
-		return 0;
 	struct s8_ptr d = s8_alloc_descs(&cb->arena, S8_SAMPLER_COUNT, SAMPLER);
 	if (!d.cpu)
 		return 0;
@@ -1244,11 +1255,16 @@ static uint64_t s8_ubo_table(struct s8d_cmdbuf *cb, struct s8_stage_state *s, co
 			size = S8D_MAX_BUFFERS * 8;
 		} else if (i == S8_UBO_SYSVALS) {
 			ptr = sysvals;
+			size = S8_SV_SIZE;
+		}
+		/* An unbound UBO reads 64 zero bytes (entries must be >= 1). */
+		if (ptr == 0 || size == 0) {
+			ptr = s8g.statics.gpu + 0x500;
 			size = 64;
 		}
 		pan_pack(&ubo[i], UNIFORM_BUFFER, cfg) {
 			cfg.pointer = ptr;
-			cfg.entries = ptr ? MIN2(DIV_ROUND_UP(size, 16), 4095) : 0;
+			cfg.entries = MIN2(DIV_ROUND_UP(size, 16), 4096);
 		}
 	}
 	return d.gpu;
@@ -1455,21 +1471,33 @@ void s8d_draw(struct s8d_cmdbuf *cb, unsigned prim, unsigned start, unsigned cou
 	}
 	unsigned padded = instances > 1 ? pan_padded_vertex_count(vertex_range) : vertex_range;
 
-	/* System values: viewport transform and render target conversion. */
-	struct s8_ptr sv = s8_alloc(&cb->arena, 64, 16);
-	if (!sv.cpu) {
-		p->skipped++;
-		return;
-	}
-	float svf[16] = { 0 };
+	/* System values per stage: viewport transform, render target
+	 * conversion, first vertex, texture sizes. */
+	struct s8_ptr sv[2];
+	float svf[8] = { 0 };
 	uint64_t viewport = s8_viewport(cb, p, svf);
-	uint32_t *svw = (uint32_t *)svf;
-	svw[8] = pl->rt_conv[0];
-	svw[9] = pl->rt_conv[1];
-	memcpy(sv.cpu, svf, 64);
+	for (int st = 0; st < 2; st++) {
+		sv[st] = s8_alloc(&cb->arena, S8_SV_SIZE, 16);
+		if (!sv[st].cpu) {
+			p->skipped++;
+			return;
+		}
+		uint32_t w[S8_SV_SIZE / 4] = { 0 };
+		memcpy(w, svf, sizeof(svf));
+		w[8] = pl->rt_conv[0];
+		w[9] = pl->rt_conv[1];
+		w[S8_SV_VERTEX_OFFSET / 4] = min_index;
+		struct s8_stage_state *ss = &cb->stage[st];
+		for (unsigned t = 0; t < S8D_MAX_TEXTURES; t++) {
+			w[S8_SV_TEX_SIZE / 4 + t * 2] = ss->texture_set[t] ? ss->textures[t].width : 1;
+			w[S8_SV_TEX_SIZE / 4 + t * 2 + 1] = ss->texture_set[t] ? ss->textures[t].height : 1;
+		}
+		w[S8_SV_TEX_SIZE / 4 + 31 * 2] = w[S8_SV_TEX_SIZE / 4 + 31 * 2 + 1] = 1;   /* null texture */
+		memcpy(sv[st].cpu, w, sizeof(w));
+	}
 
-	uint64_t vs_ubos = s8_ubo_table(cb, vst, pl->vs, pl->vs_fc, pl->vs_fc_size, sv.gpu);
-	uint64_t fs_ubos = s8_ubo_table(cb, fst, pl->fs, pl->fs_fc, pl->fs_fc_size, sv.gpu);
+	uint64_t vs_ubos = s8_ubo_table(cb, vst, pl->vs, pl->vs_fc, pl->vs_fc_size, sv[0].gpu);
+	uint64_t fs_ubos = s8_ubo_table(cb, fst, pl->fs, pl->fs_fc, pl->fs_fc_size, sv[1].gpu);
 	uint64_t vs_tex = s8_texture_table(cb, vst, pl->vs), fs_tex = s8_texture_table(cb, fst, pl->fs);
 	uint64_t vs_smp = s8_sampler_table(cb, vst, pl->vs), fs_smp = s8_sampler_table(cb, fst, pl->fs);
 	vst->for_pipeline = fst->for_pipeline = pl;
@@ -1709,8 +1737,9 @@ int s8d_pass_execute(struct s8d_cmdbuf *cb, int idx)
 	struct s8_pass *p = &cb->passes[idx];
 	if (!p->valid)
 		return -1;
-	uint32_t wb, internal, sw;
-	s8_rt_formats(p->format, &wb, &internal, &sw);
+	uint32_t wb = 0, internal = 0, sw = 0;
+	if (!s8_rt_formats(p->format, &wb, &internal, &sw))
+		return -1;
 	unsigned w = p->target.width, h = p->target.height;
 	uint64_t t0 = s8_now_ns();
 
