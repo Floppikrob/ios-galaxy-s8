@@ -31,6 +31,9 @@
 #include <pthread.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#ifndef S8_TEST
+#include <sys/sysctl.h>
+#endif
 
 #include "genxml/gen_macros.h"
 #include "pan_desc.h"
@@ -376,6 +379,15 @@ int s8d_init(void)
 		return r;
 	}
 	s8g.state = -1;
+#ifndef S8_TEST
+	/* boot-arg s8draw=0 keeps stage 2 (no GPU draws) without a rebuild */
+	char args[1024] = "";
+	size_t alen = sizeof(args) - 1;
+	if (sysctlbyname("kern.bootargs", args, &alen, NULL, 0) == 0 && strstr(args, "s8draw=0") != NULL) {
+		s8_log("MTL draw: off (s8draw=0)");
+		goto out;
+	}
+#endif
 	struct s8mali_info info = { 0 };
 	if (s8_fd() < 0 || ioctl(s8_fd(), S8MALI_INFO, &info) != 0 || !info.ready) {
 		s8_log("MTL draw: no GPU (/dev/s8mali)");
