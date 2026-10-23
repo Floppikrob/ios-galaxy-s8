@@ -1661,7 +1661,9 @@ static int s8_submit(uint64_t jc, unsigned slot, const char *what, unsigned pass
 /* Frame shader DCD that reloads the target (pan_preload_emit_dcd). */
 static int s8_preload(struct s8d_cmdbuf *cb, struct s8_pass *p)
 {
+	pthread_mutex_lock(&s8g.lock);         /* shaders are parsed on first use */
 	struct s8_shader *sh = s8_shader("@preload");
+	pthread_mutex_unlock(&s8g.lock);
 	if (sh == NULL)
 		return -1;
 	struct s8_ptr dcds = s8_alloc_descs(&cb->arena, 3, DRAW);

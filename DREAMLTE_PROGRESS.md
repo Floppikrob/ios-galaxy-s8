@@ -695,3 +695,38 @@ built in CI or booted yet.
 4. A Remote Control session on the user's computer can flash BOOT, reboot
    (`s8autotwrp=N` returns to TWRP by itself) and pull the logs
    (`tools/dreamlte/pull-sweetlog.sh`) without the user.
+
+## Metal stage 3: draws on the Mali (2026-10-23, built, not yet booted)
+
+- `tools/dreamlte/metal/s8mtl_draw.c` (C, Mesa 25.2.8 genxml v6 headers +
+  libs8mesa.a) turns each recorded render pass into Mali job chains, after
+  PanVK's job-manager path:
+  - per pass: thread storage, tiler heap (32 MiB, shared) and context, MFBD
+    + one RGB render target (clear colour, or the `@preload` frame shader
+    for MTLLoadActionLoad), one FRAGMENT job on slot 0;
+  - per draw: a VERTEX job and a TILER job on slot 1, with UBO table 0..31,
+    32 textures (31 = 1x1 null), 32 samplers (16+ inline), vertex
+    attributes from the pipeline's vertex descriptor, varyings linked by
+    location (vertex outputs to the fragment shader's formats, as PanVK
+    link_shaders), viewport/scissor, fixed-function blend from the
+    pipeline's blend state.
+  - UBO 31 layout: viewport scale 0 / offset 16, render target conversion
+    32 + (rt*2 + is16)*4, first vertex 96, texture sizes 128 + index*8.
+- The Objective-C encoders record into it. IOSurface targets and textures are
+  mapped with S8MALI_MAP_SURFACE (FLUSH) at bind time. A pass the GPU path
+  cannot take falls back to stage 2.
+- Host test `tools/dreamlte/metal/test/build-draw-test.sh`: s8mtl_draw.c
+  against a fake /dev/s8mali, every job chain decoded by Mesa's pandecode.
+  It found two bugs before any boot: 0-entry UBO descriptors, and unused
+  varying slots linked as positions.
+- air2nir fixes: inline sampler states and constant tables were never
+  written (self-assignment). New lowerings: load_raw_vertex_offset_pan
+  (most failing vertex shaders) and txs (blur and fixed_frag shaders).
+- The local Windows/WSL build of the shader cache gave 104/135 functions
+  (Mesa built with assertions). The earlier 133/135 was likely a build
+  without assertions, so those back-end failures went unnoticed. Rebuild in
+  progress with the lowerings above.
+- Boot plan: kernel CI run 39976717941 (merge 504134c, includes
+  S8MALI_MAP_SURFACE), boot-50 command line, overlay = bundle with the draw
+  path + `quartzcore.s8sc`. Boot twice: the overlay installs on the first
+  boot, the plugin is used from the second.
