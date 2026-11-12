@@ -1,0 +1,64 @@
+--- a/bsd/dev/a5xelte_touch.c
++++ b/bsd/dev/a5xelte_touch.c
+@@ -25,6 +25,7 @@
+ 
+ static vm_offset_t s8ts_i2c, s8ts_alive, s8bat_i2c;
+ static int s8ts_sleep;
++static int s8fts_stopwait; /* Samsung scl-clk-stretching final STOP check */
+ static int s8fts_prefill; /* optional FTS TX FIFO staging before AUTO_RUN */
+ static int s8ts_native;         /* sweetfb_native: iOS sees the whole panel */
+ static bool s8ts_down[S8TS_FINGERS];
+@@ -66,6 +67,34 @@
+ 	return false;
+ }
+ 
++/* Samsung Exynos8895 with samsung,scl-clk-stretching waits for the
++ * final controller state to become idle before disabling channels.
++ * TRANSFER_DONE alone can be observed while state=0x0002000d.
++ * The check runs only for FTS when the diagnostic boot arg is enabled.
++ */
++static bool
++s8fts_finish_stop(vm_offset_t bus)
++{
++    static unsigned traces, failures;
++    uint32_t initial = a5touch_read(bus, 0x50);
++    uint32_t state = initial, fifo = 0;
++    unsigned us;
++    for (us = 0; us < 100000; us++) {
++        state = a5touch_read(bus, 0x50);
++        fifo = a5touch_read(bus, 0x30);
++        if (!(state & 0x0fu) && (fifo & (1u << 8))) break;
++        delay(1);
++    }
++    bool ok = us < 100000;
++    bool log = traces++ < 16;
++    if (!ok) log = ++failures <= 8 || !(failures & 127u);
++    if (log) {
++        printf("FTS TOUCH: STOP complete=%u waited_us=%u state=%08x->%08x fifo=%08x\n",
++            (unsigned)ok, us, initial, state, fifo);
++    }
++    return ok;
++}
++
+ /* Write wlen bytes, then read rlen bytes (repeated start); STOP at the end. */
+ static bool
+ s8i2c_xfer(vm_offset_t bus, unsigned addr, const uint8_t *w, unsigned wlen,
+@@ -120,6 +149,10 @@
+ 		if (!s8i2c_wait_done(bus)) {
+ 			goto fail;
+ 		}
++	}
++	if (s8fts_stopwait && addr == 0x49u && (wlen || rlen) &&
++	    !s8fts_finish_stop(bus)) {
++		goto fail;
+ 	}
+ 	a5touch_write(bus, 0x00, 0x9);
+ 	return true;
+@@ -422,6 +455,7 @@
+ 	uint8_t id_cmd[3] = {0xb6, 0x00, 0x04};
+ 	bool found = false;
+ 	int reinit = 0;
++	(void)PE_parse_boot_argn("s8fts_stopwait", &s8fts_stopwait, sizeof(s8fts_stopwait));
+ 	(void)PE_parse_boot_argn("s8fts_prefill", &s8fts_prefill, sizeof(s8fts_prefill));
+ 	(void)PE_parse_boot_argn("s8fts_reinit", &reinit, sizeof(reinit));
+ 	(void)PE_parse_boot_argn("s8fts_split", &s8fts_split, sizeof(s8fts_split));

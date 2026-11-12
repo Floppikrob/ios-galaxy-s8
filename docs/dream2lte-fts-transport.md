@@ -47,3 +47,10 @@ Direct phone evidence: /sys/class/i2c-adapter/i2c-5/device/of_node resolves to h
 Latest fts-prefill-test.txt: TX queued matches lengths4,1,3; reset returns ready0x10; ID36 70; subsequent events still repeat ID. One successful IRQ-enable write ends with TRANS_STATUS=0x0002000d, i.e. master busy/non-idle state. Therefore failure to enqueue TX is not supported, and an interrupt done flag alone can precede bus idle in this trace.
 
 Next grounded change: wait for final STOP completion/state idle before clearing CTL channels or resetting HSI2C for the next FTS operation. Current legacy path exits on INT_STATUS and clears CTL immediately; only optional split-read helper waits idle. This is a hypothesis supported by a board/source discrepancy, not a demonstrated root cause. Keep calibration as a separate later variable. Preserve cpus=2 and boot backups.
+
+
+## Final STOP completion test (2026-11-12)
+
+Patch 0129 implements the board-specific completion check requested after the GitHub comparison. Optional s8fts_stopwait=1, FTS address0x49 only: after final TRANSFER_DONE and before CTL channel disable, poll TRANS_STATUS low nibble until zero and require TX_FIFO_EMPTY. Wait is bounded to100ms; the first16 completions and rate-limited failures record initial/final state, FIFO and wait time. Timeout fails the transaction and uses the existing recovery path. No initialization/calibration/event-format change.
+
+Local build and checks passed: ARM64 Mach-O, no undefined symbols, no LSE code instructions. Kernel SHA2563cc374901e9f2808eac2b95f1cdd70d2cbefd12501d227920a64c2fa951896fa. Flashed dream2lte-local-fts-stopwait.img SHA2562ec3ad5ecc01542f9842d301e8d740700acee9b4779578526d13aa7cd42609e6 (16130064 bytes). BOOT prefix readback matched; reboot issued. Prior full BOOT saved as boot-before-fts-stopwait.img. Test keeps cpus=2, s8fts_reinit=1, s8fts_prefill=1, adds only s8fts_stopwait=1. Hardware result pending. Changes are local, not pushed.
