@@ -1,0 +1,14 @@
+--- a/osfmk/kern/sched_traditional.c
++++ b/osfmk/kern/sched_traditional.c
+@@ -716,8 +716,9 @@
+ 	thread_t        thread;
+ 
+ 	do {
+-		uint64_t active_map = (pset->cpu_state_map[PROCESSOR_RUNNING] |
+-		    pset->cpu_state_map[PROCESSOR_DISPATCHING]);
++		/* Scan the pset whose lock is held, including after next_pset(). */
++		uint64_t active_map = (cset->cpu_state_map[PROCESSOR_RUNNING] |
++		    cset->cpu_state_map[PROCESSOR_DISPATCHING]);
+ 		for (int cpuid = lsb_first(active_map); cpuid >= 0; cpuid = lsb_next(active_map, cpuid)) {
+ 			processor = processor_array[cpuid];
+ 			if (runq_for_processor(processor)->count > 0) {
