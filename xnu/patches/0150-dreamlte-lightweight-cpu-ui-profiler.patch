@@ -1,0 +1,242 @@
+--- /dev/null
++++ b/bsd/dev/DreamLoad.inc
+@@ -0,0 +1,116 @@
++#if defined(DREAMLTE)
++#include <mach/task_info.h>
++#include <mach/processor_info.h>
++#include <kern/processor.h>
++#include <kern/clock.h>
++#include <mach/mach_time.h>
++/* Opaque kernel interfaces are not present in BSD exported private headers. */
++extern processor_t processor_array[];
++extern void processor_cpu_load_info(processor_t, natural_t [CPU_STATE_MAX]);
++extern kern_return_t thread_terminate(thread_t);
++/* Counter-only profiler: no user memory reads or stack walks under task_lock. */
++struct dream_load_row {
++    int pid;
++    unsigned seen;
++    char name[32];
++    uint64_t runtime, delta, rss;
++};
++static struct dream_load_row dream_load_rows[256];
++static unsigned dream_load_epoch, dream_load_scanned, dream_load_overflow;
++static uint64_t dream_load_wall;
++static natural_t dream_cpu_prev[8][CPU_STATE_MAX];
++static bool dream_load_baseline;
++static int dream_load_proc(proc_t p, __unused void *arg) {
++    int pid=proc_pid(p);
++    task_t task=proc_task(p);
++    if(task==TASK_NULL) return PROC_RETURNED;
++    task_reference(task);
++    task_absolutetime_info_data_t ti={0};
++    mach_msg_type_number_t count=TASK_ABSOLUTETIME_INFO_COUNT;
++    kern_return_t ret=task_info(task,TASK_ABSOLUTETIME_INFO,(task_info_t)&ti,&count);
++    mach_task_basic_info_data_t mi={0};
++    count=MACH_TASK_BASIC_INFO_COUNT;
++    if(ret==KERN_SUCCESS) (void)task_info(task,MACH_TASK_BASIC_INFO,(task_info_t)&mi,&count);
++    task_deallocate(task);
++    if(ret!=KERN_SUCCESS) return PROC_RETURNED;
++    dream_load_scanned++;
++    struct dream_load_row *row=NULL,*empty=NULL;
++    for(unsigned i=0;i<256;i++) {
++        struct dream_load_row *r=&dream_load_rows[i];
++        if(r->seen && r->pid==pid) {row=r;break;}
++        if(!empty && (!r->seen || r->seen+2<dream_load_epoch)) empty=r;
++    }
++    if(!row) row=empty;
++    if(!row) {dream_load_overflow++;return PROC_RETURNED;}
++    uint64_t runtime=ti.total_user+ti.total_system;
++    row->delta=(row->seen==dream_load_epoch-1 && row->pid==pid && runtime>=row->runtime)?runtime-row->runtime:0;
++    row->pid=pid;row->seen=dream_load_epoch;row->runtime=runtime;row->rss=mi.resident_size;
++    proc_name(pid,row->name,sizeof(row->name));
++    return PROC_RETURNED;
++}
++static void dream_load_report(void) {
++    uint64_t now=mach_absolute_time(),interval=now-dream_load_wall;
++    dream_load_wall=now;dream_load_epoch++;dream_load_scanned=dream_load_overflow=0;
++    uint64_t scan_start=mach_absolute_time();
++    proc_iterate(PROC_ALLPROCLIST,dream_load_proc,NULL,NULL,NULL);
++    uint64_t scan_ns,window_ns,uptime_ns;
++    absolutetime_to_nanoseconds(mach_absolute_time()-scan_start,&scan_ns);
++    absolutetime_to_nanoseconds(interval,&window_ns);
++    absolutetime_to_nanoseconds(now,&uptime_ns);
++    char cpu[180];int len=0;
++    uint64_t all_busy=0,all_ticks=0;
++    for(unsigned i=0;i<8;i++) {
++        processor_t p=processor_array[i];
++        natural_t ticks[CPU_STATE_MAX]={0};
++        if(p!=PROCESSOR_NULL) processor_cpu_load_info(p,ticks);
++        uint64_t busy=0,total=0;
++        for(unsigned j=0;j<CPU_STATE_MAX;j++) {
++            natural_t dt=ticks[j]-dream_cpu_prev[i][j];
++            dream_cpu_prev[i][j]=ticks[j];
++            total+=dt;if(j!=CPU_STATE_IDLE) busy+=dt;
++        }
++        unsigned load=total?(unsigned)(busy*1000/total):0;
++        all_busy+=busy;all_ticks+=total;
++        len+=snprintf(cpu+len,sizeof(cpu)-len," c%u=%u.%u",i,load/10,load%10);
++    }
++    if(dream_load_baseline) {
++        unsigned load=all_ticks?(unsigned)(all_busy*1000/all_ticks):0;
++        printf("DREAM CPU: uptime_ms=%llu window_ms=%llu overall=%u.%u%%%s scanned=%u overflow=%u scan_us=%llu\n",
++            uptime_ns/1000000,window_ns/1000000,load/10,load%10,cpu,dream_load_scanned,dream_load_overflow,scan_ns/1000);
++        unsigned printed[6]={0};
++        for(unsigned k=0;k<6;k++) {
++            unsigned best=256;
++            for(unsigned i=0;i<256;i++) {
++                struct dream_load_row *r=&dream_load_rows[i];
++                if(r->seen!=dream_load_epoch || !r->delta) continue;
++                bool already=false;for(unsigned j=0;j<k;j++) if(printed[j]==i) already=true;
++                if(!already && (best==256 || r->delta>dream_load_rows[best].delta)) best=i;
++            }
++            if(best==256) break;
++            printed[k]=best;struct dream_load_row *r=&dream_load_rows[best];
++            uint64_t pct=interval?r->delta*1000/interval:0;
++            printf("DREAM LOAD: %s[%d] CPU=%llu.%llu%% (one core=100%%) rss_mib=%llu\n",
++                r->name,r->pid,pct/10,pct%10,r->rss>>20);
++        }
++        for(unsigned i=0;i<256;i++) {
++            struct dream_load_row *r=&dream_load_rows[i];
++            if(r->seen==dream_load_epoch && (!strcmp(r->name,"backboardd")||!strcmp(r->name,"SpringBoard"))) {
++                uint64_t pct=interval?r->delta*1000/interval:0;
++                printf("DREAM UI LOAD: %s[%d] CPU=%llu.%llu%% rss_mib=%llu\n",r->name,r->pid,pct/10,pct%10,r->rss>>20);
++            }
++        }
++    }
++    dream_load_baseline=true;
++}
++static void dream_load_run(void) {
++    static int chan;
++    printf("DREAM CPU: lightweight profiler enabled; deep stack sampler bypassed\n");
++    (void)tsleep(&chan,PZERO,"dloadinit",5*hz);
++    dream_load_wall=mach_absolute_time();dream_load_report();
++    for(unsigned i=0;i<300;i++) {
++        (void)tsleep(&chan,PZERO,"dload",2*hz);
++        dream_load_report();
++    }
++    thread_terminate(current_thread());
++}
++#endif
+--- a/bsd/dev/sweet_sample.c
++++ b/bsd/dev/sweet_sample.c
+@@ -23,6 +23,8 @@
+ 
+ extern task_t proc_task(proc_t);
+ extern int hz;
++#include <pexpert/arm64/board_config.h>
++#include "DreamLoad.inc"
+ extern void sweet_sample_start(void);
+ 
+ static char sweet_sample_names[128];
+@@ -65,6 +67,11 @@
+ sweet_sample_thread(__unused void *arg, __unused wait_result_t wr)
+ {
+ 	static int chan;
++#if defined(DREAMLTE)
++	int load = 0;
++	PE_parse_boot_argn("sweetload", &load, sizeof(load));
++	if (load) { dream_load_run(); return; }
++#endif
+ 	if (!PE_parse_boot_argn("sweetsample", sweet_sample_names, sizeof(sweet_sample_names))) {
+ 		strlcpy(sweet_sample_names, "SpringBoard,backboardd", sizeof(sweet_sample_names));
+ 	}
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -56,6 +56,7 @@
+ #include <sys/proc.h>
+ 
+ static int sweet_fb_profile;
++static int sweet_ui_profile;
+ static int sweet_fb_async;
+ static int sweet_fb_wait = 1;
+ 
+@@ -130,6 +131,9 @@
+ 	uint32_t      fFadeStep;      /* fade-out steps done while off */
+ 	IOLock       *fPresentLock;   /* one panel copy at a time */
+ 	uint64_t      fLastPresent;   /* mach_absolute_time of the last copy */
++	uint64_t      fTraceStart, fTraceVsyncBase, fTraceIncoming, fTracePresented;
++	uint64_t      fTraceLastSwap, fTraceGapSum, fTraceGapMax, fTraceActiveGaps, fTraceGapLimit;
++	uint64_t      fTraceNotifyTicks, fTraceNotifyCount;
+ 	uint64_t      fMinGap;        /* 1/hz in timebase ticks */
+ 
+ 	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
+@@ -229,6 +233,9 @@
+ 	fFlushTicks = (hz == 0 || hz >= 60) ? 1 : 60 / hz;
+ 	nanoseconds_to_absolutetime(1000000000ULL / (hz == 0 ? 60 : hz), &fMinGap);
+ 	PE_parse_boot_argn("sweetfb_profile", &sweet_fb_profile, sizeof(sweet_fb_profile));
++	PE_parse_boot_argn("sweetload", &sweet_ui_profile, sizeof(sweet_ui_profile));
++	fTraceStart = mach_absolute_time();
++	nanoseconds_to_absolutetime(250000000ULL, &fTraceGapLimit);
+ 	PE_parse_boot_argn("sweetfb_async", &sweet_fb_async, sizeof(sweet_fb_async));
+ 	PE_parse_boot_argn("sweetfb_wait", &sweet_fb_wait, sizeof(sweet_fb_wait));
+ 	IOLog("SWEET FB: async=%d frame_wait=%d\n", sweet_fb_async, sweet_fb_wait);
+@@ -266,6 +273,10 @@
+ 		    (IOMobileFramebufferUserClient *)fb->fClients->getObject(i);
+ 		client->notify(SWEET_FB_NOTIFY_VSYNC, values, 6);
+ 	}
++	if (sweet_ui_profile) {
++		fb->fTraceNotifyTicks += mach_absolute_time() - now;
++		fb->fTraceNotifyCount++;
++	}
+ 	if (fb->fPowerOff) {
+ 		/* Fade out: halve every channel each vsync, then black, then idle. */
+ 		uint32_t step = fb->fFadeStep;
+@@ -297,6 +308,32 @@
+ 	if (rec != NULL) {
+ 		fb->present(rec);
+ 		IOFreeData(rec, SWEET_FB_SWAP_REC_SIZE);
++	}
++	if (sweet_ui_profile) {
++		uint64_t trace_now = mach_absolute_time(), window_ns;
++		absolutetime_to_nanoseconds(trace_now - fb->fTraceStart, &window_ns);
++		if (window_ns >= 2000000000ULL) {
++			uint64_t incoming, presented, vsyncs, gap_us=0, gap_max_ms, notify_us=0, uptime_ns;
++			IOLockLock(fb->fLock);
++			incoming=fb->fTraceIncoming; presented=fb->fTracePresented;
++			vsyncs=fb->fVsyncCount-fb->fTraceVsyncBase;
++			if (fb->fTraceActiveGaps) {
++				absolutetime_to_nanoseconds(fb->fTraceGapSum/fb->fTraceActiveGaps, &gap_us);
++				gap_us/=1000;
++			}
++			absolutetime_to_nanoseconds(fb->fTraceGapMax, &gap_max_ms); gap_max_ms/=1000000;
++			if (fb->fTraceNotifyCount) {
++				absolutetime_to_nanoseconds(fb->fTraceNotifyTicks/fb->fTraceNotifyCount, &notify_us);
++				notify_us/=1000;
++			}
++			fb->fTraceStart=trace_now; fb->fTraceVsyncBase=fb->fVsyncCount;
++			fb->fTraceIncoming=fb->fTracePresented=fb->fTraceGapSum=fb->fTraceGapMax=0;
++			fb->fTraceActiveGaps=fb->fTraceNotifyTicks=fb->fTraceNotifyCount=0;
++			IOLockUnlock(fb->fLock);
++			absolutetime_to_nanoseconds(trace_now, &uptime_ns);
++			IOLog("DREAM UI: uptime_ms=%llu window_ms=%llu swap_in=%llu present_calls=%llu vsync=%llu active_gap_us=%llu gap_max_ms=%llu notify_avg_us=%llu\n",
++			    uptime_ns/1000000,window_ns/1000000,incoming,presented,vsyncs,gap_us,gap_max_ms,notify_us);
++		}
+ 	}
+ 	uint64_t used_ns;
+ 	absolutetime_to_nanoseconds(mach_absolute_time() - now, &used_ns);
+@@ -375,6 +412,15 @@
+ AppleCLCD::swap(const uint8_t *rec)
+ {
+ 	IOLockLock(fLock);
++	if (sweet_ui_profile) {
++		uint64_t t=mach_absolute_time(); fTraceIncoming++;
++		if (fTraceLastSwap) {
++			uint64_t gap=t-fTraceLastSwap;
++			if (gap>fTraceGapMax) fTraceGapMax=gap;
++			if (gap<=fTraceGapLimit) { fTraceGapSum+=gap; fTraceActiveGaps++; }
++		}
++		fTraceLastSwap=t;
++	}
+ 	memcpy(fPending, rec, SWEET_FB_SWAP_REC_SIZE);
+ 	fDirty = true;
+ 	uint64_t now = mach_absolute_time();
+@@ -402,6 +448,9 @@
+ 	if (sweet_fb_wait) sweet_fb_wait_frame_done();
+ #endif
+ 	uint64_t perf_copy_start = mach_absolute_time();
++	if (sweet_ui_profile) {
++		IOLockLock(fLock); fTracePresented++; IOLockUnlock(fLock);
++	}
+ 
+ 
+ 	if (!fConsolePaused) {
