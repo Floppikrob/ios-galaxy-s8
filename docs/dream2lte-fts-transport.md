@@ -22,3 +22,12 @@ Native recovery sysfs identifies the controller as fts8cd56. Compared Samsung dr
 Patch 0127 adds optional s8fts_reinit=1, with bounded ready polling and explicit failure logging. No flash, calibration, NVM or firmware-update commands. Default init behavior remains available. Ready timeout stops the touch init path but does not prevent iOS startup.
 
 Locally built and validated (no undefined symbols, no code LSE). Flashed dream2lte-local-fts-reinit.img with cpus=2, s8touch=2, s8fts_reinit=1, default repeated START. SHA256 0a78ff32e9381f7d1a5e780586efeaece4086b619a4e93a01381f543389a635a. BOOT readback matched, reboot issued. Physical ready/touch result pending. Backup boot-before-fts-reinit.img preserved in Codex outputs. New changes remain local.
+
+
+## TX FIFO prefill test (2026-11-12)
+
+Reinit runtime log fts-reinit-test.txt confirms ready event `10 00 00 00 00 26 0d 01`, then chip ID read succeeds, sensing and interrupt setup finish. Subsequent READ_EVENT packets again repeat the chip-ID bytes. Two CPUs initialized. This confirms reset/ready communication but not that the short polling commands are transmitted correctly.
+
+Patch 0128 adds optional s8fts_prefill=1. For the FTS address 0x49 only and writes up to 64 bytes, it fills TX FIFO before AUTO_RUN, verifies queued count equals command length, and records the first 16 queue snapshots. Legacy ordering remains default; other I2C devices are unchanged. No change to event offsets, calibration, firmware or NVM.
+
+Full local build and checks passed; no undefined symbols or LSE code instructions. Current flashed image dream2lte-local-fts-prefill.img SHA256 e72e3ece9ccc968b426c65f84ee4d0d8ca4f66f86f765c515933ca0cc285a979, bytes 16130064; BOOT readback matches; reboot issued. Args retain cpus=2 with s8fts_reinit=1 s8fts_prefill=1, default repeated START. Physical touch/queue-count result pending. Backup boot-before-fts-prefill.img is in Codex outputs.

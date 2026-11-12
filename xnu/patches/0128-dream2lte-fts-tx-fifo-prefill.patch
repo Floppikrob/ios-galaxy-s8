@@ -1,0 +1,47 @@
+--- a/bsd/dev/a5xelte_touch.c
++++ b/bsd/dev/a5xelte_touch.c
+@@ -25,6 +25,7 @@
+ 
+ static vm_offset_t s8ts_i2c, s8ts_alive, s8bat_i2c;
+ static int s8ts_sleep;
++static int s8fts_prefill; /* optional FTS TX FIFO staging before AUTO_RUN */
+ static int s8ts_native;         /* sweetfb_native: iOS sees the whole panel */
+ static bool s8ts_down[S8TS_FINGERS];
+ static uint16_t s8ts_x[S8TS_FINGERS], s8ts_y[S8TS_FINGERS];
+@@ -76,12 +77,27 @@
+ 	if (wlen) {
+ 		a5touch_write(bus, 0x04, 3);
+ 		a5touch_write(bus, 0x00, 0x9 | 0x80);
+-		a5touch_write(bus, 0x44, (rlen ? 0 : (1u << 17)) | wlen | (1u << 31));
++		bool prefill = s8fts_prefill && addr == 0x49u && wlen <= 64;
++		if (!prefill) {
++			a5touch_write(bus, 0x44, (rlen ? 0 : (1u << 17)) | wlen | (1u << 31));
++		}
+ 		for (unsigned i = 0; i < wlen; i++) {
+ 			for (unsigned n = 0; n < 1000 && (a5touch_read(bus, 0x30) & (1u << 7)); n++) {
+ 				delay(1);
+ 			}
+ 			a5touch_write(bus, 0x34, w[i]);
++		}
++		if (prefill) {
++			static unsigned traces;
++			uint32_t fifo = a5touch_read(bus, 0x30);
++			unsigned queued = fifo & 0x7fu;
++			if (traces++ < 16 || queued != wlen) {
++				printf("FTS TOUCH: TX prefill cmd=%02x expected=%u queued=%u fifo=%08x\n",
++				    w[0], wlen, queued, fifo);
++			}
++			if (queued != wlen) goto fail;
++			a5touch_write(bus, 0x24, a5touch_read(bus, 0x24));
++			a5touch_write(bus, 0x44, (rlen ? 0 : (1u << 17)) | wlen | (1u << 31));
+ 		}
+ 		if (!s8i2c_wait_done(bus)) {
+ 			goto fail;
+@@ -406,6 +422,7 @@
+ 	uint8_t id_cmd[3] = {0xb6, 0x00, 0x04};
+ 	bool found = false;
+ 	int reinit = 0;
++	(void)PE_parse_boot_argn("s8fts_prefill", &s8fts_prefill, sizeof(s8fts_prefill));
+ 	(void)PE_parse_boot_argn("s8fts_reinit", &reinit, sizeof(reinit));
+ 	(void)PE_parse_boot_argn("s8fts_split", &s8fts_split, sizeof(s8fts_split));
+ 	printf("FTS TOUCH: transaction mode=%s\n", s8fts_split ? "STOP-separated" : "repeated-START");
