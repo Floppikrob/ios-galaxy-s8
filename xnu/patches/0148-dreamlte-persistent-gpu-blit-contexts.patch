@@ -1,0 +1,394 @@
+--- a/iokit/Kernel/arm/DreamMaliBlit.inc
++++ b/iokit/Kernel/arm/DreamMaliBlit.inc
+@@ -1,198 +1,234 @@
+ #if defined(DREAMLTE)
+ #include "DreamMaliCopyShader.inc"
+-/* Experimental synchronous blitter, serialized at JS1/AS0. No GPU userspace API.
+- * 32MiB windows at GPU VA 0x10000000/0x20000000. Only owned descriptors mapped.
++/* Bounded persistent mapping cache. Prepared descriptors remain owned until reboot.
++ * Each AS has independent page tables/job/params; no per-frame remap or revoke.
+  */
++struct DmbContext {
++    IOMemoryDescriptor *src, *dst;
++    IOBufferMemoryDescriptor *storage;
++    uint8_t *mem;
++    void *source_va, *dest_va;
++    uint64_t pa[38], source_bytes, dest_bytes;
++    unsigned w,h,sb,db,as;
++    bool cached_dst;
++};
++static DmbContext dmb_contexts[6];
++static unsigned dmb_count;
+ static vm_offset_t dmb_gpu;
+ static IOLock *dmb_lock;
+-static IOBufferMemoryDescriptor *dmb_storage;
+-static uint8_t *dmb_mem;
+-static uint64_t dmb_pa[38];
+ static bool dmb_ready, dmb_poisoned;
+-static uint32_t dmb_shaders;
+-static const unsigned DMB_LIMIT = 32 * 1024 * 1024;
+-static uint32_t dmb_frames;
++static uint32_t dmb_shaders, dmb_frames;
++static const unsigned DMB_LIMIT=32*1024*1024;
+ 
+-static bool dmb_cmd(unsigned cmd) {
+-    if (!dm_poll(dmb_gpu, 0x2428, 1, 0)) return false;
+-    dm_write(dmb_gpu, 0x2418, cmd);
+-    return dm_poll(dmb_gpu, 0x2428, 1, 0);
+-}
+-static bool dmb_revoke() {
+-    // Entire 48-bit VA region, as in Linux panfrost lock_region().
+-    dm_write(dmb_gpu, 0x2410, 47); dm_write(dmb_gpu, 0x2414, 0);
+-    if (!dmb_cmd(2) || !dmb_cmd(5)) return false; // LOCK, FLUSH_MEM
+-    dm_write(dmb_gpu, 0x2400, 0); dm_write(dmb_gpu, 0x2404, 0);
+-    dm_write(dmb_gpu, 0x2430, 1); // UNMAPPED
+-    return dmb_cmd(1);
++static bool dmb_wait(unsigned reg,uint32_t mask,uint32_t wanted) {
++    // Fast MMU commands usually finish in microseconds; avoid a 1ms sleep each.
++    for(unsigned i=0;i<100;i++) {
++        if((dm_read(dmb_gpu,reg)&mask)==wanted) return true;
++        IODelay(1);
++    }
++    for(unsigned i=0;i<100;i++) {
++        if((dm_read(dmb_gpu,reg)&mask)==wanted) return true;
++        IOSleep(1);
++    }
++    IOLog("DREAM GPU BLIT: timeout reg=%x value=%x wanted=%x\n",reg,dm_read(dmb_gpu,reg),wanted);
++    return false;
+ }
+ static bool dmb_reset() {
+-    dm_write(dmb_gpu, 0x24, 0xffffffff); dm_write(dmb_gpu, 0x30, 1);
+-    bool ok = dm_poll(dmb_gpu, 0x20, 1u << 8, 1u << 8);
+-    dm_write(dmb_gpu, 0x28, 0); dm_write(dmb_gpu, 0x1008, 0); dm_write(dmb_gpu, 0x2008, 0);
++    dm_write(dmb_gpu,0x24,0xffffffff); dm_write(dmb_gpu,0x30,1);
++    bool ok=dmb_wait(0x20,1u<<8,1u<<8);
++    dm_write(dmb_gpu,0x28,0); dm_write(dmb_gpu,0x1008,0); dm_write(dmb_gpu,0x2008,0);
+     return ok;
+ }
+ static unsigned dmb_bits(unsigned v) {
+-    unsigned n = 0; for (v--; v; v >>= 1) n++; return n;
+-}
+-static bool dmb_map_desc(IOMemoryDescriptor *md, unsigned l3first, uint64_t bytes, bool writable) {
+-    if (!bytes || bytes > DMB_LIMIT || md->getLength() < bytes) return false;
+-    bzero(dmb_mem + l3first * 4096, 16 * 4096);
+-    for (uint64_t off = 0; off < bytes; off += 4096) {
+-        IOByteCount seg = 0;
+-        uint64_t pa = md->getPhysicalSegment(off, &seg, kIOMemoryMapperNone);
+-        uint64_t need = bytes - off < 4096 ? bytes - off : 4096;
+-        if (!pa || (pa & 4095) || pa + 4096 > (1ULL << 40) || seg < need) return false;
+-        unsigned page = (unsigned)(off / 4096);
+-        uint64_t *l3 = (uint64_t *)(dmb_mem + (l3first + page / 512) * 4096);
+-        l3[page % 512] = pa | (writable ? 0x2c1 : 0x241); // source read-only
++    unsigned n=0; for(v--;v;v>>=1) n++; return n;
++}
++static bool dmb_map_desc(DmbContext *c,IOMemoryDescriptor *md,unsigned first,uint64_t bytes,bool write) {
++    if(!bytes || bytes>DMB_LIMIT || md->getLength()<bytes) return false;
++    for(uint64_t off=0;off<bytes;off+=4096) {
++        IOByteCount n=0;
++        uint64_t pa=md->getPhysicalSegment(off,&n,kIOMemoryMapperNone);
++        uint64_t need=bytes-off<4096?bytes-off:4096;
++        if(!pa || (pa&4095) || pa+4096>(1ULL<<40) || n<need) return false;
++        unsigned page=(unsigned)(off/4096);
++        ((uint64_t *)(c->mem+(first+page/512)*4096))[page%512]=pa|(write?0x2c1:0x241);
+     }
+     return true;
+ }
+-/* return: 1 copied, 0 safe CPU fallback, -1 DMA could not be stopped (skip CPU write).
+- * On an unquiesced fault, retain prepared source/destination until reboot.
+- */
+-static int dmb_copy_locked(IOMemoryDescriptor *src, void *src_va, IOMemoryDescriptor *dst,
+-    void *dst_va, bool cached_dst, unsigned w, unsigned h, unsigned sb, unsigned db) {
+-    if (!src || !dst || !src_va || !dst_va || !w || !h || (w & 3) ||
+-        sb < w * 4 || db < w * 4 || (sb & 15) || (db & 15) || w > 4096 || h > 4096) return 0;
+-    uint64_t sn = (uint64_t)sb * h, dn = (uint64_t)db * h;
+-    if (sn > DMB_LIMIT || dn > DMB_LIMIT || src->getLength() < sn || dst->getLength() < dn) return 0;
+-    src->retain(); dst->retain();
+-    bool sp = src->prepare(kIODirectionOut) == kIOReturnSuccess;
+-    bool dp = sp && dst->prepare(kIODirectionIn) == kIOReturnSuccess;
+-    bool safe = true, success = false;
+-    if (!dp) IOLog("DREAM GPU BLIT: descriptor prepare failed source=%u destination=%u\n", sp, dp);
+-    uint64_t begun = mach_absolute_time();
+-    if (dp && dmb_map_desc(src, 4, sn, false) && dmb_map_desc(dst, 20, dn, true)) {
+-        uint8_t *jobpage = dmb_mem + 36 * 4096;
+-        uint32_t *job = (uint32_t *)jobpage;
+-        bzero(jobpage, 4096);
+-        memcpy(jobpage, dmb_copy_job, sizeof(dmb_copy_job));
+-        memcpy(jobpage + 0x200, dmb_copy_state, sizeof(dmb_copy_state));
+-        memcpy(jobpage + 0x240, dmb_copy_tls, sizeof(dmb_copy_tls));
+-        memcpy(jobpage + 0x400, dmb_copy_code, sizeof(dmb_copy_code));
+-        unsigned groups = ((w / 4) + 63) / 64;
+-        unsigned xb = dmb_bits(groups), yb = dmb_bits(h);
+-        job[8] = 63 | ((groups - 1) << 6) | ((h - 1) << (6 + xb));
+-        job[9] = 6 | (6 << 5) | (6 << 10) | ((6 + xb) << 16) | ((6 + xb + yb) << 22) | (6u << 28);
+-        job[10] = 9u << 26; // ceil(log2(64+1)) + ceil(log2(1+1))*2
+-        uint32_t *params = (uint32_t *)(dmb_mem + 37 * 4096);
+-        params[0] = w / 4; params[1] = h; params[2] = sb; params[3] = db;
+-        dm_clean(src_va, (unsigned)sn);
+-        if (cached_dst) dm_clean(dst_va, (unsigned)dn);
+-        dm_clean(dmb_mem, 38 * 4096);
+-        dm_write(dmb_gpu, 0x2400, (uint32_t)dmb_pa[0] | 7); dm_write(dmb_gpu, 0x2404, dmb_pa[0] >> 32);
+-        dm_write(dmb_gpu, 0x2408, 0x00888d88); dm_write(dmb_gpu, 0x240c, 0);
+-        dm_write(dmb_gpu, 0x2430, 0); dm_write(dmb_gpu, 0x2434, 0);
+-        if (dmb_cmd(1)) {
+-            dm_write(dmb_gpu, 0x1004, 0xffffffff); dm_write(dmb_gpu, 0x2004, 0xffffffff);
+-            dm_write(dmb_gpu, 0x18c0, 0x100000); dm_write(dmb_gpu, 0x18c4, 0);
+-            dm_write(dmb_gpu, 0x18d0, dmb_shaders); dm_write(dmb_gpu, 0x18d4, 0);
+-            dm_write(dmb_gpu, 0x18d8, (8u << 16) | (3u << 8) | (1u << 10) | (3u << 12));
+-            dm_write(dmb_gpu, 0x18e0, 1);
+-            uint32_t irq = 0;
+-            for (unsigned i = 0; i < 1000; i++) {
+-                irq = dm_read(dmb_gpu, 0x1000);
+-                if ((irq & 0x20002) || dm_read(dmb_gpu, 0x2000)) break;
+-                IODelay(10);
+-                if ((i % 100) == 99) IOSleep(1);
+-            }
+-            if ((irq & 0x20002) == 2 && !dm_read(dmb_gpu, 0x2000)) {
+-                dm_invalidate(jobpage, 4096);
+-                success = job[0] == 1;
+-            }
+-            if (!success) IOLog("DREAM GPU BLIT: fault/timeout irq=%x JS=%x MMU=%x AS=%x exception=%x\n",
+-                irq, dm_read(dmb_gpu,0x18a4), dm_read(dmb_gpu,0x2000), dm_read(dmb_gpu,0x241c), job[0]);
++static DmbContext *dmb_get_context(IOMemoryDescriptor *src,void *sv,IOMemoryDescriptor *dst,void *dv,
++    bool cached,unsigned w,unsigned h,unsigned sb,unsigned db) {
++    for(unsigned i=0;i<dmb_count;i++) {
++        DmbContext *c=&dmb_contexts[i];
++        if(c->src==src && c->dst==dst && c->w==w && c->h==h && c->sb==sb && c->db==db) return c;
++    }
++    if(dmb_count>=6 || !(dm_read(dmb_gpu,0x18)&(1u<<dmb_count))) return NULL;
++    DmbContext *c=&dmb_contexts[dmb_count];
++    c->as=dmb_count; c->w=w;c->h=h;c->sb=sb;c->db=db;c->cached_dst=cached;
++    c->source_bytes=(uint64_t)sb*h;c->dest_bytes=(uint64_t)db*h;
++    c->source_va=sv;c->dest_va=dv;
++    // No hardware access to this new AS until the final UPDATE below.
++    if(src->prepare(kIODirectionOut)!=kIOReturnSuccess) return NULL;
++    if(dst->prepare(kIODirectionIn)!=kIOReturnSuccess) { src->complete(kIODirectionOut);return NULL; }
++    src->retain();dst->retain();c->src=src;c->dst=dst;
++    c->storage=IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
++        kIODirectionInOut|kIOMemoryKernelUserShared,38*4096,4096);
++    bool storage_prepared=c->storage && c->storage->prepare()==kIOReturnSuccess;
++    bool ok=storage_prepared;
++    if(ok) {
++        c->mem=(uint8_t *)c->storage->getBytesNoCopy();bzero(c->mem,38*4096);
++        for(unsigned i=0;i<38;i++) {
++            IOByteCount n=0;c->pa[i]=c->storage->getPhysicalSegment(i*4096,&n,kIOMemoryMapperNone);
++            if(!c->pa[i] || (c->pa[i]&4095) || n<4096 || c->pa[i]+4096>(1ULL<<40)) ok=false;
+         }
+-        // Quiesce and invalidate mappings before releasing any prepared descriptor.
+-        safe = success ? dmb_revoke() : false;
+-        if (!safe) { success = false; safe = dmb_reset(); }
+-        if (!safe) { success = false; __atomic_store_n(&dmb_poisoned, true, __ATOMIC_RELEASE); }
+-        if (success && cached_dst) dm_invalidate(dst_va, (unsigned)dn);
+-    }
+-    if (!success) {
+-        IOLog("DREAM GPU BLIT: copy unavailable; CPU fallback=%u\n", safe);
+-        __atomic_store_n(&dmb_ready, false, __ATOMIC_RELEASE);
+-    }
+-    if (safe) {
+-        if (dp) dst->complete(kIODirectionIn);
+-        if (sp) src->complete(kIODirectionOut);
+-        src->release(); dst->release();
+-    } else {
+-        IOLog("DREAM GPU BLIT: DMA not quiescent; descriptors retained, CPU display writes stopped\n");
+-    }
+-    uint64_t ns; absolutetime_to_nanoseconds(mach_absolute_time() - begun, &ns);
+-    if (success && (++dmb_frames <= 3 || (dmb_frames % 120) == 0))
+-        IOLog("DREAM GPU BLIT: copied frame=%u %ux%u total_us=%llu\n", dmb_frames, w, h, ns / 1000);
+-    return !safe ? -1 : success ? 1 : 0;
++    }
++    if(ok) {
++        ((uint64_t *)c->mem)[0]=c->pa[1]|3;
++        ((uint64_t *)(c->mem+4096))[0]=c->pa[2]|3;
++        uint64_t *l2=(uint64_t *)(c->mem+2*4096);
++        l2[0]=c->pa[3]|3;
++        for(unsigned i=0;i<16;i++) {l2[128+i]=c->pa[4+i]|3;l2[256+i]=c->pa[20+i]|3;}
++        uint64_t *l3=(uint64_t *)(c->mem+3*4096);
++        l3[256]=c->pa[36]|0x2c1;l3[257]=c->pa[37]|0x241;
++        ok=dmb_map_desc(c,src,4,c->source_bytes,false) && dmb_map_desc(c,dst,20,c->dest_bytes,true);
++    }
++    if(!ok) {
++        // No UPDATE or job has referenced this storage, so it can be released.
++        if(c->storage) { if(storage_prepared)c->storage->complete();c->storage->release();c->storage=NULL; }
++        dst->complete(kIODirectionIn);src->complete(kIODirectionOut);
++        dst->release();src->release();c->src=c->dst=NULL;
++        IOLog("DREAM GPU BLIT: persistent mapping allocation failed\n");return NULL;
++    }
++    uint8_t *jp=c->mem+36*4096;uint32_t *j=(uint32_t *)jp;
++    memcpy(jp,dmb_copy_job,sizeof(dmb_copy_job));
++    memcpy(jp+0x200,dmb_copy_state,sizeof(dmb_copy_state));
++    memcpy(jp+0x240,dmb_copy_tls,sizeof(dmb_copy_tls));
++    memcpy(jp+0x400,dmb_copy_code,sizeof(dmb_copy_code));
++    unsigned groups=((w/4)+63)/64,xb=dmb_bits(groups),yb=dmb_bits(h);
++    j[8]=63|((groups-1)<<6)|((h-1)<<(6+xb));
++    j[9]=6|(6<<5)|(6<<10)|((6+xb)<<16)|((6+xb+yb)<<22)|(6u<<28);
++    j[10]=9u<<26;
++    uint32_t *p=(uint32_t *)(c->mem+37*4096);
++    p[0]=w/4;p[1]=h;p[2]=sb;p[3]=db;
++    if(cached) dm_clean(dv,(unsigned)c->dest_bytes);
++    dm_clean(c->mem,38*4096);
++    unsigned as=0x2400+c->as*0x40;
++    dm_write(dmb_gpu,as,(uint32_t)c->pa[0]|7);dm_write(dmb_gpu,as+4,c->pa[0]>>32);
++    dm_write(dmb_gpu,as+8,0x00888d88);dm_write(dmb_gpu,as+12,0);
++    dm_write(dmb_gpu,as+0x30,0);dm_write(dmb_gpu,as+0x34,0);
++    if(!dmb_wait(as+0x28,1,0)) ok=false;
++    if(ok) { dm_write(dmb_gpu,as+0x18,1);ok=dmb_wait(as+0x28,1,0); }
++    dmb_count++; // Consume the AS and retain its DMA ownership even on an UPDATE failure.
++    if(!ok) {
++        bool stopped=dmb_reset();
++        __atomic_store_n(&dmb_ready,false,__ATOMIC_RELEASE);
++        if(!stopped) __atomic_store_n(&dmb_poisoned,true,__ATOMIC_RELEASE);
++        return NULL;
++    }
++    IOLog("DREAM GPU BLIT: persistent AS%u mapped %ux%u source=%llu destination=%llu bytes\n",
++        c->as,w,h,c->source_bytes,c->dest_bytes);
++    return c;
++}
++static int dmb_copy_locked(IOMemoryDescriptor *src,void *sv,IOMemoryDescriptor *dst,void *dv,
++    bool cached,unsigned w,unsigned h,unsigned sb,unsigned db) {
++    if(!src||!dst||!sv||!dv||!w||!h||(w&3)||w>4096||h>4096||sb<w*4||db<w*4||(sb&15)||(db&15)||
++        (uint64_t)sb*h>DMB_LIMIT||(uint64_t)db*h>DMB_LIMIT||src->getLength()<(uint64_t)sb*h||dst->getLength()<(uint64_t)db*h) return 0;
++    uint64_t begin=mach_absolute_time();
++    DmbContext *c=dmb_get_context(src,sv,dst,dv,cached,w,h,sb,db);
++    if(!c) return dmb_poisoned?-1:0;
++    uint64_t mapped=mach_absolute_time();
++    dm_clean(sv,(unsigned)c->source_bytes);
++    uint32_t *job=(uint32_t *)(c->mem+36*4096);
++    job[0]=job[1]=job[2]=job[3]=0;dm_clean(job,64);
++    uint64_t cleaned=mach_absolute_time();
++    dm_write(dmb_gpu,0x1004,0xffffffff);dm_write(dmb_gpu,0x2004,0xffffffff);
++    dm_write(dmb_gpu,0x18c0,0x100000);dm_write(dmb_gpu,0x18c4,0);
++    dm_write(dmb_gpu,0x18d0,dmb_shaders);dm_write(dmb_gpu,0x18d4,0);
++    dm_write(dmb_gpu,0x18d8,c->as|(8u<<16)|(3u<<8)|(1u<<10)|(3u<<12));
++    dm_write(dmb_gpu,0x18e0,1);
++    uint32_t irq=0;
++    for(unsigned i=0;i<1000;i++) {
++        irq=dm_read(dmb_gpu,0x1000);
++        if((irq&0x20002)||dm_read(dmb_gpu,0x2000)) break;
++        IODelay(10);if(i%100==99) IOSleep(1);
++    }
++    uint64_t finished=mach_absolute_time();
++    bool ok=(irq&0x20002)==2 && !dm_read(dmb_gpu,0x2000);
++    if(ok) {dm_invalidate(job,64);ok=job[0]==1;}
++    if(ok && cached) dm_invalidate(dv,(unsigned)c->dest_bytes);
++    if(!ok) {
++        unsigned as=0x2400+c->as*0x40;
++        IOLog("DREAM GPU BLIT: failed AS%u irq=%x JS=%x MMU=%x fault=%x exception=%x\n",
++            c->as,irq,dm_read(dmb_gpu,0x18a4),dm_read(dmb_gpu,0x2000),dm_read(dmb_gpu,as+0x1c),job[0]);
++        bool stopped=dmb_reset();__atomic_store_n(&dmb_ready,false,__ATOMIC_RELEASE);
++        if(!stopped) __atomic_store_n(&dmb_poisoned,true,__ATOMIC_RELEASE);
++        IOLog("DREAM GPU BLIT: disabled after fault; CPU fallback=%u; DMA retained\n",stopped);
++        return stopped?0:-1;
++    }
++    dmb_frames++;
++    if(dmb_frames<=10 || dmb_frames%30==0) {
++        uint64_t total,setup,clean,wait;
++        absolutetime_to_nanoseconds(mach_absolute_time()-begin,&total);
++        absolutetime_to_nanoseconds(mapped-begin,&setup);
++        absolutetime_to_nanoseconds(cleaned-mapped,&clean);
++        absolutetime_to_nanoseconds(finished-cleaned,&wait);
++        IOLog("DREAM GPU BLIT: frame=%u AS%u %ux%u total_us=%llu setup_us=%llu clean_us=%llu GPU_us=%llu\n",
++            dmb_frames,c->as,w,h,total/1000,setup/1000,clean/1000,wait/1000);
++    }
++    return 1;
+ }
+ static void dream_gpu_copy_start(vm_offset_t gpu) {
+-    int enabled = 0; PE_parse_boot_argn("s8gpu_copy", &enabled, sizeof(enabled));
+-    if (!enabled) return;
+-    dmb_gpu = gpu; dmb_lock = IOLockAlloc();
+-    dmb_storage = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
+-        kIODirectionInOut | kIOMemoryKernelUserShared, 38 * 4096, 4096);
+-    if (!dmb_lock || !dmb_storage || dmb_storage->prepare() != kIOReturnSuccess) return;
+-    dmb_mem = (uint8_t *)dmb_storage->getBytesNoCopy(); bzero(dmb_mem, 38 * 4096);
+-    for (unsigned i = 0; i < 38; i++) {
+-        IOByteCount n = 0; dmb_pa[i] = dmb_storage->getPhysicalSegment(i * 4096, &n, kIOMemoryMapperNone);
+-        if (!dmb_pa[i] || (dmb_pa[i] & 4095) || n < 4096 || dmb_pa[i] + 4096 > (1ULL << 40)) return;
+-    }
+-    ((uint64_t *)dmb_mem)[0] = dmb_pa[1] | 3;
+-    ((uint64_t *)(dmb_mem+4096))[0] = dmb_pa[2] | 3;
+-    uint64_t *l2pt = (uint64_t *)(dmb_mem+2*4096);
+-    l2pt[0] = dmb_pa[3] | 3;
+-    for (unsigned i=0;i<16;i++) { l2pt[128+i]=dmb_pa[4+i]|3; l2pt[256+i]=dmb_pa[20+i]|3; }
+-    uint64_t *l3 = (uint64_t *)(dmb_mem+3*4096);
+-    l3[256]=dmb_pa[36]|0x2c1; l3[257]=dmb_pa[37]|0x241;
+-    if (!dmb_reset()) return;
++    int enabled=0;PE_parse_boot_argn("s8gpu_copy",&enabled,sizeof(enabled));if(!enabled) return;
++    dmb_gpu=gpu;dmb_lock=IOLockAlloc();if(!dmb_lock||!dmb_reset()) return;
+     dm_write(gpu,0x24,0xffffffff);
+-    uint32_t l2=dm_read(gpu,0x120); dmb_shaders=dm_read(gpu,0x100);
+-    if (!l2 || !dmb_shaders) return;
+-    dm_write(gpu,0x1a0,l2); if (!dm_poll(gpu,0x160,l2,l2)) return;
+-    dm_write(gpu,0x180,dmb_shaders); if (!dm_poll(gpu,0x140,dmb_shaders,dmb_shaders)) return;
+-    // Unequal strides, a partial final workgroup, and cross-page/padding guards.
++    uint32_t l2=dm_read(gpu,0x120);dmb_shaders=dm_read(gpu,0x100);
++    if(!l2||!dmb_shaders) return;
++    dm_write(gpu,0x1a0,l2);if(!dmb_wait(0x160,l2,l2)) return;
++    dm_write(gpu,0x180,dmb_shaders);if(!dmb_wait(0x140,dmb_shaders,dmb_shaders)) return;
+     const unsigned w=260,h=17,sb=1152,db=1088;
+     IOBufferMemoryDescriptor *src=IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,kIODirectionInOut|kIOMemoryKernelUserShared,sb*h,4096);
+     IOBufferMemoryDescriptor *dst=IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,kIODirectionInOut|kIOMemoryKernelUserShared,db*h,4096);
+-    if (!src || !dst) return;
+-    uint32_t *s=(uint32_t *)src->getBytesNoCopy(); uint8_t *d=(uint8_t *)dst->getBytesNoCopy();
++    if(!src||!dst) return;
++    uint32_t *s=(uint32_t *)src->getBytesNoCopy();uint8_t *d=(uint8_t *)dst->getBytesNoCopy();
+     for(unsigned i=0;i<sb*h/4;i++) s[i]=(i*2654435761u)^0x13579bdf;
+     memset(d,0xa5,db*h);
+-    int copied=dmb_copy_locked(src,s,dst,d,true,w,h,sb,db);
+-    bool ok=copied==1;
+-    for(unsigned y=0;ok && y<h;y++) {
++    bool ok=dmb_copy_locked(src,s,dst,d,true,w,h,sb,db)==1;
++    for(unsigned y=0;ok&&y<h;y++) {
+         if(memcmp((uint8_t *)s+y*sb,d+y*db,w*4)) ok=false;
+-        for(unsigned x=w*4;ok && x<db;x++) if(d[y*db+x]!=0xa5) ok=false;
+-    }
+-    // Second dispatch tests AS0 remapping/reuse, not just the first submission.
++        for(unsigned x=w*4;ok&&x<db;x++) if(d[y*db+x]!=0xa5) ok=false;
++    }
+     if(ok) {
+-        IOBufferMemoryDescriptor *src2=IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
+-            kIODirectionInOut|kIOMemoryKernelUserShared,sb*h,4096);
+-        if (!src2) ok=false;
++        IOBufferMemoryDescriptor *src2=IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,kIODirectionInOut|kIOMemoryKernelUserShared,sb*h,4096);
++        if(!src2) ok=false;
+         else {
+             uint32_t *t=(uint32_t *)src2->getBytesNoCopy();
+             for(unsigned i=0;i<sb*h/4;i++) t[i]=s[i]^0xffffffff;
+-            copied=dmb_copy_locked(src2,t,dst,d,true,w,h,sb,db); ok=copied==1;
+-            for(unsigned y=0;ok && y<h;y++) {
++            ok=dmb_copy_locked(src2,t,dst,d,true,w,h,sb,db)==1;
++            for(unsigned y=0;ok&&y<h;y++) {
+                 if(memcmp((uint8_t *)t+y*sb,d+y*db,w*4)) ok=false;
+-                for(unsigned x=w*4;ok && x<db;x++) if(d[y*db+x]!=0xa5) ok=false;
++                for(unsigned x=w*4;ok&&x<db;x++) if(d[y*db+x]!=0xa5) ok=false;
+             }
+-            if (!dmb_poisoned) src2->release();
++            // Revisit AS0 after AS1 to test persistent AS switching and changed data.
++            if(ok) {
++                for(unsigned i=0;i<sb*h/4;i++) s[i]^=0x2468ace0;
++                ok=dmb_copy_locked(src,s,dst,d,true,w,h,sb,db)==1;
++                for(unsigned y=0;ok&&y<h;y++) {
++                    if(memcmp((uint8_t *)s+y*sb,d+y*db,w*4)) ok=false;
++                    for(unsigned x=w*4;ok&&x<db;x++) if(d[y*db+x]!=0xa5) ok=false;
++                }
++            }
++            src2->release(); // Context keeps a retained/prepared reference.
+         }
+     }
+-    if(!dmb_poisoned) { src->release(); dst->release(); }
+-    IOLog("DREAM GPU BLIT: SELFTEST %s (2 copies, stride/bounds/guards), display enabled=%u\n",ok?"PASS":"FAIL",ok);
++    src->release();dst->release();
++    IOLog("DREAM GPU BLIT: PERSISTENT SELFTEST %s (3 copies AS0/AS1/AS0, guards), display enabled=%u\n",ok?"PASS":"FAIL",ok);
+     __atomic_store_n(&dmb_ready,ok,__ATOMIC_RELEASE);
+ }
+-static int dream_gpu_frame_copy(SweetSurface *src, SweetSurface *dst, unsigned w, unsigned h, unsigned sb, unsigned db) {
++static int dream_gpu_frame_copy(SweetSurface *src,SweetSurface *dst,unsigned w,unsigned h,unsigned sb,unsigned db) {
+     if(__atomic_load_n(&dmb_poisoned,__ATOMIC_ACQUIRE)) return -1;
+-    if(!__atomic_load_n(&dmb_ready,__ATOMIC_ACQUIRE) || !src || !dst || src->offset || dst->offset) return 0;
+-    if (!OSDynamicCast(IOBufferMemoryDescriptor, src->memory)) return 0;
++    if(!__atomic_load_n(&dmb_ready,__ATOMIC_ACQUIRE)||!src||!dst||src->offset||dst->offset) return 0;
++    if(!OSDynamicCast(IOBufferMemoryDescriptor,src->memory)) return 0;
+     IOLockLock(dmb_lock);
+     int ret=dmb_poisoned?-1:!dmb_ready?0:dmb_copy_locked(src->memory,(void *)src->kernelAddress(),
+         dst->memory,(void *)dst->kernelAddress(),false,w,h,sb,db);
+-    IOLockUnlock(dmb_lock); return ret;
++    IOLockUnlock(dmb_lock);return ret;
+ }
+ #endif
