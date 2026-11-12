@@ -1,0 +1,52 @@
+--- a/bsd/dev/a5xelte_touch.c
++++ b/bsd/dev/a5xelte_touch.c
+@@ -222,6 +222,19 @@
+ #define S8FTS_CMD_CLEAR_EVENTS     0xa1u
+ #define S8FTS_CMD_FACTORY_INT     0x9cu
+ 
++/* Optional protocol isolation: complete STOP before the response read. */
++static int s8fts_split;
++
++static bool
++s8fts_wait_idle(void)
++{
++    for (unsigned us = 0; us < 20000; us++) {
++        if (!(a5touch_read(s8ts_i2c, 0x50) & (1u << 17))) return true;
++        delay(1);
++    }
++    return false;
++}
++
+ /* Diagnostic transport isolation: the event reader previously returned the
+  * chip-ID response on every poll. Reset only the touch HSI2C controller
+  * before each complete FTS transaction, retaining the repeated START.
+@@ -235,7 +248,19 @@
+     uint32_t before = a5touch_read(s8ts_i2c, 0x30);
+     s8i2c_reset(s8ts_i2c);
+     uint32_t cleared = a5touch_read(s8ts_i2c, 0x30);
+-    bool ok = s8i2c_xfer(s8ts_i2c, S8FTS_ADDR, w, wlen, r, rlen);
++    bool ok;
++    if (s8fts_split && wlen && rlen) {
++        ok = s8i2c_xfer(s8ts_i2c, S8FTS_ADDR, w, wlen, NULL, 0);
++        if (ok) ok = s8fts_wait_idle();
++        if (ok) {
++            delay(100);
++            ok = s8i2c_xfer(s8ts_i2c, S8FTS_ADDR, NULL, 0, r, rlen);
++            if (ok) ok = s8fts_wait_idle();
++        }
++        if (!ok) s8i2c_reset(s8ts_i2c);
++    } else {
++        ok = s8i2c_xfer(s8ts_i2c, S8FTS_ADDR, w, wlen, r, rlen);
++    }
+     if (trace) {
+         printf("FTS TOUCH: xfer reset cmd=%02x w=%u r=%u ok=%u fifo=%08x/%08x/%08x state=%08x\n",
+             wlen ? w[0] : 0, wlen, rlen, (unsigned)ok, before, cleared,
+@@ -347,6 +372,8 @@
+ 	uint8_t b[7] = {0};
+ 	uint8_t id_cmd[3] = {0xb6, 0x00, 0x04};
+ 	bool found = false;
++	(void)PE_parse_boot_argn("s8fts_split", &s8fts_split, sizeof(s8fts_split));
++	printf("FTS TOUCH: transaction mode=%s\n", s8fts_split ? "STOP-separated" : "repeated-START");
+ 	/* Exynos S2MPS17 LDO34/LDO35 were enabled by the dream2lte loader.
+ 	 * Probe the IC without writing firmware, calibration data or NVM. */
+ 	for (unsigned attempt = 0; attempt < 5; attempt++) {
