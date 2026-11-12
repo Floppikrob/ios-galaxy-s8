@@ -69,7 +69,9 @@ def cpu_node(logical):
     ]
 
 
-def build(canvas=(FB_W, FB_H), device='dreamlte'):
+def build(canvas=(FB_W, FB_H), device='dreamlte', ram_mib=512):
+    if ram_mib not in (512, 1024, 2048):
+        raise ValueError('RAM trial must stay within the verified 2 GiB high bank')
     if device not in ('dreamlte', 'dream2lte'):
         raise ValueError('unsupported device: ' + device)
     root = mkadt.build(seed=os.urandom(64), qemu=True)
@@ -81,7 +83,7 @@ def build(canvas=(FB_W, FB_H), device='dreamlte'):
              mkadt.cstr('AppleARM'))
     chosen = child(root, 'chosen')
     set_prop(chosen, 'dram-base', mkadt.u64(DRAM_BASE))
-    set_prop(chosen, 'dram-size', mkadt.u64(DRAM_SIZE))
+    set_prop(chosen, 'dram-size', mkadt.u64(ram_mib * 1024 * 1024))
     set_prop(chosen, 'firmware-version', mkadt.cstr(device + '-entry'))
     set_prop(chosen, 'system-firmware-version', mkadt.cstr(device + '-entry'))
     cpus = child(root, 'cpus')
@@ -140,7 +142,9 @@ if __name__ == '__main__':
                         help='display size presented to iOS, WxH')
     parser.add_argument('--device', choices=['dreamlte', 'dream2lte'],
                         default='dreamlte', help='Samsung device profile')
+    parser.add_argument('--ram-mib', type=int, choices=[512, 1024, 2048], default=512,
+                        help='XNU high-bank RAM size; larger sizes are hardware trials')
     args = parser.parse_args()
-    blob = adt.serialize(build(tuple(int(v) for v in args.canvas.split('x')), device=args.device))
+    blob = adt.serialize(build(tuple(int(v) for v in args.canvas.split('x')), device=args.device, ram_mib=args.ram_mib))
     args.output.write_bytes(blob)
     print(f'{args.output}: {len(blob)} bytes')

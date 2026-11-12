@@ -7,7 +7,7 @@
 int main(void) {
  glsl_type_singleton_init_or_ref();
  nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_COMPUTE,
-   &bifrost_nir_options_v6, "s8_copy4");
+   &bifrost_nir_options_v6, "s8_copy8");
  b.shader->info.workgroup_size[0] = 64;
  b.shader->info.workgroup_size[1] = 1;
  b.shader->info.workgroup_size[2] = 1;
@@ -17,11 +17,13 @@ int main(void) {
  nir_def *inside = nir_iand(&b, nir_ult(&b,x,nir_channel(&b,params,0)),
                               nir_ult(&b,y,nir_channel(&b,params,1)));
  nir_push_if(&b, inside);
- nir_def *sx = nir_imul_imm(&b,x,16);
+ nir_def *sx = nir_imul_imm(&b,x,32);
  nir_def *so = nir_iadd(&b, sx, nir_imul(&b,y,nir_channel(&b,params,2)));
  nir_def *doff = nir_iadd(&b, sx, nir_imul(&b,y,nir_channel(&b,params,3)));
  nir_def *pixels = nir_load_global(&b, nir_iadd_imm(&b,so,0x10000000),16,4,32);
  nir_store_global(&b, nir_iadd_imm(&b,doff,0x20000000),16,pixels,15);
+ nir_def *pixels2 = nir_load_global(&b, nir_iadd_imm(&b,so,0x10000010),16,4,32);
+ nir_store_global(&b, nir_iadd_imm(&b,doff,0x20000010),16,pixels2,15);
  nir_pop_if(&b,NULL);
  nir_validate_shader(b.shader, "s8-before");
  bifrost_preprocess_nir(b.shader, 0x6000);
