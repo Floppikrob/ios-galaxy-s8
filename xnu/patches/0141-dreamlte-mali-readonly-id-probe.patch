@@ -1,0 +1,32 @@
+--- a/iokit/Kernel/arm/DreamMali.inc
++++ b/iokit/Kernel/arm/DreamMali.inc
+@@ -30,6 +30,29 @@
+     setProperty("BringupStage", "power-status-only");
+     IOLog("DREAM GPU: Mali-G71 service cfg=0x%x status=0x%x powered=%u; "
+         "GPU MMIO/jobs disabled, no acceleration\n", cfg, status, (status & 15) == 15);
++    int read_id = 0;
++    PE_parse_boot_argn("s8gpu_id", &read_id, sizeof(read_id));
++    if (read_id && (status & 15) == 15) {
++        // Read-only register offsets from Samsung mali_midg_regmap.h.
++        IOLog("DREAM GPU: reading powered GPU aperture 0x13900000\n");
++        vm_offset_t gpu = ml_io_map(0x13900000, 0x1000);
++        if (gpu) {
++            uint32_t id = *(volatile uint32_t *)(gpu + 0x000);
++            uint32_t gpu_status = *(volatile uint32_t *)(gpu + 0x034);
++            uint32_t shaders_lo = *(volatile uint32_t *)(gpu + 0x100);
++            uint32_t shaders_hi = *(volatile uint32_t *)(gpu + 0x104);
++            setProperty("HardwareID", (uint64_t)id, 32);
++            setProperty("GPUStatus", (uint64_t)gpu_status, 32);
++            setProperty("ShaderPresent", ((uint64_t)shaders_hi << 32) | shaders_lo, 64);
++            setProperty("BringupStage", "read-only-registers");
++            IOLog("DREAM GPU: hardware_id=0x%x gpu_status=0x%x shaders=0x%x%08x; "
++                "no reset/jobs/acceleration\n", id, gpu_status, shaders_hi, shaders_lo);
++        } else {
++            IOLog("DREAM GPU: GPU mapping failed\n");
++        }
++    } else if (read_id) {
++        IOLog("DREAM GPU: ID probe skipped: power domain is off\n");
++    }
+     registerService();
+     return true;
+ }
