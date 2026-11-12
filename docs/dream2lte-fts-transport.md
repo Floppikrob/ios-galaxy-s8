@@ -72,3 +72,12 @@ Calibration test still has no physical touch. Log confirms A2 issued and settlin
 Patch0131 adds optional s8fts_probe_first=1: read/validate ID first, then perform existing software reset and ready handshake. No ID register read occurs after reset before polling. All other settings retained, including A2. This isolates ID-read ordering; default order unchanged.
 
 Locally built and validated. Flashed dream2lte-local-fts-probe-first.img SHA256e4389d4f89cb9fc04188e57fe478d860a883f2e80fb6150bd58d7d246b010dbc (16130064bytes). Header validated, BOOT readback matched, reboot issued. cpus=2 retained. Hardware result pending. Previous BOOT is boot-before-fts-probe-first.img. Local-only changes.
+
+
+## Counted FIFO event path (2026-11-12)
+
+Probe-first test changes the repeated polling response from chip-ID bytes to repeated ready packet10 00 00 00 00 26 0d 01. Physical touch still absent. This supports a stale/undrained response problem but does not identify its cause.
+
+Samsung FTS8CD56 interrupt handler uses count register B6 00 23, reads2bytes, computes count=byte1/2, clamps to32, then reads count*8bytes using86. Patch0132 adds optional s8fts_bulk=1 using that path in a polling worker (IRQ not routed in XNU). The85 helper remains only for startup-ready and legacy mode. Count/IRQ logs are rate limited; raw86 logs are capped/throttled; all event buffers bounded256bytes. Existing event parser/HID path unchanged.
+
+Full local build/checks pass. Flashed dream2lte-local-fts-bulk.img SHA256bb3c46813e155be7157a67b02eb112499779aa11f3365c448812745755f15d21,16130064bytes. BOOT readback matches; reboot issued. Prior BOOT saved in boot-before-fts-bulk.img. cpus=2 and previous init settings retained; only adds s8fts_bulk=1. Physical result pending. No external push.

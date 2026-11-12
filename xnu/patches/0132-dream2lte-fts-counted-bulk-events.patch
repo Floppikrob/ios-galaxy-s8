@@ -1,0 +1,81 @@
+--- a/bsd/dev/a5xelte_touch.c
++++ b/bsd/dev/a5xelte_touch.c
+@@ -273,6 +273,7 @@
+ 
+ /* Optional protocol isolation: complete STOP before the response read. */
+ static int s8fts_split;
++static int s8fts_bulk;
+ 
+ static bool
+ s8fts_wait_idle(void)
+@@ -379,6 +380,54 @@
+ 	}
+ }
+ 
++/* Samsung FTS8CD56 IRQ path: B6 00 23 yields a dummy byte and
++ * twice the queued event count, then 0x86 reads count * 8 bytes.
++ * Poll the same queue without depending on XNU IRQ routing.
++ */
++static void
++s8fts_bulk_thread(void)
++{
++    const uint8_t count_cmd[3] = {0xb6, 0x00, 0x23};
++    const uint8_t read_all = 0x86;
++    uint8_t count_raw[2], events[8 * 32];
++    unsigned errors = 0, polls = 0, raw_logs = 0;
++    printf("FTS TOUCH: Samsung FIFO count+86 worker started\n");
++    for (;;) {
++        if (!s8fts_xfer(count_cmd, sizeof(count_cmd), count_raw, sizeof(count_raw))) {
++            if (++errors <= 6 || !(errors & 127u))
++                printf("FTS TOUCH: FIFO count read failed (%u)\n", errors);
++            s8ts_wait(40);
++            continue;
++        }
++        unsigned count = count_raw[1] >> 1;
++        bool log_count = polls++ < 16 || !(polls & 1023u);
++        if (log_count) {
++            printf("FTS TOUCH: FIFO count raw=%02x %02x count=%u irq=%u\n",
++                count_raw[0], count_raw[1], count,
++                a5touch_read(s8ts_alive, S8TS_GPA1_DAT) & 1u);
++        }
++        if (count > 32) count = 32;
++        if (count) {
++            if (!s8fts_xfer(&read_all, 1, events, count * 8)) {
++                if (++errors <= 6 || !(errors & 127u))
++                    printf("FTS TOUCH: FIFO bulk read failed (%u)\n", errors);
++                s8ts_wait(40);
++                continue;
++            }
++            for (unsigned i = 0; i < count; i++) {
++                const uint8_t *ev = events + i * 8;
++                if (raw_logs++ < 80 || !(raw_logs & 1023u)) {
++                    printf("FTS TOUCH: FIFO86 raw %02x %02x %02x %02x %02x %02x %02x %02x\n",
++                        ev[0], ev[1], ev[2], ev[3], ev[4], ev[5], ev[6], ev[7]);
++                }
++                s8fts_report(ev);
++            }
++        }
++        errors = 0;
++        s8ts_wait(8);
++    }
++}
++
+ static void
+ s8fts_thread(void *arg, wait_result_t result)
+ {
+@@ -386,6 +435,7 @@
+ 	unsigned errors = 0;
+ 	(void)arg;
+ 	(void)result;
++	if (s8fts_bulk) { s8fts_bulk_thread(); return; }
+ 	printf("FTS TOUCH: polling worker started\n");
+ 	for (;;) {
+ 		/* Polling is intentional: the S8+ interrupt GPIO is not yet routed
+@@ -458,6 +508,7 @@
+ 	int reinit = 0, calibrate = 0, probe_first = 0;
+ 	(void)PE_parse_boot_argn("s8fts_calibrate", &calibrate, sizeof(calibrate));
+ 	(void)PE_parse_boot_argn("s8fts_probe_first", &probe_first, sizeof(probe_first));
++	(void)PE_parse_boot_argn("s8fts_bulk", &s8fts_bulk, sizeof(s8fts_bulk));
+ 	(void)PE_parse_boot_argn("s8fts_stopwait", &s8fts_stopwait, sizeof(s8fts_stopwait));
+ 	(void)PE_parse_boot_argn("s8fts_prefill", &s8fts_prefill, sizeof(s8fts_prefill));
+ 	(void)PE_parse_boot_argn("s8fts_reinit", &reinit, sizeof(reinit));
