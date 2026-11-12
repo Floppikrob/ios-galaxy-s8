@@ -54,3 +54,12 @@ Next grounded change: wait for final STOP completion/state idle before clearing 
 Patch 0129 implements the board-specific completion check requested after the GitHub comparison. Optional s8fts_stopwait=1, FTS address0x49 only: after final TRANSFER_DONE and before CTL channel disable, poll TRANS_STATUS low nibble until zero and require TX_FIFO_EMPTY. Wait is bounded to100ms; the first16 completions and rate-limited failures record initial/final state, FIFO and wait time. Timeout fails the transaction and uses the existing recovery path. No initialization/calibration/event-format change.
 
 Local build and checks passed: ARM64 Mach-O, no undefined symbols, no LSE code instructions. Kernel SHA2563cc374901e9f2808eac2b95f1cdd70d2cbefd12501d227920a64c2fa951896fa. Flashed dream2lte-local-fts-stopwait.img SHA2562ec3ad5ecc01542f9842d301e8d740700acee9b4779578526d13aa7cd42609e6 (16130064 bytes). BOOT prefix readback matched; reboot issued. Prior full BOOT saved as boot-before-fts-stopwait.img. Test keeps cpus=2, s8fts_reinit=1, s8fts_prefill=1, adds only s8fts_stopwait=1. Hardware result pending. Changes are local, not pushed.
+
+
+## Runtime calibration test (2026-11-12)
+
+User confirms touchscreen works in TWRP. Native dmesg contains real press/release records. The STOP-wait iOS log reports complete=1, state0, empty TX for all traced operations, but READ_EVENT still repeats chip-ID bytes. STOP waiting has not resolved the touch problem.
+
+Patch 0130 adds independent optional s8fts_calibrate=1: normal FORCECALIBRATION command A2 after sensing has settled, followed by1000ms delay before controller IRQ enable, as supported by the Samsung init/same-controller port sources. No flash unlock/burn/erase or SAVE_FWCONFIG/SAVE_CX_TUNING commands are sent. Default remains off. Do not describe touch as fixed before a physical test.
+
+Build validated locally (NOUNDEFS, no LSE code). Flashed dream2lte-local-fts-calibrate.img SHA256b517f69c02adb73327a629ca2b26d4e4033087fc0c006d3accbc79a95505f759,16130064bytes. Prefix readback matches. Reboot issued; hardware result pending. Keeps cpus=2, reinit/prefill/stopwait enabled; adds only calibration. Backup boot-before-fts-calibrate.img preserved in outputs. No external push.

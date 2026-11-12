@@ -416,7 +416,8 @@ s8fts_thread(void *arg, wait_result_t result)
 
 /* Samsung FTS8CD56 reinit: volatile software reset, wait for 0x10,
  * flush, sensing, pressure sensing, then controller interrupt enable.
- * No firmware upload, calibration, flash, or NVM commands are issued.
+ * Optional normal force calibration is selected separately; no firmware
+ * upload, flash, or NVM-save commands are issued.
  */
 static bool
 s8fts_reset_ready(void)
@@ -454,7 +455,8 @@ s8fts_start(void)
 	uint8_t b[7] = {0};
 	uint8_t id_cmd[3] = {0xb6, 0x00, 0x04};
 	bool found = false;
-	int reinit = 0;
+	int reinit = 0, calibrate = 0;
+	(void)PE_parse_boot_argn("s8fts_calibrate", &calibrate, sizeof(calibrate));
 	(void)PE_parse_boot_argn("s8fts_stopwait", &s8fts_stopwait, sizeof(s8fts_stopwait));
 	(void)PE_parse_boot_argn("s8fts_prefill", &s8fts_prefill, sizeof(s8fts_prefill));
 	(void)PE_parse_boot_argn("s8fts_reinit", &reinit, sizeof(reinit));
@@ -493,6 +495,16 @@ s8fts_start(void)
 	if (reinit) {
 		const uint8_t irq_on[4] = {0xb6, 0x00, 0x2c, 0x48};
 		delay(50000);
+		if (calibrate) {
+			printf("FTS TOUCH: force calibration start (A2, no NVM save)\n");
+			if (!s8fts_command(0xa2)) {
+				printf("FTS TOUCH: force calibration command failed\n");
+				return;
+			}
+			/* Same-controller Linux port waits 1000 ms before enabling IRQ. */
+			delay(1000000);
+			printf("FTS TOUCH: force calibration settle complete\n");
+		}
 		if (!s8fts_xfer(irq_on, sizeof(irq_on), NULL, 0)) {
 			printf("FTS TOUCH: interrupt enable failed\n");
 			return;
