@@ -1,0 +1,160 @@
+--- /dev/null
++++ b/iokit/Kernel/arm/DreamMaliTest.inc
+@@ -0,0 +1,118 @@
++#if defined(DREAMLTE)
++/* One-shot isolated Mali legacy-LPAE test. No userspace mappings or renderer.
++ * Register/translation model: Linux panfrost_regs.h + io-pgtable-arm.c.
++ * WRITE_VALUE descriptor: Mesa panfrost genxml/v6.xml.
++ * Keep all six DMA pages allocated until reboot, including on timeout.
++ */
++static uint32_t dm_read(vm_offset_t g, unsigned off) {
++    return *(volatile uint32_t *)(g + off);
++}
++static void dm_write(vm_offset_t g, unsigned off, uint32_t val) {
++    *(volatile uint32_t *)(g + off) = val;
++    __asm__ volatile("dsb sy" ::: "memory");
++}
++static bool dm_poll(vm_offset_t g, unsigned off, uint32_t mask, uint32_t value) {
++    for (unsigned i = 0; i < 500; i++) {
++        if ((dm_read(g, off) & mask) == value) return true;
++        IOSleep(1);
++    }
++    IOLog("DREAM GPU TEST: timeout reg=0x%x value=0x%x mask=0x%x wanted=0x%x\n",
++        off, dm_read(g, off), mask, value);
++    return false;
++}
++static void dm_clean(void *mem, unsigned size) {
++    uintptr_t a = (uintptr_t)mem;
++    for (unsigned i = 0; i < size; i += 64)
++        __asm__ volatile("dc cvac, %0" :: "r"(a + i) : "memory");
++    __asm__ volatile("dsb sy" ::: "memory");
++}
++static void dm_invalidate(void *mem, unsigned size) {
++    uintptr_t a = (uintptr_t)mem;
++    for (unsigned i = 0; i < size; i += 64)
++        __asm__ volatile("dc ivac, %0" :: "r"(a + i) : "memory");
++    __asm__ volatile("dsb sy" ::: "memory");
++}
++static void dream_mali_memory_test(vm_offset_t g) {
++    const unsigned size = 6 * 4096;
++    IOPhysicalAddress pa = 0;
++    uint8_t *mem = (uint8_t *)IOMallocContiguous(size, 4096, &pa);
++    if (!mem) { IOLog("DREAM GPU TEST: allocation failed\n"); return; }
++    // CPU owns this allocation permanently; no GPU mapping of unrelated RAM.
++    bzero(mem, size);
++    uint32_t mmu = dm_read(g, 0x14);
++    unsigned pa_bits = (mmu >> 8) & 0xff;
++    if (pa_bits < 32 || pa_bits > 40 || (pa & 4095) ||
++        (uint64_t)pa + size > (1ULL << pa_bits) ||
++        (dm_read(g, 0x18) & 1) == 0 || (dm_read(g, 0x1c) & 2) == 0) {
++        IOLog("DREAM GPU TEST: unsupported MMU=0x%x pa=0x%llx AS=0x%x JS=0x%x\n",
++            mmu, (uint64_t)pa, dm_read(g, 0x18), dm_read(g, 0x1c)); return;
++    }
++    // Four 4K levels for GPU VA 0x100000 (job), 0x101000 (result).
++    for (unsigned i = 0; i < 3; i++)
++        ((uint64_t *)(mem + i * 4096))[0] = ((uint64_t)pa + (i + 1) * 4096) | 3;
++    uint64_t *l3 = (uint64_t *)(mem + 3 * 4096);
++    // Legacy Mali leaf: valid type1, read+write, outer-shareable, attr0.
++    l3[256] = ((uint64_t)pa + 4 * 4096) | 0x2c1;
++    l3[257] = ((uint64_t)pa + 5 * 4096) | 0x2c1;
++    uint32_t *job = (uint32_t *)(mem + 4 * 4096);
++    job[4] = (1u << 16) | (2u << 1) | 1u; // index1, WRITE_VALUE, 64-bit
++    job[8] = 0x101000; job[9] = 0;
++    job[10] = 6;                         // immediate32
++    job[12] = 0x53473838;                // expected result, initial page is zero
++    dm_clean(mem, size);
++    IOLog("DREAM GPU TEST: isolated DMA pa=0x%llx size=%u MMU=0x%x; soft reset\n",
++        (uint64_t)pa, size, mmu);
++    dm_write(g, 0x28, 0); dm_write(g, 0x1008, 0); dm_write(g, 0x2008, 0);
++    dm_write(g, 0x24, 0xffffffff); dm_write(g, 0x30, 1);
++    if (!dm_poll(g, 0x20, 1u << 8, 1u << 8)) return;
++    dm_write(g, 0x24, 0xffffffff);
++    dm_write(g, 0x28, 0); dm_write(g, 0x1008, 0); dm_write(g, 0x2008, 0);
++    uint32_t l2 = dm_read(g, 0x120);
++    if (!l2) { IOLog("DREAM GPU TEST: no L2\n"); return; }
++    dm_write(g, 0x1a0, l2);
++    if (!dm_poll(g, 0x160, l2, l2)) return;
++    // One physical shader; WRITE_VALUE is handled by JM but keep slot affinity valid.
++    uint32_t shader = dm_read(g, 0x100); shader &= (0u - shader);
++    if (!shader) return;
++    dm_write(g, 0x180, shader);
++    if (!dm_poll(g, 0x140, shader, shader)) return;
++    // AS0 legacy 4-level tables, Linux's noncoherent attr0=0x88.
++    if (!dm_poll(g, 0x2428, 1, 0)) return;
++    uint64_t tt = (uint64_t)pa | 7;
++    dm_write(g, 0x2400, (uint32_t)tt); dm_write(g, 0x2404, tt >> 32);
++    dm_write(g, 0x2408, 0x00888d88); dm_write(g, 0x240c, 0);
++    dm_write(g, 0x2430, 0); dm_write(g, 0x2434, 0);
++    dm_write(g, 0x2418, 1); // AS_COMMAND_UPDATE
++    if (!dm_poll(g, 0x2428, 1, 0)) return;
++    // Job slot1. All IRQs remain masked: completion/faults polled with timeout.
++    dm_write(g, 0x1004, 0xffffffff); dm_write(g, 0x2004, 0xffffffff);
++    dm_write(g, 0x18c0, 0x100000); dm_write(g, 0x18c4, 0);
++    dm_write(g, 0x18d0, shader); dm_write(g, 0x18d4, 0);
++    dm_write(g, 0x18d8, (8u << 16) | (3u << 8) | (1u << 10) | (3u << 12));
++    IOLog("DREAM GPU TEST: AS0 configured, submit WRITE_VALUE JS1 target=0x101000\n");
++    dm_write(g, 0x18e0, 1);
++    uint32_t irq = 0;
++    for (unsigned i = 0; i < 500; i++) {
++        irq = dm_read(g, 0x1000);
++        if ((irq & ((1u << 1) | (1u << 17))) || dm_read(g, 0x2000)) break;
++        IOSleep(1);
++    }
++    // Completion includes end-cache-clean; explicit global clean+invalidate as well.
++    dm_write(g, 0x24, 1u << 17); dm_write(g, 0x30, 8);
++    bool clean_ok = dm_poll(g, 0x20, 1u << 17, 1u << 17);
++    dm_invalidate(mem + 4 * 4096, 2 * 4096);
++    uint32_t result = *(volatile uint32_t *)(mem + 5 * 4096);
++    IOLog("DREAM GPU TEST: irq=0x%x JS1=0x%x MMUirq=0x%x ASfault=0x%x "
++        "fault_addr=0x%x%08x job_exception=0x%x result=0x%x expected=0x53473838 clean=%u\n",
++        irq, dm_read(g, 0x18a4), dm_read(g, 0x2000), dm_read(g, 0x241c),
++        dm_read(g, 0x2424), dm_read(g, 0x2420), job[0], result, clean_ok);
++    bool success = (irq & 2) && !(irq & (1u << 17)) && !dm_read(g, 0x2000) &&
++        job[0] == 1 && result == 0x53473838 && clean_ok;
++    IOLog("DREAM GPU TEST: %s (memory-only test, no graphics acceleration)\n", success ? "PASS" : "FAIL");
++    // Reset also revokes address spaces before returning; retain memory regardless.
++    dm_write(g, 0x24, 0xffffffff); dm_write(g, 0x30, 1);
++    if (!dm_poll(g, 0x20, 1u << 8, 1u << 8))
++        IOLog("DREAM GPU TEST: cleanup reset timed out; DMA pages retained\n");
++    dm_write(g, 0x28, 0); dm_write(g, 0x1008, 0); dm_write(g, 0x2008, 0);
++}
++#endif
+--- a/iokit/Kernel/arm/DreamMali.inc
++++ b/iokit/Kernel/arm/DreamMali.inc
+@@ -2,6 +2,7 @@
+  * PMU status offset/mask verified against Samsung gpu_exynos8895.c.
+  * Do not touch the GPU register aperture while power/clocks are unowned.
+  */
++#include "DreamMaliTest.inc"
+ #if defined(DREAMLTE)
+ class DreamMali : public IOService {
+     OSDeclareDefaultStructors(DreamMali);
+@@ -35,7 +36,7 @@
+     if (read_id && (status & 15) == 15) {
+         // Read-only register offsets from Samsung mali_midg_regmap.h.
+         IOLog("DREAM GPU: reading powered GPU aperture 0x13900000\n");
+-        vm_offset_t gpu = ml_io_map(0x13900000, 0x1000);
++        vm_offset_t gpu = ml_io_map(0x13900000, 0x4000);
+         if (gpu) {
+             uint32_t id = *(volatile uint32_t *)(gpu + 0x000);
+             uint32_t gpu_status = *(volatile uint32_t *)(gpu + 0x034);
+@@ -47,6 +48,19 @@
+             setProperty("BringupStage", "read-only-registers");
+             IOLog("DREAM GPU: hardware_id=0x%x gpu_status=0x%x shaders=0x%x%08x; "
+                 "no reset/jobs/acceleration\n", id, gpu_status, shaders_hi, shaders_lo);
++            int test = 0;
++            PE_parse_boot_argn("s8gpu_test", &test, sizeof(test));
++            if (test && id == 0x60a00001 && gpu_status == 0) {
++                bool idle = true;
++                for (unsigned slot = 0; slot < 3; slot++) {
++                    if (dm_read(gpu, 0x1824 + slot * 0x80) != 0 ||
++                        dm_read(gpu, 0x1860 + slot * 0x80) != 0) idle = false;
++                }
++                if (idle) dream_mali_memory_test(gpu);
++                else IOLog("DREAM GPU TEST: skipped, job slots not idle\n");
++            } else if (test) {
++                IOLog("DREAM GPU TEST: skipped, unsupported ID or GPU busy\n");
++            }
+         } else {
+             IOLog("DREAM GPU: GPU mapping failed\n");
+         }
