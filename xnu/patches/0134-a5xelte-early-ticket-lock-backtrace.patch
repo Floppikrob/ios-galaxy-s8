@@ -1,0 +1,30 @@
+--- a/osfmk/kern/lock_ticket.c
++++ b/osfmk/kern/lock_ticket.c
+@@ -29,6 +29,9 @@
+ #define LOCK_PRIVATE 1
+ #include <stdint.h>
+ #include <kern/thread.h>
++#if defined(A5XELTE)
++#include <kern/backtrace.h>
++#endif
+ #include <kern/locks_internal.h>
+ #include <kern/locks.h>
+ #include <kern/lock_stat.h>
+@@ -140,7 +143,17 @@
+ {
+ 	thread_t self = current_thread();
+ 
++#if defined(A5XELTE)
++	/* Early SMP panic predates the normal panic backtrace handoff. */
++	uintptr_t bt[12] = {0};
++	unsigned int n = backtrace(bt, 12, NULL, NULL);
++	panic("Ticket lock %p is unexpectedly owned by thread %p; frames=%u "
++	    "bt=%lx,%lx,%lx,%lx,%lx,%lx,%lx,%lx,%lx,%lx,%lx,%lx",
++	    lck, self, n, bt[0], bt[1], bt[2], bt[3], bt[4], bt[5],
++	    bt[6], bt[7], bt[8], bt[9], bt[10], bt[11]);
++#else
+ 	panic("Ticket lock %p is unexpectedly owned by thread %p", lck, self);
++#endif
+ }
+ 
+ __abortlike
