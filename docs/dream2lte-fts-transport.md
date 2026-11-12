@@ -63,3 +63,12 @@ User confirms touchscreen works in TWRP. Native dmesg contains real press/releas
 Patch 0130 adds independent optional s8fts_calibrate=1: normal FORCECALIBRATION command A2 after sensing has settled, followed by1000ms delay before controller IRQ enable, as supported by the Samsung init/same-controller port sources. No flash unlock/burn/erase or SAVE_FWCONFIG/SAVE_CX_TUNING commands are sent. Default remains off. Do not describe touch as fixed before a physical test.
 
 Build validated locally (NOUNDEFS, no LSE code). Flashed dream2lte-local-fts-calibrate.img SHA256b517f69c02adb73327a629ca2b26d4e4033087fc0c006d3accbc79a95505f759,16130064bytes. Prefix readback matches. Reboot issued; hardware result pending. Keeps cpus=2, reinit/prefill/stopwait enabled; adds only calibration. Backup boot-before-fts-calibrate.img preserved in outputs. No external push.
+
+
+## ID probe ordering isolation (2026-11-12)
+
+Calibration test still has no physical touch. Log confirms A2 issued and settling finished, but event reads still repeat ID bytes. Across reinit/prefill/STOP/calibration tests, the ready event is valid before the ID register read and ID bytes repeat afterwards. Correlation does not establish cause.
+
+Patch0131 adds optional s8fts_probe_first=1: read/validate ID first, then perform existing software reset and ready handshake. No ID register read occurs after reset before polling. All other settings retained, including A2. This isolates ID-read ordering; default order unchanged.
+
+Locally built and validated. Flashed dream2lte-local-fts-probe-first.img SHA256e4389d4f89cb9fc04188e57fe478d860a883f2e80fb6150bd58d7d246b010dbc (16130064bytes). Header validated, BOOT readback matched, reboot issued. cpus=2 retained. Hardware result pending. Previous BOOT is boot-before-fts-probe-first.img. Local-only changes.

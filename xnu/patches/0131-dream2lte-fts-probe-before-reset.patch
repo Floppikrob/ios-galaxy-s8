@@ -1,0 +1,31 @@
+--- a/bsd/dev/a5xelte_touch.c
++++ b/bsd/dev/a5xelte_touch.c
+@@ -455,14 +455,15 @@
+ 	uint8_t b[7] = {0};
+ 	uint8_t id_cmd[3] = {0xb6, 0x00, 0x04};
+ 	bool found = false;
+-	int reinit = 0, calibrate = 0;
++	int reinit = 0, calibrate = 0, probe_first = 0;
+ 	(void)PE_parse_boot_argn("s8fts_calibrate", &calibrate, sizeof(calibrate));
++	(void)PE_parse_boot_argn("s8fts_probe_first", &probe_first, sizeof(probe_first));
+ 	(void)PE_parse_boot_argn("s8fts_stopwait", &s8fts_stopwait, sizeof(s8fts_stopwait));
+ 	(void)PE_parse_boot_argn("s8fts_prefill", &s8fts_prefill, sizeof(s8fts_prefill));
+ 	(void)PE_parse_boot_argn("s8fts_reinit", &reinit, sizeof(reinit));
+ 	(void)PE_parse_boot_argn("s8fts_split", &s8fts_split, sizeof(s8fts_split));
+ 	printf("FTS TOUCH: transaction mode=%s\n", s8fts_split ? "STOP-separated" : "repeated-START");
+-	if (reinit && !s8fts_reset_ready()) return;
++	if (reinit && !probe_first && !s8fts_reset_ready()) return;
+ 	/* Exynos S2MPS17 LDO34/LDO35 were enabled by the dream2lte loader.
+ 	 * Probe the IC without writing firmware, calibration data or NVM. */
+ 	for (unsigned attempt = 0; attempt < 5; attempt++) {
+@@ -478,6 +479,10 @@
+ 		return;
+ 	}
+ 	printf("FTS TOUCH: detected 36 70, fw=%02x%02x\n", b[6], b[5]);
++	if (reinit && probe_first) {
++		printf("FTS TOUCH: ID probe complete; reset before FIFO operation\n");
++		if (!s8fts_reset_ready()) return;
++	}
+ 	/* Legacy wake, flush, sensing; 0x9c is pressure sensing, not IRQ enable. */
+ 	if (!reinit && !s8fts_command(S8FTS_CMD_SLEEP_OUT)) {
+ 		printf("FTS TOUCH: sleep-out command failed\n");
