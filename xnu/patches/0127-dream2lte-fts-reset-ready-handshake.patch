@@ -1,0 +1,98 @@
+--- a/bsd/dev/a5xelte_touch.c
++++ b/bsd/dev/a5xelte_touch.c
+@@ -220,7 +220,7 @@
+ #define S8FTS_CMD_SLEEP_OUT        0x91u
+ #define S8FTS_CMD_SENSE_ON         0x93u
+ #define S8FTS_CMD_CLEAR_EVENTS     0xa1u
+-#define S8FTS_CMD_FACTORY_INT     0x9cu
++#define S8FTS_CMD_PRESSURE_ON     0x9cu
+ 
+ /* Optional protocol isolation: complete STOP before the response read. */
+ static int s8fts_split;
+@@ -365,6 +365,39 @@
+ 	}
+ }
+ 
++/* Samsung FTS8CD56 reinit: volatile software reset, wait for 0x10,
++ * flush, sensing, pressure sensing, then controller interrupt enable.
++ * No firmware upload, calibration, flash, or NVM commands are issued.
++ */
++static bool
++s8fts_reset_ready(void)
++{
++    const uint8_t reset[4] = {0xb6, 0x00, 0x28, 0x80};
++    uint8_t ev[8];
++    if (!s8fts_xfer(reset, sizeof(reset), NULL, 0)) {
++        printf("FTS TOUCH: controller reset write failed\n");
++        return false;
++    }
++    delay(10000);
++    for (unsigned n = 0; n < 50; n++) {
++        if (!s8fts_read_event(ev)) {
++            printf("FTS TOUCH: ready read failed at %u\n", n);
++            return false;
++        }
++        if (n < 8 || ev[0] == 0x10 || ev[0] == 0x0f) {
++            printf("FTS TOUCH: ready raw %02x %02x %02x %02x %02x %02x %02x %02x\n",
++                ev[0], ev[1], ev[2], ev[3], ev[4], ev[5], ev[6], ev[7]);
++        }
++        if (ev[0] == 0x10) {
++            printf("FTS TOUCH: controller ready confirmed\n");
++            return true;
++        }
++        delay(20000);
++    }
++    printf("FTS TOUCH: controller ready timeout; sensing not enabled\n");
++    return false;
++}
++
+ static void
+ s8fts_start(void)
+ {
+@@ -372,8 +405,11 @@
+ 	uint8_t b[7] = {0};
+ 	uint8_t id_cmd[3] = {0xb6, 0x00, 0x04};
+ 	bool found = false;
++	int reinit = 0;
++	(void)PE_parse_boot_argn("s8fts_reinit", &reinit, sizeof(reinit));
+ 	(void)PE_parse_boot_argn("s8fts_split", &s8fts_split, sizeof(s8fts_split));
+ 	printf("FTS TOUCH: transaction mode=%s\n", s8fts_split ? "STOP-separated" : "repeated-START");
++	if (reinit && !s8fts_reset_ready()) return;
+ 	/* Exynos S2MPS17 LDO34/LDO35 were enabled by the dream2lte loader.
+ 	 * Probe the IC without writing firmware, calibration data or NVM. */
+ 	for (unsigned attempt = 0; attempt < 5; attempt++) {
+@@ -389,18 +425,28 @@
+ 		return;
+ 	}
+ 	printf("FTS TOUCH: detected 36 70, fw=%02x%02x\n", b[6], b[5]);
+-	/* Wake, clear queued start-up events, enable sensing (no calibration).
+-	 * The original Samsung kernel also issues 0x9C during initialization. */
+-	if (!s8fts_command(S8FTS_CMD_SLEEP_OUT)) {
++	/* Legacy wake, flush, sensing; 0x9c is pressure sensing, not IRQ enable. */
++	if (!reinit && !s8fts_command(S8FTS_CMD_SLEEP_OUT)) {
+ 		printf("FTS TOUCH: sleep-out command failed\n");
+ 		return;
+ 	}
+ 	delay(50000);
+-	if (!s8fts_command(S8FTS_CMD_CLEAR_EVENTS) ||
+-	    !s8fts_command(S8FTS_CMD_SENSE_ON) ||
+-	    !s8fts_command(S8FTS_CMD_FACTORY_INT)) {
++	bool enabled = s8fts_command(S8FTS_CMD_CLEAR_EVENTS);
++	if (reinit) delay(10000);
++	enabled = enabled && s8fts_command(S8FTS_CMD_SENSE_ON) &&
++	    s8fts_command(S8FTS_CMD_PRESSURE_ON);
++	if (!enabled) {
+ 		printf("FTS TOUCH: enable sequence failed\n");
+ 		return;
++	}
++	if (reinit) {
++		const uint8_t irq_on[4] = {0xb6, 0x00, 0x2c, 0x48};
++		delay(50000);
++		if (!s8fts_xfer(irq_on, sizeof(irq_on), NULL, 0)) {
++			printf("FTS TOUCH: interrupt enable failed\n");
++			return;
++		}
++		printf("FTS TOUCH: Samsung reinit sequence complete\n");
+ 	}
+ 	if (kernel_thread_start(s8fts_thread, NULL, &thread) == KERN_SUCCESS) {
+ 		thread_deallocate(thread);
