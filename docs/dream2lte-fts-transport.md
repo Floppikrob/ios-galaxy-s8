@@ -31,3 +31,19 @@ Reinit runtime log fts-reinit-test.txt confirms ready event `10 00 00 00 00 26 0
 Patch 0128 adds optional s8fts_prefill=1. For the FTS address 0x49 only and writes up to 64 bytes, it fills TX FIFO before AUTO_RUN, verifies queued count equals command length, and records the first 16 queue snapshots. Legacy ordering remains default; other I2C devices are unchanged. No change to event offsets, calibration, firmware or NVM.
 
 Full local build and checks passed; no undefined symbols or LSE code instructions. Current flashed image dream2lte-local-fts-prefill.img SHA256 e72e3ece9ccc968b426c65f84ee4d0d8ca4f66f86f765c515933ca0cc285a979, bytes 16130064; BOOT readback matches; reboot issued. Args retain cpus=2 with s8fts_reinit=1 s8fts_prefill=1, default repeated START. Physical touch/queue-count result pending. Backup boot-before-fts-prefill.img is in Codex outputs.
+
+
+## GitHub research and board-specific comparison (2026-11-12)
+
+User requested a GitHub-based investigation after TX prefill still failed. No new image flashed during this research turn; device remains in TWRP with the prefill image in BOOT.
+
+Sources actually read:
+1. Samsung Exynos8895 touchscreen implementation: https://github.com/jesec/android_kernel_samsung_universal8895/blob/tw-7.0/drivers/input/touchscreen/stm/fts_ts.c and fts_ts.h. Native recovery reports fts8cd56. Event packing matches our parser; full initial init includes FORCECALIBRATION A2 before interrupt enable. Current experimental port deliberately omitted calibration; that is a remaining init difference, not proof of cause.
+2. Detailed same-controller port report, DIFFERENT DEVICE SM-T385/T380: https://github.com/akprof2000/samsung-t385-postmarketos/blob/main/docs/RAZBOR.md, section Touchscreen, and kernel/0001-stmfts-samsung-fts8-init.patch. Confirms Samsung reset/ready/IRQ behavior and IRQ enable after wake. Its board, GPIO, supplies and timings must not be copied as S8+ facts.
+3. Board controller source: https://github.com/jesec/android_kernel_samsung_universal8895/blob/tw-7.0/drivers/i2c/busses/i2c-exynos5.c. TX completion checks TRANSFER_DONE plus TX_FIFO_EMPTY; when scl_clk_stretch is enabled it additionally waits on TRANS_STATUS: low state nibble zero for a final STOP, allowing MASTER_BUSY for a non-final message. Timeout is bounded.
+
+Direct phone evidence: /sys/class/i2c-adapter/i2c-5/device/of_node resolves to hsi2c@108E0000 and has samsung,scl-clk-stretching, samsung,check-transdone-int, samsung,reset-before-trans. No samsung,stop-after-trans property is present. This confirms the correct bus and makes the Samsung completion check relevant to this physical board.
+
+Latest fts-prefill-test.txt: TX queued matches lengths4,1,3; reset returns ready0x10; ID36 70; subsequent events still repeat ID. One successful IRQ-enable write ends with TRANS_STATUS=0x0002000d, i.e. master busy/non-idle state. Therefore failure to enqueue TX is not supported, and an interrupt done flag alone can precede bus idle in this trace.
+
+Next grounded change: wait for final STOP completion/state idle before clearing CTL channels or resetting HSI2C for the next FTS operation. Current legacy path exits on INT_STATUS and clears CTL immediately; only optional split-read helper waits idle. This is a hypothesis supported by a board/source discrepancy, not a demonstrated root cause. Keep calibration as a separate later variable. Preserve cpus=2 and boot backups.
