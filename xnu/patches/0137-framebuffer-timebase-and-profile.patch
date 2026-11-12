@@ -1,0 +1,54 @@
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -52,6 +52,8 @@
+ #include <kern/clock.h>
+ #include <sys/proc.h>
+ 
++static int sweet_fb_profile;
++
+ enum {
+ 	kSweetFBGetLayerDefaultSurface  = 3,
+ 	kSweetFBSwapBegin               = 4,
+@@ -220,7 +222,9 @@
+ 	uint32_t hz = 10;
+ 	PE_parse_boot_argn("sweetfb_hz", &hz, sizeof(hz));
+ 	fFlushTicks = (hz == 0 || hz >= 60) ? 1 : 60 / hz;
+-	fMinGap = 26000000ULL / (hz == 0 ? 60 : hz);     /* 26 MHz timebase */
++	nanoseconds_to_absolutetime(1000000000ULL / (hz == 0 ? 60 : hz), &fMinGap);
++	PE_parse_boot_argn("sweetfb_profile", &sweet_fb_profile, sizeof(sweet_fb_profile));
++	IOLog("SWEET FB: target=%u Hz gap_ticks=%llu profile=%d\n", hz, fMinGap, sweet_fb_profile);
+ 	fPresentLock = IOLockAlloc();
+ 	if (fPresentLock == NULL) {
+ 		return false;
+@@ -382,9 +386,11 @@
+ {
+ 	uint32_t mask = get32(rec, 0x104);
+ 	IOLockLock(fPresentLock);
++	uint64_t perf_start = mach_absolute_time();
+ #if defined(DREAMLTE)
+ 	sweet_fb_wait_frame_done();
+ #endif
++	uint64_t perf_copy_start = mach_absolute_time();
+ 
+ 
+ 	if (!fConsolePaused) {
+@@ -475,6 +481,19 @@
+ 			}
+ 		}
+ 		s->release();
++	}
++	if (sweet_fb_profile) {
++		static uint64_t frames, total_ns, wait_ns, max_ns;
++		uint64_t elapsed, waited;
++		absolutetime_to_nanoseconds(mach_absolute_time() - perf_start, &elapsed);
++		absolutetime_to_nanoseconds(perf_copy_start - perf_start, &waited);
++		total_ns += elapsed; wait_ns += waited;
++		if (elapsed > max_ns) max_ns = elapsed;
++		if (++frames == 120) {
++			IOLog("SWEET FB PERF: frames=120 present_avg_us=%llu wait_avg_us=%llu max_us=%llu\n",
++			    total_ns / 120000, wait_ns / 120000, max_ns / 1000);
++			frames = total_ns = wait_ns = max_ns = 0;
++		}
+ 	}
+ 	IOLockUnlock(fPresentLock);
+ }
