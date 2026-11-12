@@ -1,0 +1,13 @@
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -31,6 +31,10 @@
+  * is included in support of clause 2.2 (b) of the Apple Public License,
+  * Version 2.0.
+  */
++
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++#include <pexpert/arm64/board_config.h>
++#endif
+ 
+ const char * gIOKernelConfigTables =
+     "("
