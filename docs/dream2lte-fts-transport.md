@@ -88,3 +88,10 @@ Full local build/checks pass. Flashed dream2lte-local-fts-bulk.img SHA256bb3c468
 User explicitly reported touch works after booting dream2lte-local-fts-bulk.img. This establishes a working complete configuration with cpus=2 and counted bulk FIFO mode, not that all earlier experimental flags are necessary. Preserve this image: SHA256bb3c46813e155be7157a67b02eb112499779aa11f3365c448812745755f15d21. Swipes/edges/release validation has not yet been reported separately.
 
 User requested4CPUs. Prepared dream2lte-fts-working-4cpu.img from the exact working BOOT, changing only cpus=2 to cpus=4 and the Android header SHA-1. Kernel, loader, ADT and touch settings are byte-identical. SHA2560fbe7e57398b081a77d6d246649f5379095de4fedf2f5929ba2cc9c0b1dcbe7a,16130064bytes. Not flashed: phone not visible in ADB, likely still running iOS. Wait for user to enter TWRP; then preserve the actual working full BOOT checkpoint, flash4CPU image, verify prefix readback and reboot. Physical4CPU result pending; later verify requested=4 selected=4 and4/4 initialized in fresh log.
+
+
+## Four-CPU trial flashed (2026-11-12)
+
+Preserved actual working2CPU full BOOT as boot-working-touch-2cpu.img,41943040bytes, SHA256eab6d071cbae6e75aad611cb1e9edb069040ac174d3fb65c454665818ef972ec. Device full-partition checksum matches; prefix matches exactly the confirmed working bulk image. Fresh working-touch-2cpu-log.txt confirms2/2 CPUs and numerous FTS down/up events (including multiple finger IDs).
+
+Flashed dream2lte-fts-working-4cpu.img SHA2560fbe7e57398b081a77d6d246649f5379095de4fedf2f5929ba2cc9c0b1dcbe7a,16130064bytes. BOOT prefix readback matches. Reboot issued. Only cpus=2 to4 and header checksum differ from the confirmed working image. Physical boot/touch and4/4 CPU log confirmation pending. Roll back to preserved working BOOT if needed; no USERDATA writes were performed by flashing.
