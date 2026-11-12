@@ -1,0 +1,18 @@
+--- a/osfmk/kern/sched_prim.h
++++ b/osfmk/kern/sched_prim.h
+@@ -811,7 +811,14 @@
+ #error Enable at least one scheduler algorithm in osfmk/conf/MASTER.XXX
+ #endif
+ 
+-#if __AMP__
++#if defined(DREAMLTE)
++/* Clutch's single-cluster steal stub does not drop the pset lock.
++ * Exynos8895 exposes two symmetric scheduler psets with NO_ECORE.
++ * Use the built-in traditional scheduler, whose steal path handles psets.
++ */
++extern const struct sched_dispatch_table sched_traditional_dispatch;
++#define SCHED(f) (sched_traditional_dispatch.f)
++#elif __AMP__
+ 
+ #if CONFIG_SCHED_EDGE
+ extern const struct sched_dispatch_table sched_edge_dispatch;
