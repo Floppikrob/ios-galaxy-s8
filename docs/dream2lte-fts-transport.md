@@ -81,3 +81,10 @@ Probe-first test changes the repeated polling response from chip-ID bytes to rep
 Samsung FTS8CD56 interrupt handler uses count register B6 00 23, reads2bytes, computes count=byte1/2, clamps to32, then reads count*8bytes using86. Patch0132 adds optional s8fts_bulk=1 using that path in a polling worker (IRQ not routed in XNU). The85 helper remains only for startup-ready and legacy mode. Count/IRQ logs are rate limited; raw86 logs are capped/throttled; all event buffers bounded256bytes. Existing event parser/HID path unchanged.
 
 Full local build/checks pass. Flashed dream2lte-local-fts-bulk.img SHA256bb3c46813e155be7157a67b02eb112499779aa11f3365c448812745755f15d21,16130064bytes. BOOT readback matches; reboot issued. Prior BOOT saved in boot-before-fts-bulk.img. cpus=2 and previous init settings retained; only adds s8fts_bulk=1. Physical result pending. No external push.
+
+
+## MILESTONE: physical touchscreen working; 4-CPU image prepared (2026-11-12)
+
+User explicitly reported touch works after booting dream2lte-local-fts-bulk.img. This establishes a working complete configuration with cpus=2 and counted bulk FIFO mode, not that all earlier experimental flags are necessary. Preserve this image: SHA256bb3c46813e155be7157a67b02eb112499779aa11f3365c448812745755f15d21. Swipes/edges/release validation has not yet been reported separately.
+
+User requested4CPUs. Prepared dream2lte-fts-working-4cpu.img from the exact working BOOT, changing only cpus=2 to cpus=4 and the Android header SHA-1. Kernel, loader, ADT and touch settings are byte-identical. SHA2560fbe7e57398b081a77d6d246649f5379095de4fedf2f5929ba2cc9c0b1dcbe7a,16130064bytes. Not flashed: phone not visible in ADB, likely still running iOS. Wait for user to enter TWRP; then preserve the actual working full BOOT checkpoint, flash4CPU image, verify prefix readback and reboot. Physical4CPU result pending; later verify requested=4 selected=4 and4/4 initialized in fresh log.
