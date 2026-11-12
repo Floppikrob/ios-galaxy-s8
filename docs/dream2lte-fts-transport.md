@@ -95,3 +95,12 @@ User requested4CPUs. Prepared dream2lte-fts-working-4cpu.img from the exact work
 Preserved actual working2CPU full BOOT as boot-working-touch-2cpu.img,41943040bytes, SHA256eab6d071cbae6e75aad611cb1e9edb069040ac174d3fb65c454665818ef972ec. Device full-partition checksum matches; prefix matches exactly the confirmed working bulk image. Fresh working-touch-2cpu-log.txt confirms2/2 CPUs and numerous FTS down/up events (including multiple finger IDs).
 
 Flashed dream2lte-fts-working-4cpu.img SHA2560fbe7e57398b081a77d6d246649f5379095de4fedf2f5929ba2cc9c0b1dcbe7a,16130064bytes. BOOT prefix readback matches. Reboot issued. Only cpus=2 to4 and header checksum differ from the confirmed working image. Physical boot/touch and4/4 CPU log confirmation pending. Roll back to preserved working BOOT if needed; no USERDATA writes were performed by flashing.
+
+
+## Four CPUs verified; eight-CPU trial flashed (2026-11-12)
+
+Fresh4cpu-test.txt proves requested=4 selected=4, CPU0..3 MPIDR0x100..0x103,4/4initialized and SGI1verified. Physical user report: iOS and touch work. Log contains FTS down/up events. Working4CPU full BOOT saved as boot-working-touch-4cpu.img (41943040bytes), SHA2562d7ba612f0131850c0946e864514165df41575ee8e82ef7a3d88db354ae42210. Device checksum matches and prefix matches prepared4CPU image.
+
+Reviewed existing code: MAX8, topology maps logical4..7 to Mongoose MPIDR0..3, CPU_ON/PMU sequencing already implemented; GIC target masks learned per CPU; generic secondary entry handles EL1/EL2. This is source-level readiness, not evidence that the second cluster works. No new kernel code was needed for a first runtime trial.
+
+Prepared8CPU image by changing only cpus=4 to8 and header SHA-1. Embedded ADT parsed and verified8nodes [0x100,0x101,0x102,0x103,0,1,2,3]. Kernel, loader, ADT and touch config otherwise byte-identical to working4CPU image. Flashed dream2lte-fts-working-8cpu.img SHA256e45f3a9eca0df59db0dff689c485bc9ebe8c50251cbc7372cd22fc097c325780,16130064bytes; BOOT prefix readback matches. Reboot issued. Physical boot/touch and fresh8/8CPU/SGI confirmation pending. Preserve4CPU checkpoint for rollback.
