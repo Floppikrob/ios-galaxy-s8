@@ -1,0 +1,64 @@
+--- a/iokit/Kernel/arm/DreamMaliBlit.inc
++++ b/iokit/Kernel/arm/DreamMaliBlit.inc
+@@ -62,6 +62,7 @@
+     bool sp = src->prepare(kIODirectionOut) == kIOReturnSuccess;
+     bool dp = sp && dst->prepare(kIODirectionIn) == kIOReturnSuccess;
+     bool safe = true, success = false;
++    if (!dp) IOLog("DREAM GPU BLIT: descriptor prepare failed source=%u destination=%u\n", sp, dp);
+     uint64_t begun = mach_absolute_time();
+     if (dp && dmb_map_desc(src, 4, sn, false) && dmb_map_desc(dst, 20, dn, true)) {
+         uint8_t *jobpage = dmb_mem + 36 * 4096;
+@@ -107,10 +108,13 @@
+         // Quiesce and invalidate mappings before releasing any prepared descriptor.
+         safe = success ? dmb_revoke() : false;
+         if (!safe) { success = false; safe = dmb_reset(); }
+-        if (!safe) { success = false; dmb_poisoned = true; }
++        if (!safe) { success = false; __atomic_store_n(&dmb_poisoned, true, __ATOMIC_RELEASE); }
+         if (success && cached_dst) dm_invalidate(dst_va, (unsigned)dn);
+     }
+-    if (!success) __atomic_store_n(&dmb_ready, false, __ATOMIC_RELEASE);
++    if (!success) {
++        IOLog("DREAM GPU BLIT: copy unavailable; CPU fallback=%u\n", safe);
++        __atomic_store_n(&dmb_ready, false, __ATOMIC_RELEASE);
++    }
+     if (safe) {
+         if (dp) dst->complete(kIODirectionIn);
+         if (sp) src->complete(kIODirectionOut);
+@@ -176,7 +180,7 @@
+     __atomic_store_n(&dmb_ready,ok,__ATOMIC_RELEASE);
+ }
+ static int dream_gpu_frame_copy(SweetSurface *src, SweetSurface *dst, unsigned w, unsigned h, unsigned sb, unsigned db) {
+-    if(dmb_poisoned) return -1;
++    if(__atomic_load_n(&dmb_poisoned,__ATOMIC_ACQUIRE)) return -1;
+     if(!__atomic_load_n(&dmb_ready,__ATOMIC_ACQUIRE) || !src || !dst || src->offset || dst->offset) return 0;
+     IOLockLock(dmb_lock);
+     int ret=dmb_poisoned?-1:!dmb_ready?0:dmb_copy_locked(src->memory,(void *)src->kernelAddress(),
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -487,18 +487,20 @@
+ 		if (src != 0 && bpe == 4) {
+ 			int gpu_copy = 0;
+ #if defined(DREAMLTE)
+-			if (sx == 0 && sy == 0 && dx == 0 && dy == 0 &&
++			// A failed reset must also prevent CPU writes for partial layers.
++			gpu_copy = dream_gpu_frame_copy(NULL, NULL, 0, 0, 0, 0);
++			if (gpu_copy == 0 && sx == 0 && sy == 0 && dx == 0 && dy == 0 &&
+ 			    w == (int32_t)fWidth && h == (int32_t)fHeight &&
+ 			    s->pixelFormat == SWEET_FB_FORMAT_BGRA) {
+ 				gpu_copy = dream_gpu_frame_copy(s, fSurface, w, h, s->bytesPerRow, fRowBytes);
+ 			}
+ #endif
+ 			if (gpu_copy == 0) {
+-			for (int32_t y = 0; y < h; y++) {
+-				memcpy((void *)(fPixels + (uint64_t)(dy + y) * fRowBytes + (uint64_t)dx * 4),
+-				    (const void *)(src + s->offset + (uint64_t)(sy + y) * s->bytesPerRow + (uint64_t)sx * 4),
+-				    (size_t)w * 4);
+-			}
++				for (int32_t y = 0; y < h; y++) {
++					memcpy((void *)(fPixels + (uint64_t)(dy + y) * fRowBytes + (uint64_t)dx * 4),
++					    (const void *)(src + s->offset + (uint64_t)(sy + y) * s->bytesPerRow + (uint64_t)sx * 4),
++					    (size_t)w * 4);
++				}
+ 			}
+ 		}
+ 		s->release();

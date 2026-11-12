@@ -1,0 +1,34 @@
+--- a/iokit/Kernel/arm/DreamMaliBlit.inc
++++ b/iokit/Kernel/arm/DreamMaliBlit.inc
+@@ -168,11 +168,18 @@
+     }
+     // Second dispatch tests AS0 remapping/reuse, not just the first submission.
+     if(ok) {
+-        for(unsigned i=0;i<sb*h/4;i++) s[i]^=0xffffffff;
+-        copied=dmb_copy_locked(src,s,dst,d,true,w,h,sb,db); ok=copied==1;
+-        for(unsigned y=0;ok && y<h;y++) {
+-            if(memcmp((uint8_t *)s+y*sb,d+y*db,w*4)) ok=false;
+-            for(unsigned x=w*4;ok && x<db;x++) if(d[y*db+x]!=0xa5) ok=false;
++        IOBufferMemoryDescriptor *src2=IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
++            kIODirectionInOut|kIOMemoryKernelUserShared,sb*h,4096);
++        if (!src2) ok=false;
++        else {
++            uint32_t *t=(uint32_t *)src2->getBytesNoCopy();
++            for(unsigned i=0;i<sb*h/4;i++) t[i]=s[i]^0xffffffff;
++            copied=dmb_copy_locked(src2,t,dst,d,true,w,h,sb,db); ok=copied==1;
++            for(unsigned y=0;ok && y<h;y++) {
++                if(memcmp((uint8_t *)t+y*sb,d+y*db,w*4)) ok=false;
++                for(unsigned x=w*4;ok && x<db;x++) if(d[y*db+x]!=0xa5) ok=false;
++            }
++            if (!dmb_poisoned) src2->release();
+         }
+     }
+     if(!dmb_poisoned) { src->release(); dst->release(); }
+@@ -182,6 +189,7 @@
+ static int dream_gpu_frame_copy(SweetSurface *src, SweetSurface *dst, unsigned w, unsigned h, unsigned sb, unsigned db) {
+     if(__atomic_load_n(&dmb_poisoned,__ATOMIC_ACQUIRE)) return -1;
+     if(!__atomic_load_n(&dmb_ready,__ATOMIC_ACQUIRE) || !src || !dst || src->offset || dst->offset) return 0;
++    if (!OSDynamicCast(IOBufferMemoryDescriptor, src->memory)) return 0;
+     IOLockLock(dmb_lock);
+     int ret=dmb_poisoned?-1:!dmb_ready?0:dmb_copy_locked(src->memory,(void *)src->kernelAddress(),
+         dst->memory,(void *)dst->kernelAddress(),false,w,h,sb,db);
