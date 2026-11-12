@@ -1,0 +1,63 @@
+--- /dev/null
++++ b/iokit/Kernel/arm/DreamMali.inc
+@@ -0,0 +1,36 @@
++/* Exynos8895 Mali-G71 bring-up service. No rendering/user client yet.
++ * PMU status offset/mask verified against Samsung gpu_exynos8895.c.
++ * Do not touch the GPU register aperture while power/clocks are unowned.
++ */
++#if defined(DREAMLTE)
++class DreamMali : public IOService {
++    OSDeclareDefaultStructors(DreamMali);
++public:
++    bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++};
++OSDefineMetaClassAndStructors(DreamMali, IOService);
++
++bool DreamMali::start(IOService *provider)
++{
++    int enabled = 0;
++    PE_parse_boot_argn("s8gpu_probe", &enabled, sizeof(enabled));
++    if (!enabled || !IOService::start(provider)) return false;
++    vm_offset_t pmu = ml_io_map(0x16480000, 0x10000);
++    if (!pmu) {
++        IOLog("DREAM GPU: cannot map PMU\n");
++        return false;
++    }
++    uint32_t cfg = *(volatile uint32_t *)(pmu + 0x40e0);
++    uint32_t status = *(volatile uint32_t *)(pmu + 0x40e4);
++    setProperty("model", "Mali-G71 bring-up");
++    setProperty("GPURegisterBase", 0x13900000ULL, 64);
++    setProperty("PowerConfiguration", (uint64_t)cfg, 32);
++    setProperty("PowerStatus", (uint64_t)status, 32);
++    setProperty("HardwareAcceleration", false);
++    setProperty("BringupStage", "power-status-only");
++    IOLog("DREAM GPU: Mali-G71 service cfg=0x%x status=0x%x powered=%u; "
++        "GPU MMIO/jobs disabled, no acceleration\n", cfg, status, (status & 15) == 15);
++    registerService();
++    return true;
++}
++#endif
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -684,3 +684,5 @@
+ 	return ret;
+ }
+ #endif /* SWEET || A5XELTE */
++
++#include "DreamMali.inc"
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -34,6 +34,13 @@
+ 
+ const char * gIOKernelConfigTables =
+     "("
++#if defined(DREAMLTE)
++    "   {"
++    "     'IOClass' = DreamMali;"
++    "     'IOProviderClass' = IOResources;"
++    "     'IOMatchCategory' = DreamMali;"
++    "   },"
++#endif
+ #if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_A5XELTE)
+     "   {"
+     "     'IOClass'         = SweetPlatformExpert;"
