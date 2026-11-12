@@ -1,0 +1,73 @@
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -53,6 +53,8 @@
+ #include <sys/proc.h>
+ 
+ static int sweet_fb_profile;
++static int sweet_fb_async;
++static int sweet_fb_wait = 1;
+ 
+ enum {
+ 	kSweetFBGetLayerDefaultSurface  = 3,
+@@ -224,6 +226,9 @@
+ 	fFlushTicks = (hz == 0 || hz >= 60) ? 1 : 60 / hz;
+ 	nanoseconds_to_absolutetime(1000000000ULL / (hz == 0 ? 60 : hz), &fMinGap);
+ 	PE_parse_boot_argn("sweetfb_profile", &sweet_fb_profile, sizeof(sweet_fb_profile));
++	PE_parse_boot_argn("sweetfb_async", &sweet_fb_async, sizeof(sweet_fb_async));
++	PE_parse_boot_argn("sweetfb_wait", &sweet_fb_wait, sizeof(sweet_fb_wait));
++	IOLog("SWEET FB: async=%d frame_wait=%d\n", sweet_fb_async, sweet_fb_wait);
+ 	IOLog("SWEET FB: target=%u Hz gap_ticks=%llu profile=%d\n", hz, fMinGap, sweet_fb_profile);
+ 	fPresentLock = IOLockAlloc();
+ 	if (fPresentLock == NULL) {
+@@ -290,7 +295,10 @@
+ 		fb->present(rec);
+ 		IOFreeData(rec, SWEET_FB_SWAP_REC_SIZE);
+ 	}
+-	sender->setTimeoutUS(SWEET_FB_VSYNC_US);
++	uint64_t used_ns;
++	absolutetime_to_nanoseconds(mach_absolute_time() - now, &used_ns);
++	uint64_t used_us = used_ns / 1000;
++	sender->setTimeoutUS(used_us < SWEET_FB_VSYNC_US ? SWEET_FB_VSYNC_US - used_us : 1000);
+ }
+ 
+ void
+@@ -367,7 +375,7 @@
+ 	memcpy(fPending, rec, SWEET_FB_SWAP_REC_SIZE);
+ 	fDirty = true;
+ 	uint64_t now = mach_absolute_time();
+-	bool copyNow = !fPowerOff && now - fLastPresent >= fMinGap;
++	bool copyNow = !sweet_fb_async && !fPowerOff && now - fLastPresent >= fMinGap;
+ 	if (copyNow) {
+ 		fDirty = false;
+ 		fLastPresent = now;
+@@ -388,7 +396,7 @@
+ 	IOLockLock(fPresentLock);
+ 	uint64_t perf_start = mach_absolute_time();
+ #if defined(DREAMLTE)
+-	sweet_fb_wait_frame_done();
++	if (sweet_fb_wait) sweet_fb_wait_frame_done();
+ #endif
+ 	uint64_t perf_copy_start = mach_absolute_time();
+ 
+@@ -483,15 +491,18 @@
+ 		s->release();
+ 	}
+ 	if (sweet_fb_profile) {
+-		static uint64_t frames, total_ns, wait_ns, max_ns;
++		static uint64_t frames, total_ns, wait_ns, max_ns, window_start;
++		if (frames == 0) window_start = perf_start;
+ 		uint64_t elapsed, waited;
+ 		absolutetime_to_nanoseconds(mach_absolute_time() - perf_start, &elapsed);
+ 		absolutetime_to_nanoseconds(perf_copy_start - perf_start, &waited);
+ 		total_ns += elapsed; wait_ns += waited;
+ 		if (elapsed > max_ns) max_ns = elapsed;
+ 		if (++frames == 120) {
+-			IOLog("SWEET FB PERF: frames=120 present_avg_us=%llu wait_avg_us=%llu max_us=%llu\n",
+-			    total_ns / 120000, wait_ns / 120000, max_ns / 1000);
++			uint64_t window_ns;
++			absolutetime_to_nanoseconds(mach_absolute_time() - window_start, &window_ns);
++			IOLog("SWEET FB PERF: frames=120 present_avg_us=%llu wait_avg_us=%llu max_us=%llu window_ms=%llu\n",
++			    total_ns / 120000, wait_ns / 120000, max_ns / 1000, window_ns / 1000000);
+ 			frames = total_ns = wait_ns = max_ns = 0;
+ 		}
+ 	}
