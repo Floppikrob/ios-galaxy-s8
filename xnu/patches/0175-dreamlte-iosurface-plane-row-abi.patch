@@ -1,0 +1,26 @@
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -618,13 +618,22 @@
+ 		const struct sweet_surface_plane *pl = &s->planes[i];
+ 		put32(p, 0x00, pl->width);
+ 		put32(p, 0x04, pl->height);
+-		put32(p, 0x08, pl->bytesPerRow);
++		/* iOS16 IOSurfaceClient+224 => result+0x78 => plane+0x10. */
++		put32(p, 0x10, pl->bytesPerRow);
+ 		put32(p, 0x0c, pl->offset);
+ 		put32(p, 0x14, pl->size);
+ 		memcpy(p + 0x18, &pl->bytesPerElement, 2);
+ 		p[0x1a] = pl->elementWidth;
+ 		p[0x1b] = pl->elementHeight;
+ 	}
++#if defined(DREAMLTE)
++    static unsigned plane_reports;
++    if (s->planeCount == 2 && plane_reports++ < 8) {
++        IOLog("DREAM SURF PLANE ABI: id=%u stride_at=0x10 p0=%ux%u,row%u,off%u p1=%ux%u,row%u,off%u\n",
++            s->id,s->planes[0].width,s->planes[0].height,s->planes[0].bytesPerRow,s->planes[0].offset,
++            s->planes[1].width,s->planes[1].height,s->planes[1].bytesPerRow,s->planes[1].offset);
++    }
++#endif
+ }
+ 
+ static IOReturn
