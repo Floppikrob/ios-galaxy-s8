@@ -1,0 +1,28 @@
+--- a/iokit/Kernel/arm/DreamDisplayIommu.inc
++++ b/iokit/Kernel/arm/DreamDisplayIommu.inc
+@@ -6,14 +6,17 @@
+ static void dm_clean(void *,unsigned);
+ static IOBufferMemoryDescriptor *df_tables;
+ static void dream_display_iommu_prepare(SweetSurface *surface) {
+-    static const uint64_t mmu_pa[3]={0x12900000,0x12910000,0x12920000};
+-    for(unsigned i=0;i<3;i++) {
+-        IOLog("DREAM SYSMMU: reading unit=%u base=%llx\n",i,mmu_pa[i]);
+-        uintptr_t va=ml_io_map(mmu_pa[i],0x1000);if(!va) continue;
+-        volatile uint32_t *r=(volatile uint32_t *)va;
+-        IOLog("DREAM SYSMMU: unit=%u control=%x config=%x status=%x pt_ppn=%x version=%x capa=%x capa1=%x irq=%x\n",
+-            i,r[0],r[1],r[2],r[3],r[0x34/4],r[0x30/4],r[0x38/4],r[0x60/4]);
+-    }
++    // Runtime photograph confirmed 0x12900000 version 0x70000011 (v7).
++    // Reading the v5 capability register at +0x30 raises an external abort.
++    // Only sample registers already reached successfully; do not probe gated units.
++    uintptr_t va=ml_io_map(0x12900000,0x1000);
++    if(!va) return;
++    volatile uint32_t *r=(volatile uint32_t *)va;
++    uint32_t control=r[0],config=r[1],status=r[2],pt=r[3],version=r[0x34/4];
++    unsigned major=version>>28;
++    IOLog("DREAM SYSMMU SAFE: unit=0 control=%x config=%x status=%x pt_ppn=%x version=%x major=%u (no capability reads, no writes)\n",
++        control,config,status,pt,version,major);
++    if(major!=7) {IOLog("DREAM SYSMMU TABLE: unsupported runtime major, no changes\n");return;}
+     const uint64_t bytes=surface->memory->getLength();
+     const unsigned sections=(unsigned)((bytes+0xfffff)>>20);
+     const unsigned table_bytes=(16384+sections*1024+4095)&~4095u;
