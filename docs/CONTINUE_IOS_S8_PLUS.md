@@ -2,7 +2,7 @@
 
 ## Актуальное продолжение GLES / Mesa / Panfrost — 2026-11-13
 
-Статус:0176 пользователь подтвердил появление/стабильностьиконок иустранениераннихартефактов,ноUIкривой/медленнее. Fresh448708Bflush24:0паденийbackboardd;большинство180x180Addressprepareотказыret2,успешна1малаяповерхность.0177оптимизирует128MiBGPU-onlyheapсвозвратомполнойsyncприCPUmap;0178делаетснимокreadonlyиконок;новаябиблиотекаподключаетотсутствующиеданныефункциймасокCAспроверкойточногоUUID/vtableиCOW. Тесты/сборкиPASS. BOOTc5ac1367...иbridge d9ff057a...установлены/readback+подписьPASS,reboot. GPU/2GiB/8ASсохранены. Приростскорости/исправлениемасокаппаратноещёНЕподтверждены.
+Статус:Аппаратнаяпроверка0177/0178/CAbridge:GPUheapоптимизацияРАБОТАЕТ(128MiBcleanonce,далееheap_skip2),readonly180x180снимкиуспешны7/ret0вместоret2. CAbridgeустановлен,реальноприходятпараметры/работаютцветовыематрицыигруппы. Времяпервых30кадров1.365->0.306с;нагрузкаразная,носовпадающиеcall-countгруппытожебыстрее. ЭтоНЕконтролируемыйFPSтест. Маски/скруглениявизуальнополностьюНЕподтверждены;13отказов256x1таблицостались;copyout155ms/кадр. Пользовательзаметилуходкрасногофона,правильностьобоевнеизвестна. ТелефоноставленTWRP,новыхпрошивок/перезагрузокнебыло;GPU2GiB8ASсохранены.
 
 Пользователь попросил продолжить предыдущий чат «Продолжить портирование iOS»; последняя задача — попробовать OpenGL ES и Mesa/Panfrost для отрисовки интерфейса. GPU не отключать, сохранить 2048 MiB, 4 KiB страницы, 8 CPU и 8 GPU-контекстов. Частоты/напряжения не повышались. Предыдущий ход завершился прерыванием до записи системы/нового BOOT; файлы передачи тогда не были обновлены.
 
@@ -95,6 +95,23 @@ User subsequently explicitly requested trying to fix crash. Continue local targe
 
 
 
+
+
+## 2026-11-13: verification0177/0178/CAbridge — measured latency improves; mask bridge active, full UI unconfirmed
+
+User returned TWRP and asked specifically whether faster/masks active, reporting only disappearance of red lockscreen background. Read-only verification ONLY: no flash, root/BOOT write or reboot this turn; phone left TWRP. Saved fresh ui-performance-result.bin/.txt449555Bflush29. Actual runtime confirms RAM2147483648,page4096,ASlimit8/AS_PRESENTff, trianglePASS, first adapter attemptallowed1 (NOT crash-budget fallback),1backboardd/0crashes.8pixel checks148400samples/0mismatch with changing content, no logged GPU/MMU/DMA failure or kernel panic; shader compile/link failure logs0. Do not equate summary "0errors" with exhaustive glGetError checks (per-call checking disabled).
+
+Performance improvement OBSERVED versus previous0176 run: first30reported frame processing average1364926->306263us (ratio4.46), but workload differs45->29draws/frame/241->143triangles, not a controlled FPS benchmark. Approximate matched GL-call signature checks strengthen the result: frame9 has431calls/52draws/210triangles/12clears/no uploads/1copy in both,2078022->466461us (4.45ratio). Frame10 has292calls/40draws/206triangles/9clears/no uploads/1copy,1635914->321588us (5.09ratio). Simple44call/3draw frames median269724->181120.5us (1.49ratio). Same counts do NOT prove same shader/scene; never claim universal4.5x FPS or compare against original CPU renderer from these numbers. Foreground FPS test not performed. Remaining copyout first30average155269us, about half of306263processing; copying/readback/SDR conversion remains a major cost and rendering is still slow.
+
+0177hardware proof: first submit clean134373376B incl128MiBheap,21873us; second clean155648B/27us with heap_skip2. Later each logged submission through2040 has heap_skip2 and only ordinary/surface buffers cleaned+invalidated. Typical sampled clean median2093us; GPU job samples about1.2-2.8ms. Thus GPU-only heap is really retained without repeated128MiBCPUcache operations; not just a build claim. No observed CPU remap re-enabling full heap sync. No cache-policy or GPU/RAM/context disable.
+
+0178hardware proof:7bounded180x180image records readonly-copy1/ret0 with exact129600B; zero bounded rawret2 now (previous19). Live mutable surfaces retain caller-pixels1.13bounded256x1table creations still returne00002c2, so not every Address surface works. Actual guard reason/rawspan/needed length not logged yet; do not guess/relax bounds. The failed tables may matter for some effects, but causal link to visual masks/corners remains unproven.
+
+CAbridgehardware proof: DREAM CA GL installed; functions receive parameters17,18,19,20,26,28,32,33,35,36,37,45,46,53,61,66. Real programs made and used for function20/c4p premultiplied colour matrix and45/vcm colour over background, plus group operations functions3/cim,13/cma,0/clr. This proves missing context/uniform bridge and colour/group handling are active. It does NOT certify every clipping mask/rounded corner visually correct. User's removed red background is consistent with changed colour/compositing, not proof of correct wallpaper or a standalone failure. No fresh image comparison to expected wallpaper; don't label it definitively good/bad or claim full mask fix. Whole UI remains unconfirmed/crooked per prior reports.
+
+Installed artifacts unchanged: BOOTc5ac1367dc7ed21ab75bc24d02aa40cb58f401a1a98dd6b69ecf8df111ec3374,bridge d9ff057ab2c8e28ea425e5c28f7167199d20f313cd164894e5f57a0986ebdf37; sourcecommit379073d. ui-performance-hardware-result.json records comparisons, timings, readonly and CA proof separately; flash-result updated to distinguish observed latency benefit from unconfirmed visual masks/UI. Prior0176backup3945199b...+40150eb4...bridge retained; rollback requiresboth. No new trial installed merely to answer this verification request.
+
+NEXT authorized repair candidates: determine precise256x1create rejection with bounded non-sensitive geometry/length/type diagnostics; optimize output readback/conversion without removing synchronization or disabling GPU; use actual screenshot/draw/function data to locate remaining distorted shapes. Keep GPU/2GiB/4K/8CPU/8AS. If pursuing a new trial, preserve current now-hardware-tested checkpoint and measured profile first; don't treat masks fully fixed or ordinary cache sync optional. No whole-system comparison. Local notes commit only/no push.
 
 ## 2026-11-13:0176 icons improved, slower;0177heap/0178readonly + guarded CA bridge installed
 
