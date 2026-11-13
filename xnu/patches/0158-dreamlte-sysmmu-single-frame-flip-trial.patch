@@ -1,0 +1,77 @@
+--- a/iokit/Kernel/arm/DreamDisplayIommu.inc
++++ b/iokit/Kernel/arm/DreamDisplayIommu.inc
+@@ -5,6 +5,7 @@
+  */
+ static void dm_clean(void *,unsigned);
+ static IOBufferMemoryDescriptor *df_tables;
++static void dream_display_flip_trial(uint64_t);
+ static void dream_display_iommu_prepare(SweetSurface *surface) {
+     // Runtime photograph confirmed 0x12900000 version 0x70000011 (v7).
+     // Reading the v5 capability register at +0x30 raises an external abort.
+@@ -58,4 +59,66 @@
+     df_tables->prepare(kIODirectionOut);dm_clean(root,table_bytes);
+     IOLog("DREAM SYSMMU TABLE: %s root_pa=%llx root_ppn=%llx iova=%x bytes=%llu pages=%u sections=%u identity_bad=%u hardware_enabled=0 flip=0\n",
+         ok?"PASS":"FAIL",pa,pa>>12,iova,bytes,pages,sections,identity_bad);
++    if(ok) dream_display_flip_trial(pa);
+ }
++
++static bool df_wait(volatile uint32_t *r,unsigned off,uint32_t mask,uint32_t want,unsigned ms) {
++    for(unsigned i=0;i<=ms;i++) { if((r[off/4]&mask)==want) return true;IOSleep(1); }
++    return false;
++}
++static void df_write(volatile uint32_t *r,unsigned off,uint32_t value) {
++    r[off/4]=value; __asm__ volatile("dsb sy" ::: "memory");
++}
++static void dream_display_flip_trial(uint64_t root_pa) {
++    int enabled=0;PE_parse_boot_argn("s8flip",&enabled,sizeof(enabled));if(!enabled) return;
++    volatile uint32_t *m=(volatile uint32_t *)ml_io_map(0x12900000,0x1000);
++    volatile uint32_t *d=(volatile uint32_t *)ml_io_map(0x12860000,0x1000);
++    volatile uint32_t *i=(volatile uint32_t *)ml_io_map(0x128b1000,0x1000);
++    if(!m||!d||!i) return;
++    const uint32_t shadow=0x8000003f;
++    uint32_t ctrl=m[0],cfg=m[1],pt=m[3],base=i[0x40/4],base_c=i[0x44/4];
++    if(ctrl!=4||cfg!=0x20000||pt!=0||m[0x34/4]!=0x70000011||
++        base!=0xcc000000||i[0x10/4]!=0x0b9005a0||i[0x14/4]!=0||
++        i[0x18/4]!=0x0b9005a0||d[0]!=0x113||d[0x70/4]!=0x1281||
++        (d[0x60/4]&shadow)||(root_pa&16383)||root_pa>=(1ULL<<36)) {
++        IOLog("DREAM FLIP TRIAL: guard rejected ctrl=%x cfg=%x pt=%x base=%x\n",ctrl,cfg,pt,base);return;
++    }
++    // No existing domain is replaced: this exact runtime state has MMU bypass on.
++    IOLog("DREAM FLIP TRIAL: begin identity bootfb + scatter IOVA70000000 root=%llx\n",root_pa);
++    df_write(m,0,7);
++    if(!df_wait(m,8,1,1,20)) {
++        df_write(m,0,ctrl);IOLog("DREAM FLIP TRIAL: block timeout, original control restored\n");return;
++    }
++    df_write(m,0xc,(uint32_t)(root_pa>>12));df_write(m,0x10,1);df_write(m,0,5);
++    IOSleep(20);
++    if(m[0]!=5 || m[0x60/4]) {
++        df_write(m,0,7);bool blocked=df_wait(m,8,1,1,20);
++        if(blocked) {df_write(m,0xc,pt);df_write(m,0x10,1);df_write(m,0,ctrl);}
++        IOLog("DREAM FLIP TRIAL: identity failed rollback=%u; DMA retained\n",blocked);return;
++    }
++    uint32_t int_en=d[0x40/4];df_write(d,0x40,int_en|(1u<<13)|1u);
++    df_write(i,0x40,0x70000000);df_write(i,0x44,0x70000000);
++    df_write(d,0x60,d[0x60/4]|shadow);
++    bool taken=df_wait(d,0x60,shadow,0,100);
++    df_write(d,0x4c,1u<<13);
++    bool frame=taken&&df_wait(d,0x4c,1u<<13,1u<<13,40);
++    uint32_t fault=m[0x60/4];
++    IOLog("DREAM FLIP TRIAL: separate requested=%x latch=%u frame_done=%u mmu_irq=%x idma_irq=%x\n",
++        i[0x40/4],taken,frame,fault,i[1]);
++    // Always return to bootfb. Never release/rewrite a possibly scanned buffer.
++    df_write(i,0x40,base);df_write(i,0x44,base_c);df_write(d,0x60,d[0x60/4]|shadow);
++    bool restored=df_wait(d,0x60,shadow,0,100);
++    df_write(d,0x4c,1u<<13);
++    bool retired=restored&&df_wait(d,0x4c,1u<<13,1u<<13,40);
++    bool mmu_restored=false;
++    if(retired) {
++        df_write(m,0,7);
++        if(df_wait(m,8,1,1,20)) {
++            df_write(m,0xc,pt);df_write(m,0x10,1);df_write(m,0,ctrl);mmu_restored=true;
++        } else df_write(m,0,5);
++    }
++    df_write(d,0x40,int_en);
++    IOLog("DREAM FLIP TRIAL: %s rollback_latch=%u old_frame_retired=%u original_mmu=%u base=%x retained=1 continuous=0\n",
++        taken&&frame&&!fault&&retired&&mmu_restored?"PASS":"FAIL",
++        restored,retired,mmu_restored,i[0x40/4]);
++}
