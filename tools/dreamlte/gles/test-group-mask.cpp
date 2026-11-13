@@ -14,7 +14,7 @@ static void say(const char*,...){}
 #define EAGL_ENTER(e,n) ((void)0)
 #define EAGL_LEAVE(e,n) ((void)0)
 static bool group_vibrant_on=true,fetch_offered=true;
-struct eagl{bool fragment[256]{};const char*sources[256]{};};
+struct eagl{bool fragment[256]{};const char*sources[256]{};GLuint source_names[256]{};};
 #include "ShaderParts.production.inc"
 #include "dream-group-mask.inc"
 #define calloc(a,b) ((char*)std::calloc(a,b))

@@ -69,6 +69,7 @@
 #include <IOSurface/IOSurfaceRef.h>
 #include <libkern/OSByteOrder.h>
 #include <mach/mach_time.h>
+#include <math.h>
 #include <objc/message.h>
 #include <objc/runtime.h>
 #include <stdarg.h>
@@ -336,6 +337,9 @@ struct eagl {
 	uint64_t all_calls, all_draws, all_triangles, readback_us, wait_us, attach_us, flush_us, frame_us;
 	uint64_t checksum_calls, checksum_bytes, checksum_us, checksum_most;
 	unsigned most_calls, most_triangles;
+    GLuint source_names[256];
+    struct { GLuint id; unsigned flags, seen; } mask_program[64];
+    unsigned mask_draws;
 	const char *sources[256];       /* the text of the shaders being made, by name (modulo this) */
 	bool fragment[256];             /* ... and which of the two kinds each is */
 	unsigned plain_said;
@@ -3786,6 +3790,18 @@ my_glVertexAttribPointer(void *context, GLuint index, GLint size, GLenum type, G
 	EAGL_LEAVE(e, 0x1000);
 }
 
+/* Avoid dereferencing untrusted client pointers during diagnostics. */
+static bool
+dream_mask_client_read(uintptr_t address, void *out, size_t length)
+{
+    vm_size_t actual=0;
+    return address && length && address<=UINTPTR_MAX-length &&
+        vm_read_overwrite(mach_task_self(),(vm_address_t)address,(vm_size_t)length,
+            (vm_address_t)(uintptr_t)out,&actual)==KERN_SUCCESS && actual==length;
+}
+
+#include "dream-mask-trace.inc"
+
 static void
 my_glDrawArrays(void *context, GLenum mode, GLint first, GLsizei count)
 {
@@ -3808,11 +3824,11 @@ my_glDrawArrays(void *context, GLenum mode, GLint first, GLsizei count)
 	if (skipping != 0 && skip_draw(e)) {
 		/* glskip=N: nothing is drawn, so that what this program puts there can be seen missing */
 	} else if (group_draw_begin(e, enabled)) {
-		glDrawArrays(mode, first, count);
+		dream_mask_draw(e, mode, 0, NULL, first, count);
 		group_draw_end(e, enabled);
 	} else {
 		plain = plain_draw_begin(e, enabled);
-		glDrawArrays(mode, first, count);
+		dream_mask_draw(e, mode, 0, NULL, first, count);
 		if (plain) {
 			plain_draw_end(e, enabled);
 		}
@@ -3848,11 +3864,11 @@ my_glDrawElements(void *context, GLenum mode, GLsizei count, GLenum type, const 
 	if (skipping != 0 && skip_draw(e)) {
 		/* glskip=N: see my_glDrawArrays */
 	} else if (group_draw_begin(e, enabled)) {
-		glDrawElements(mode, count, type, indices);
+		dream_mask_draw(e, mode, type, indices, 0, count);
 		group_draw_end(e, enabled);
 	} else {
 		plain = plain_draw_begin(e, enabled);
-		glDrawElements(mode, count, type, indices);
+		dream_mask_draw(e, mode, type, indices, 0, count);
 		if (plain) {
 			plain_draw_end(e, enabled);
 		}
@@ -4433,6 +4449,7 @@ my_glShaderSource(void *context, GLuint shader, GLsizei count, const GLchar *con
 	}
 	free((void *)e->sources[shader % 256]);
 	e->sources[shader % 256] = text;
+    e->source_names[shader % 256] = shader;
 	glShaderSource(shader, 6, (const GLchar *const[6]){ parts[0], parts[5], parts[1], parts[2], parts[3], parts[4] }, NULL);
 	EAGL_LEAVE(e, 0x12a0);
 }
@@ -4482,6 +4499,7 @@ my_glLinkProgram(void *context, GLuint program)
 	glLinkProgram(program);
 	glGetProgramiv(program, GL_LINK_STATUS, &good);
 	e->programs++;
+    if (good) dream_mask_link(e, program);
 	if (!good) {
 		glGetProgramInfoLog(program, sizeof(said), NULL, said);
 		say("hakios-gl: A PROGRAM DOES NOT LINK (program %u): %s\n", program, said);
@@ -4497,6 +4515,7 @@ my_glDeleteProgram(void *context, GLuint name)
 
 	EAGL_ENTER(e, 0x1280);
 	if (glIsProgram(name)) {
+        for (unsigned i=0;i<64;i++) if(e->mask_program[i].id==name)e->mask_program[i].id=0;
 		glDeleteProgram(name);
 	} else {
 		glDeleteShader(name);
