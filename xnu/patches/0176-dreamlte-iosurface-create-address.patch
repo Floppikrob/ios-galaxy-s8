@@ -1,0 +1,95 @@
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -374,6 +374,7 @@
+ }
+ 
+ #include "DreamSurfaceWrap.inc"
++#include "DreamSurfaceAddress.inc"
+ 
+ /* Per-client mapping of one surface. */
+ class SweetSurfaceRef : public OSObject {
+@@ -721,7 +722,9 @@
+ 	}
+ 	s->parentID = args->scalarInputCount > 0 ? (uint32_t)args->scalarInput[0] : 0;
+ 	ret = sweet_surface_layout(s, props);
+-	if (ret == kIOReturnSuccess) {
++    bool externalAddress = false;
++    if (ret == kIOReturnSuccess) ret = dream_surface_create_address(s, fTask, props, &externalAddress);
++	if (ret == kIOReturnSuccess && !externalAddress) {
+ 		IOBufferMemoryDescriptor *mem = NULL;
+ 		if ((uint64_t)OSAddAtomic64(s->allocSize, (volatile SInt64 *)&sweet_surface_wired) +
+ 		    s->allocSize <= SWEET_SURFACE_WIRED_MAX) {
+@@ -735,11 +738,15 @@
+ 			bzero(mem->getBytesNoCopy(), s->allocSize);
+ 			s->memory = mem;
+ 			s->mapCache = kIOMapDefaultCache;
+-			if (!sweet_surface_publish(s)) {
+-				ret = kIOReturnNoResources;
+-			}
+-		}
+-	}
++		}
++	}
++    if (ret == kIOReturnSuccess && !sweet_surface_publish(s)) ret = kIOReturnNoResources;
++    static unsigned address_reports;
++    if (externalAddress && address_reports++ < 24) {
++        char name[32]; proc_selfname(name,sizeof(name));
++        IOLog("DREAM SURF ADDRESS: %s id=%u %ux%u fmt=%x bytes=%u caller-pixels=%u ret=%x\n",
++            name,s->id,s->width,s->height,s->pixelFormat,s->allocSize,s->userMemoryPrepared,ret);
++    }
+ 	if (ret != kIOReturnSuccess || sweet_surface_creates_logged < 64) {
+ 		char name[32];
+ 		proc_selfname(name, sizeof(name));
+--- /dev/null
++++ b/iokit/Kernel/arm/DreamSurfaceAddress.inc
+@@ -0,0 +1,50 @@
++/* IOSurfaceCreate may wrap caller-owned pixels through IOSurfaceAddress.
++ * Never replace those pixels with a fresh zeroed IOBuffer. All pointers are
++ * caller virtual addresses, resolved only in the owning task, never physical.
++ */
++static IOReturn
++dream_surface_create_address(SweetSurface *s, task_t owner, OSDictionary *props, bool *handled)
++{
++    *handled = false;
++    OSObject *addressObject = props->getObject("IOSurfaceAddress");
++    OSObject *ranges = props->getObject("IOSurfaceAddressRanges");
++    OSObject *offsetObject = props->getObject("IOSurfaceAddressOffset");
++    OSNumber *address = OSDynamicCast(OSNumber, addressObject);
++    OSNumber *offset = OSDynamicCast(OSNumber, offsetObject);
++    if (ranges || (offsetObject && (!offset || offset->unsigned64BitValue()))) {
++        *handled = true;
++        return kIOReturnUnsupported; // Explicit rejection, never zero-filled success.
++    }
++    if (!addressObject) return kIOReturnSuccess;
++    *handled = true;
++    if (!address || !owner || !s || s->memory) return kIOReturnBadArgument;
++    uint64_t start = address->unsigned64BitValue();
++    if (!start || !s->width || !s->height || !s->elementHeight || !s->elementWidth)
++        return kIOReturnBadArgument;
++    uint64_t needed = (uint64_t)s->offset + (uint64_t)s->bytesPerRow *
++        (((uint64_t)s->height + s->elementHeight - 1) / s->elementHeight);
++    for (unsigned i = 0; i < s->planeCount; ++i) {
++        uint64_t end = (uint64_t)s->planes[i].offset + s->planes[i].size;
++        if (end > needed) needed = end;
++    }
++    OSObject *sizeObject = props->getObject("IOSurfaceAllocSize");
++    OSNumber *size = OSDynamicCast(OSNumber, sizeObject);
++    if (sizeObject && !size) return kIOReturnBadArgument;
++    uint64_t length = size ? size->unsigned64BitValue() : needed;
++    if (!needed || length < needed || length > SWEET_SURFACE_MAX_ALLOC || start + length < start)
++        return kIOReturnBadArgument;
++    IOMemoryDescriptor *memory = IOMemoryDescriptor::withAddressRange(start, length, kIODirectionInOut, owner);
++    if (!memory) return kIOReturnNoMemory;
++    IOReturn ret = memory->prepare();
++    if (ret != kIOReturnSuccess) { memory->release(); return ret; }
++    uint64_t previous = (uint64_t)OSAddAtomic64(length, (volatile SInt64 *)&sweet_surface_wired);
++    if (previous + length > SWEET_SURFACE_WIRED_MAX) {
++        OSAddAtomic64(-(SInt64)length, (volatile SInt64 *)&sweet_surface_wired);
++        memory->complete(); memory->release(); return kIOReturnNoMemory;
++    }
++    s->allocSize = (uint32_t)length; // Exact external span, never its rounded allocation size.
++    s->memory = memory;
++    s->userMemoryPrepared = true;
++    s->mapCache = kIOMapDefaultCache;
++    return kIOReturnSuccess;
++}
