@@ -1,0 +1,154 @@
+--- a/iokit/Kernel/arm/DreamDisplayIommu.inc
++++ b/iokit/Kernel/arm/DreamDisplayIommu.inc
+@@ -13,15 +13,15 @@
+ static volatile uint32_t *df_m, *df_d, *df_i;
+ 
+ static void dream_display_iommu_prepare(SweetSurface *surface) {
+-    // Runtime photograph confirmed 0x12900000 version 0x70000011 (v7).
++    // Runtime photograph confirmed 0x12910000 version 0x70000011 (v7).
+     // Reading the v5 capability register at +0x30 raises an external abort.
+     // Only sample registers already reached successfully; do not probe gated units.
+-    uintptr_t va=ml_io_map(0x12900000,0x1000);
++    uintptr_t va=ml_io_map(0x12910000,0x1000);
+     if(!va) return;
+     volatile uint32_t *r=(volatile uint32_t *)va;
+     uint32_t control=r[0],config=r[1],status=r[2],pt=r[3],version=r[0x34/4];
+     unsigned major=version>>28;
+-    IOLog("DREAM SYSMMU SAFE: unit=0 control=%x config=%x status=%x pt_ppn=%x version=%x major=%u (no capability reads, no writes)\n",
++    IOLog("DREAM SYSMMU SAFE: unit=1 control=%x config=%x status=%x pt_ppn=%x version=%x major=%u (no capability reads, no writes)\n",
+         control,config,status,pt,version,major);
+     if(major!=7) {IOLog("DREAM SYSMMU TABLE: unsupported runtime major, no changes\n");return;}
+     const uint64_t bytes=surface->memory->getLength();
+@@ -95,13 +95,13 @@
+ }
+ static void dream_display_flip_trial(uint64_t root_pa) {
+     int enabled=0;PE_parse_boot_argn("s8flip",&enabled,sizeof(enabled));if(!enabled) return;
+-    volatile uint32_t *m=(volatile uint32_t *)ml_io_map(0x12900000,0x1000);
++    volatile uint32_t *m=(volatile uint32_t *)ml_io_map(0x12910000,0x1000);
+     volatile uint32_t *d=(volatile uint32_t *)ml_io_map(0x12860000,0x1000);
+     volatile uint32_t *i=(volatile uint32_t *)ml_io_map(0x128b1000,0x1000);
+     if(!m||!d||!i) return;
+     const uint32_t shadow=0x8000003f;
+     uint32_t ctrl=m[0],cfg=m[1],pt=m[3],base=i[0x40/4],base_c=i[0x44/4];
+-    if(ctrl!=4||cfg!=0x20000||pt!=0||m[0x34/4]!=0x70000011||
++    if(ctrl!=4||pt!=0||m[0x34/4]!=0x70000011||
+         base!=0xcc000000||i[0x10/4]!=0x0b9005a0||i[0x14/4]!=0||
+         i[0x18/4]!=0x0b9005a0||d[0]!=0x113||d[0x70/4]!=0x1281||
+         (d[0x60/4]&shadow)||(root_pa&16383)||root_pa>=(1ULL<<36)) {
+@@ -121,12 +121,16 @@
+         IOLog("DREAM FLIP TRIAL: identity failed rollback=%u; DMA retained\n",blocked);return;
+     }
+     uint32_t int_en=d[0x40/4];df_write(d,0x40,int_en|(1u<<13)|1u);
++    uint32_t dma_before=i[1];
++    df_write(i,4,(i[1]&0xffffu)|0xab0000u); // W1C: known error + framedone bits.
+     df_write(i,0x40,0x70000000);df_write(i,0x44,0x70000000);
+     df_write(d,0x60,d[0x60/4]|shadow);
+     bool taken=df_wait(d,0x60,shadow,0,100);
+     df_write(d,0x4c,1u<<13);
+     bool frame=taken&&df_wait(d,0x4c,1u<<13,1u<<13,40);
+     uint32_t fault=m[0x60/4];
++    uint32_t dma_error=i[1]&0xaa0000u;
++    IOLog("DREAM DMA READ: before=%x after=%x fresh_error=%x iommu=12910000\n",dma_before,i[1],dma_error);
+     IOLog("DREAM FLIP TRIAL: separate requested=%x latch=%u frame_done=%u mmu_irq=%x idma_irq=%x\n",
+         i[0x40/4],taken,frame,fault,i[1]);
+     // Always return to bootfb. Never release/rewrite a possibly scanned buffer.
+@@ -143,15 +147,15 @@
+     }
+     df_write(d,0x40,int_en);
+     IOLog("DREAM FLIP TRIAL: %s rollback_latch=%u old_frame_retired=%u original_mmu=%u base=%x retained=1 continuous=0\n",
+-        taken&&frame&&!fault&&retired&&mmu_restored?"PASS":"FAIL",
++        taken&&frame&&!fault&&!dma_error&&retired&&mmu_restored?"PASS":"FAIL",
+         restored,retired,mmu_restored,i[0x40/4]);
+-    if(taken&&frame&&!fault&&retired&&mmu_restored) df_start_cont(root_pa);
++    if(taken&&frame&&!fault&&!dma_error&&retired&&mmu_restored) df_start_cont(root_pa);
+ }
+ 
+ // Only entered after the full one-frame round trip has succeeded this boot.
+ static void df_start_cont(uint64_t root_pa) {
+     int cont=0;PE_parse_boot_argn("s8flipcont",&cont,sizeof(cont));if(!cont) return;
+-    df_m=(volatile uint32_t *)ml_io_map(0x12900000,0x1000);
++    df_m=(volatile uint32_t *)ml_io_map(0x12910000,0x1000);
+     df_d=(volatile uint32_t *)ml_io_map(0x12860000,0x1000);
+     df_i=(volatile uint32_t *)ml_io_map(0x128b1000,0x1000);
+     if(!df_m||!df_d||!df_i||df_m[0]!=4||df_m[3]||df_i[16]!=0xcc000000) return;
+@@ -165,6 +169,8 @@
+ // fPresentLock serializes both swaps and power-off transitions.
+ static bool df_latch(uint32_t address) {
+     uint32_t saved=df_d[0x40/4];df_write(df_d,0x40,saved|(1u<<13)|1u);
++    // Distinguish fresh read faults from sticky errors inherited from old trials.
++    df_write(df_i,4,(df_i[1]&0xffffu)|0xab0000u);
+     // Clear BEFORE commit. Do not discard the completion observed during latch.
+     df_write(df_d,0x4c,1u<<13);
+     df_write(df_i,0x40,address);df_write(df_i,0x44,address);
+@@ -172,7 +178,10 @@
+     bool taken=df_wait(df_d,0x60,0x8000003f,0,100);
+     bool done=taken&&df_wait(df_d,0x4c,1u<<13,1u<<13,40);
+     df_write(df_d,0x40,saved);
+-    return taken&&done&&!df_m[0x60/4];
++    uint32_t errors=df_i[1]&0xaa0000u;
++    if(errors) IOLog("DREAM DMA READ: requested=%x fresh_error=%x irq=%x trigger=%x shadow=%x\n",
++        address,errors,df_i[1],df_d[0x70/4],df_d[0x60/4]);
++    return taken&&done&&!errors&&!df_m[0x60/4];
+ }
+ static bool dream_display_to_boot() {
+     if(!df_active) return !df_failed;
+@@ -197,9 +206,10 @@
+     SweetSurface *dst=df_private2?(target?df_private2:sweet_stage_surface):(target?sweet_stage_surface:boot);
+     int ret=dream_gpu_frame_copy(src,dst,w,h,sb,db);
+     if(ret<=0) {
+-        bool safe=dream_display_to_boot();
+-        IOLog("DREAM FLIP CONT: GPU copy unavailable result=%d boot_safe=%u\n",ret,safe);
+-        return ret<0||!safe?-1:0;
++        // No new frame exists: keep the current private scanout, not an old boot image.
++        IOLog("DREAM FLIP CONT: frame held GPU_result=%d front=%u source=%u target=%u (no boot transition)\n",
++            ret,df_front,src->id,target);
++        return ret<0?-1:-2;
+     }
+     // Validate both destinations while the selected one is still off-screen.
+     if(df_flip_count<8 || df_flip_count%120==0) {
+--- a/iokit/Kernel/arm/DreamMaliBlit.inc
++++ b/iokit/Kernel/arm/DreamMaliBlit.inc
+@@ -63,7 +63,12 @@
+         DmbContext *c=&dmb_contexts[i];
+         if(c->src==src && c->dst==dst && c->w==w && c->h==h && c->sb==sb && c->db==db) return c;
+     }
+-    if(dmb_count>=6 || !(dm_read(dmb_gpu,0x18)&(1u<<dmb_count))) return NULL;
++    if(dmb_count>=6 || !(dm_read(dmb_gpu,0x18)&(1u<<dmb_count))) {
++        static unsigned logs;
++        if(logs++<16) IOLog("DREAM GPU REJECT: reason=context_capacity count=%u AS_PRESENT=%x src=%p dst=%p\n",
++            dmb_count,dm_read(dmb_gpu,0x18),src,dst);
++        return NULL;
++    }
+     DmbContext *c=&dmb_contexts[dmb_count];
+     c->as=dmb_count; c->w=w;c->h=h;c->sb=sb;c->db=db;c->cached_dst=cached;
+     c->source_bytes=(uint64_t)sb*dmb_src_h(h);c->dest_bytes=(uint64_t)db*h;
+@@ -233,14 +238,25 @@
+     IOLog("DREAM GPU BLIT: %s PERSISTENT SELFTEST %s (3 copies AS0/AS1/AS0, guards), display enabled=%u\n",dmb_renderx?"SCALE_X":"COPY8",ok?"PASS":"FAIL",ok);
+     __atomic_store_n(&dmb_ready,ok,__ATOMIC_RELEASE);
+ }
++static int dmb_reject(const char *reason,SweetSurface *src,SweetSurface *dst) {
++    static unsigned logs;
++    if(logs++<64) IOLog("DREAM GPU REJECT: reason=%s src=%u dst=%u offset=%u/%u size=%ux%u contexts=%u\n",
++        reason,src?src->id:0,dst?dst->id:0,src?src->offset:0,dst?dst->offset:0,
++        src?src->width:0,src?src->height:0,dmb_count);
++    return 0;
++}
+ static int dream_gpu_frame_copy(SweetSurface *src,SweetSurface *dst,unsigned w,unsigned h,unsigned sb,unsigned db) {
+     if(__atomic_load_n(&dmb_poisoned,__ATOMIC_ACQUIRE)) return -1;
+-    if(!__atomic_load_n(&dmb_ready,__ATOMIC_ACQUIRE)||!src||!dst||src->offset||dst->offset) return 0;
+-    if(!OSDynamicCast(IOBufferMemoryDescriptor,src->memory)) return 0;
+-    if(src->width<dmb_src_w(w)||src->height<dmb_src_h(h)) return 0;
++    if(!src||!dst) return 0; // Intentional poison-state query from the presenter.
++    if(!__atomic_load_n(&dmb_ready,__ATOMIC_ACQUIRE)) return dmb_reject("not_ready",src,dst);
++    if(src->offset||dst->offset) return dmb_reject("surface_offset",src,dst);
++    if(!OSDynamicCast(IOBufferMemoryDescriptor,src->memory)) return dmb_reject("source_descriptor",src,dst);
++    if(src->width<dmb_src_w(w)||src->height<dmb_src_h(h)) return dmb_reject("surface_dimensions",src,dst);
+     IOLockLock(dmb_lock);
+     int ret=dmb_poisoned?-1:!dmb_ready?0:dmb_copy_locked(src->memory,(void *)src->kernelAddress(),
+         dst->memory,(void *)dst->kernelAddress(),OSDynamicCast(IOBufferMemoryDescriptor,dst->memory)!=NULL,w,h,sb,db);
+-    IOLockUnlock(dmb_lock);return ret;
++    IOLockUnlock(dmb_lock);
++    if(ret==0) return dmb_reject("copy_mapping_or_layout",src,dst);
++    return ret;
+ }
+ #endif
