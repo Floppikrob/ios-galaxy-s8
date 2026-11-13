@@ -1,0 +1,89 @@
+--- a/iokit/Kernel/arm/DreamPanfrostClient.inc
++++ b/iokit/Kernel/arm/DreamPanfrostClient.inc
+@@ -208,10 +208,7 @@
+  * wrong and nothing here did this. Boot-arg mali_flush=0: not done (for measuring what it costs).
+  */
+ static uint32_t gMaliFlush=1;
+-static void flushSubmit(struct mali_buffer *b) {
+-    SweetSurface *s=b->surface;
+-    if(s&&s->kernelAddress())dm_clean((void *)s->kernelAddress(),s->allocSize);
+-}
++#include "DreamPanfrostCache.inc"
+ bool HakiosMaliDrawn(SweetSurface *s,uint64_t milliseconds) {
+     if(!s)return true;
+     uint64_t ns=0,start=mach_absolute_time();
+@@ -407,12 +404,14 @@
+ 	if (size == 0 || size > MALI_BUFFER_MAX || (request->flags & ~3u)) {
+ 		return kIOReturnBadArgument;
+ 	}
+-	memory = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, kIODirectionInOut | kIOMemoryKernelUserShared |
+-	    kIOMapWriteCombineCache, (vm_size_t) size, PAGE_SIZE);
++	if(gMaliBuffers<8)IOLog("DREAM GLES BO: allocate size=%llu flags=%x cache=default\n",size,request->flags);
++	memory = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
++	    kIODirectionInOut | kIOMemoryKernelUserShared, (vm_size_t) size, PAGE_SIZE);
+ 	if (memory == NULL) {
+ 		IOLog("HakiosMali: no memory for a buffer of %llu bytes\n", size);
+ 		return kIOReturnNoMemory;
+ 	}
++	if(gMaliBuffers<8)IOLog("DREAM GLES BO: allocated, preparing mappings\n");
+ 	b = newBuffer(memory, 0, size, &request->handle, request->flags);
+ 	if (b == NULL) {
+ 		memory->release();
+@@ -420,6 +419,7 @@
+ 	}
+ 	b->memory = memory;
+ 	request->offset = b->address;
++	if(gMaliBuffers<8)IOLog("DREAM GLES BO: ready handle=%u size=%llu gpu=%llx\n",request->handle,size,b->address);
+ 	hakios_mali_tag(b->address, 1, 0, 0, 0, 0, 0);
+ 	return kIOReturnSuccess;
+ }
+@@ -531,7 +531,7 @@
+ 		b->memory->retain();
+ 		*memory = b->memory;
+ 		/* (fb_zc: the scan-out pool is no memory of the kernel's, and would be mapped as a device's: write-combined) */
+-		*options = b->surface ? b->surface->mapCache : kIOMapWriteCombineCache;
++		*options = b->surface ? b->surface->mapCache : kIOMapDefaultCache;
+ 		ret = kIOReturnSuccess;
+ 	}
+ 	IOLockUnlock(gMaliLock);
+@@ -670,7 +670,7 @@
+ 			}
+ 			for (uint32_t k = 0; k < n; k++) {
+ 				b = buffer(handles[k]);
+-				if (b != NULL && b->surface != NULL) {
++				if (b != NULL) {
+ 					flushSubmit(b);
+ 				}
+ 			}
+@@ -688,6 +688,7 @@
+ 			for (uint32_t k = 0; k < n; k++) {
+ 				b = buffer(handles[k]);
+ 				if (b != NULL) {
++					flushComplete(b); /* synchronous chain retired: safe for CPU readback */
+ 					b->last_seq = seq;
+ 					if (b->surface != NULL) {
+ 						__atomic_store_n(&b->surface->maliSeq,seq,__ATOMIC_RELEASE);      /* (HakiosMaliDrawn) */
+--- /dev/null
++++ b/iokit/Kernel/arm/DreamPanfrostCache.inc
+@@ -0,0 +1,21 @@
++/* Cached BOs use the same high-RAM allocation/mapping policy as SweetSurface.
++ * G71 is non-coherent: cover ordinary BOs as well as imported surfaces before
++ * submission and after synchronous completion. Never invalidate live DMA.
++ */
++static void dpf_sync_buffer(struct mali_buffer *b, bool to_gpu) {
++    if (!b || !b->memory) return;
++    void *address=NULL;
++    uint64_t length=b->size;
++    if (b->surface) {
++        address=(void *)b->surface->kernelAddress();
++        length=b->surface->allocSize;
++    } else {
++        IOBufferMemoryDescriptor *m=OSDynamicCast(IOBufferMemoryDescriptor,b->memory);
++        if(m) address=m->getBytesNoCopy();
++    }
++    if(!address || !length || length>b->memory->getLength()) return;
++    if(to_gpu) dm_clean(address,length);
++    else dm_invalidate(address,length);
++}
++static void flushSubmit(struct mali_buffer *b) { dpf_sync_buffer(b,true); }
++static void flushComplete(struct mali_buffer *b) { dpf_sync_buffer(b,false); }

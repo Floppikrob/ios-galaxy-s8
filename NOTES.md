@@ -1,3 +1,7 @@
+## Dream2lte newest trial — 2026-11-13 cached BO0171
+
+0170 reached first Mesa CREATE_BO then photo panic phystokv_range illegalPAbe1d3000; recovered ring is stale/byte-identical0169. Scoped0171 avoids WC BO allocation/mapping and synchronizes cached ordinary BOs and IOSurfaces before/after synchronous GPU chains. Exact truncation origin is still unproven; no guessed PA repairs/bounds bypass. Build/helper tests/0undefined0LSE/2GiB8CPU8AS validation pass. BOOT c71f7649a0869398ad086d4bbd47991d993cf43bf40cac7cbfc54eecfbcbcba1 flashed/readbackPASS/rebootissued; root untouched. Runtime panic fix/GLES/UI still pending. Prefer known booting0169 boot-before-g71-product.img if rollback needed; boot-before-cached-bo.img is crashing0170. Read docs/CONTINUE_IOS_S8_PLUS.md first. Local only.
+
 ## Dream2lte newest trial — 2026-11-13 G71 product0170
 
 0169 hardware result: insertion was missing at actual exec; supplying it loaded Mesa/EAGL successfully. Probe selected softpipe, so EAGL unchanged and user's UI still broken. Found exact-model mismatch60a0 vs MesaG71row6000.0170 canonically reports only that observed variant to pinned Mesa, preserving raw hardware ID/revision/features/8contexts. Host tests/build/0undefined0LSE/header2GiB8CPU passed. BOOT-only image d906c58cc4f1899177969f83a6465aaacc5484dd44f1184f75a211ac7ab936e1 flashed/readbackPASS/rebootissued. New hardware GLES/triangle/UI remains unverified. Read docs/CONTINUE_IOS_S8_PLUS.md first. Local only, no push.
