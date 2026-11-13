@@ -6,8 +6,10 @@ set -eu
 : "${LDID:?Set LDID to the local signing tool}"
 src=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 out=${1:-libdream.gles.dylib}
+trace_flags=()
+if [ "${DREAM_MASK_TRACE:-0}" = 1 ]; then trace_flags=(-DDREAM_MASK_TRACE=1); fi
 "$XNU_CC" -arch arm64 -isysroot "$IOS_SDK" -O2 -DGLES_SILENCE_DEPRECATION -I"$src" \
- -dynamiclib -Wl,-x -install_name /redwood/lib/libdream.gles.dylib \
+ "${trace_flags[@]}" -dynamiclib -Wl,-x -install_name /redwood/lib/libdream.gles.dylib \
  -framework CoreFoundation -framework IOKit -framework IOSurface -lobjc \
  "$MESA_DYLIB" -o "$out" "$src/eagl.c" "$src/gl_osmesa.c" \
  "$src/surface_checksum.c" "$src/dream-gles-probe.c" "$src/ca-gl-bridge.c"

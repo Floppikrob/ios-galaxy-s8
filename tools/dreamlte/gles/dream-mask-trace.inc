@@ -1,3 +1,7 @@
+#ifndef DREAM_MASK_TRACE
+#define DREAM_MASK_TRACE 0
+#endif
+#if DREAM_MASK_TRACE
 /* Bounded observations of real shape draws. No shader/output substitutions.
  * Client memory is read through the task API; VBO/EBO offsets are bounds checked
  * against their GL buffer. All reads are diagnostic and stop after ten draws.
@@ -254,3 +258,13 @@ dream_mask_draw(struct eagl *e, GLenum mode, GLenum type, const void *indices, G
     if(o.active)dream_mask_pixels(&o,true);
     if(o.number)say("DREAM MASK END: draw=%u pixels_sampled=%u diagnostic_us=%llu bounded_total=%u\n",o.number,o.active,(unsigned long long)(now_us()-o.began),e->mask_draws);
 }
+
+#else
+/* Normal builds never sample or map draw inputs. */
+static void dream_mask_link(struct eagl *e, GLuint program) { (void)e; (void)program; }
+static void dream_mask_draw(struct eagl *e, GLenum mode, GLenum type, const void *indices, GLint first, GLsizei count)
+{
+    (void)e;
+    if (type) glDrawElements(mode,count,type,indices); else glDrawArrays(mode,first,count);
+}
+#endif
