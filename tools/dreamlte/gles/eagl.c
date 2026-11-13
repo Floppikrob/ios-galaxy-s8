@@ -4343,7 +4343,10 @@ static const char all_highp[] =
     "#define lowp highp\n"
     "#define mediump highp\n";
 
+#include "dream-mask-derivative.inc"
+
 static const char fragment_start[] =
+    DREAM_MASK_DERIVATIVE_GLSL
     "#define varying in\n"
     "#define texture2D texture\n"
     "#define texture2DProj textureProj\n"
@@ -4422,6 +4425,9 @@ my_glShaderSource(void *context, GLuint shader, GLsizei count, const GLchar *con
 	for (GLsizei i = 0; i < count; i++) {
 		strncat(text, strings[i], lengths != NULL && lengths[i] >= 0 ? (size_t)lengths[i] : strlen(strings[i]));
 	}
+    unsigned repaired = fragment ? dream_mask_derivative_fix(text) : 0;
+    static unsigned derivative_reports;
+    if (repaired && derivative_reports++ < 24) say("DREAM MASK DERIVATIVE: shader=%u functions=%u bounded-lane-path=1 guard-default=0\n",shader,repaired);
 	/* "#extension" lines must stay ahead of everything that is not the preprocessor's: they move to the top */
 	head = text + size;
 	strcpy(head, parts[0]);
