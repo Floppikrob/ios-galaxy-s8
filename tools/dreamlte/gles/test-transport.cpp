@@ -47,6 +47,16 @@ int main(){
  regs[0]=0x60a00001;regs[0x110]=1;
  for(unsigned as=0;as<8;as++)for(unsigned i=0;i<6;i++)regs[0x2400+as*0x40+dpf_as_offsets[i]]=0x80000000+as*256+i;
  dpf_backend_start();assert(hakios_mali_ready());
+ uint64_t product=0,revision=0;
+ assert(hakios_mali_parameter(0,&product)&&product==0x6000);
+ assert(hakios_mali_parameter(1,&revision)&&revision==1);
+ assert(regs[0]==0x60a00001); // Keep raw hardware identity unchanged.
+ assert(dpf_mesa_product(0x60000002)==0x6000);
+ assert(dpf_mesa_product(0x62210010)==0x6221); // Preserve G72's exact Mesa row.
+ assert(dpf_mesa_product(0x70930001)==0x7093);
+ assert(dpf_mesa_product(0x07200001)==0x0720);
+ assert(dpf_mesa_product(0x60a00003)==0x6000);
+
  assert(!hakios_mali_address(17*1024*1024,true));
  uint64_t va=hakios_mali_address(8192,true);assert(va>=0x2000000&&va<0x100000000ULL);
  assert(hakios_mali_map(va,0x8ffffe000ULL));assert(hakios_mali_map(va+4096,0x8fffff000ULL));

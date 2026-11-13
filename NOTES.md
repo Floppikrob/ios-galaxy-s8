@@ -1,3 +1,7 @@
+## Dream2lte newest trial — 2026-11-13 G71 product0170
+
+0169 hardware result: insertion was missing at actual exec; supplying it loaded Mesa/EAGL successfully. Probe selected softpipe, so EAGL unchanged and user's UI still broken. Found exact-model mismatch60a0 vs MesaG71row6000.0170 canonically reports only that observed variant to pinned Mesa, preserving raw hardware ID/revision/features/8contexts. Host tests/build/0undefined0LSE/header2GiB8CPU passed. BOOT-only image d906c58cc4f1899177969f83a6465aaacc5484dd44f1184f75a211ac7ab936e1 flashed/readbackPASS/rebootissued. New hardware GLES/triangle/UI remains unverified. Read docs/CONTINUE_IOS_S8_PLUS.md first. Local only, no push.
+
 ## Dream2lte newest installed trial — 2026-11-13 patch0169
 
 New GLES exec-environment kernel flashed to BOOT only with exact readback, adb reboot issued. GPU/2GiB/4KiB/8CPU/8blitAS/pipeline preserved; root dylibs unchanged. Imageff1e7fc98fbb73314717ab2b2463c4fb1a0579e4b39fd4fd12ee35e2e5c37407, kernel6bcc98b481584f2c99e5235c7dd490ec804adcb7b2d166df09dd2f64aecc829e. Runtime/environment/GLES/interface fixes still pending fresh TWRP log. Exact-path helper supplies missing launch settings and redirects dyld print to searching; possible xpcproxy loss remains a hypothesis. Read docs/CONTINUE_IOS_S8_PLUS.md first. Local only, no push.

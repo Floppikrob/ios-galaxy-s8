@@ -1,0 +1,25 @@
+--- a/iokit/Kernel/arm/DreamPanfrostBackend.inc
++++ b/iokit/Kernel/arm/DreamPanfrostBackend.inc
+@@ -78,10 +78,21 @@
+     IOLockUnlock(dmb_lock);
+ }
+ extern "C" void hakios_mali_tag(uint64_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t) {}
++/* Mesa25.0.7 has an exact G71 model row 0x6000, but Exynos8895 reads
++ * 0x60a0. Linux family matching ignores these architecture revision bits
++ * (id & 0xf00f). Only canonicalize this observed G71 variant for our Mesa
++ * user-client ABI; raw MMIO ID/revision/features and every other GPU ID stay
++ * unchanged. In particular do not generically mask the G72 ID 0x6221.
++ */
++static uint32_t dpf_mesa_product(uint32_t raw) {
++    uint32_t product=raw>>16;
++    return product==0x60a0 ? 0x6000 : product;
++}
+ extern "C" bool hakios_mali_parameter(uint32_t which,uint64_t *value) {
+     if(!hakios_mali_ready())return false;
+     static const uint16_t simple[]={0,0,0,0,0,0xe00,0x18,0x1c,4,8,12,16,20,0xac,0xa0,0xa4,0xa8,0x300,0xb0,0xb4,0xb8,0xbc};
+-    if(which==0){*value=dm_read(dmb_gpu,0)>>16;return true;}
++    if(which==0){uint32_t raw=dm_read(dmb_gpu,0);*value=dpf_mesa_product(raw);
++        IOLog("DREAM GLES: product raw=%x mesa=%x revision=%x (G71 compatibility)\n",raw>>16,(uint32_t)*value,raw&65535);return true;}
+     if(which==1){*value=dm_read(dmb_gpu,0)&65535;return true;}
+     if(which>=2&&which<=4){unsigned r=0x100+(which-2)*16;*value=dm_read(dmb_gpu,r)|((uint64_t)dm_read(dmb_gpu,r+4)<<32);return true;}
+     if(which>=22&&which<=37){*value=dm_read(dmb_gpu,0xc0+(which-22)*4);return true;}
