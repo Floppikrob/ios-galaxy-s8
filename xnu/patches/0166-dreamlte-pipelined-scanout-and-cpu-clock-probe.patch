@@ -1,0 +1,94 @@
+--- a/iokit/Kernel/arm/DreamDisplayIommu.inc
++++ b/iokit/Kernel/arm/DreamDisplayIommu.inc
+@@ -10,6 +10,11 @@
+ static bool df_active, df_failed;
+ static unsigned df_front, df_flip_count;
+ static SweetSurface *df_private2;
++static bool df_pipe,df_pending;
++static unsigned df_pending_target;
++static uint32_t df_pending_irq;
++static uint64_t df_pending_start;
++
+ static volatile uint32_t *df_m, *df_d, *df_i;
+ 
+ static void dream_display_iommu_prepare(SweetSurface *surface) {
+@@ -174,6 +179,19 @@
+     df_write(df_m,0,7);
+     if(!df_wait(df_m,8,1,1,20)) {df_write(df_m,0,4);return;}
+     df_write(df_m,0xc,(uint32_t)(root_pa>>12));df_write(df_m,0x10,1);df_write(df_m,0,5);
++    int pipe=0;PE_parse_boot_argn("s8flippipe",&pipe,sizeof(pipe));df_pipe=pipe!=0;
++    // Read-only CMU probe, Samsung cal-if/exynos8895/cmucal-sfr.c offsets.
++    for(unsigned cluster=0;cluster<2;cluster++) {
++        uintptr_t va=ml_io_map(cluster?0x16900000:0x16800000,0x2000);if(!va) continue;
++        volatile uint32_t *c=(volatile uint32_t *)va;
++        uint32_t pll=c[0x120/4],mux=c[0x1000/4],div=c[(cluster?0x1814:0x180c)/4];
++        unsigned m=(pll>>16)&1023,p=(pll>>8)&63,s=pll&7;
++        uint64_t khz=(!(mux&1)&&(pll&(1u<<31))&&(pll&(1u<<29))&&p)?
++            ((26000ULL*m/p)>>s)/((div&4095)+1):0;
++        IOLog("DREAM CPU CLOCK: CPUCL%u pll=%x mux=%x div=%x pll_path_est_khz=%llu (read only, zero=unknown path)\n",
++            cluster,pll,mux,div,khz);
++    }
++    IOLog("DREAM FLIP PIPE: enabled=%u GPU-copy-before-return=1 buffers-retained=1\n",df_pipe);
+     df_active=true;df_front=df_private2?2:0;
+     IOLog("DREAM FLIP CONT: enabled buffers=2 private=%u front=boot GPU=1\n",df_private2!=NULL);
+ }
+@@ -195,8 +213,43 @@
+         address,errors,df_i[1],df_d[0x70/4],df_d[0x60/4]);
+     return taken&&done&&!errors&&!df_m[0x60/4];
+ }
++// A completed GPU copy may be queued to scanout while the producer draws its
++// NEXT frame. Reuse of either scanout buffer is gated by confirmed completion.
++static bool df_finish_pending() {
++    if(df_failed) return false;
++    if(!df_pending) return true;
++    uint64_t begin=mach_absolute_time();
++    bool taken=df_wait(df_d,0x60,0x8000003f,0,100);
++    bool done=taken&&df_wait(df_d,0x4c,1u<<13,1u<<13,40);
++    df_write(df_d,0x40,df_pending_irq);
++    uint32_t dma=df_i[1]&0xaa0000u,mmu=df_m[0x60/4];
++    if(!taken||!done||dma||mmu) {
++        df_failed=true;
++        IOLog("DREAM FLIP PIPE: completion failed latch=%u done=%u DMA=%x MMU=%x; suppress writes\n",taken,done,dma,mmu);
++        return false;
++    }
++    df_front=df_pending_target;df_pending=false;
++    uint64_t blocked,age;
++    absolutetime_to_nanoseconds(mach_absolute_time()-begin,&blocked);
++    absolutetime_to_nanoseconds(mach_absolute_time()-df_pending_start,&age);
++    if(++df_flip_count<=4||df_flip_count%30==0)
++        IOLog("DREAM FLIP PIPE: completed=%u front=%u latch=1 retired=1 block_us=%llu observed_age_us=%llu DMA=0 MMU=0\n",
++            df_flip_count,df_front,blocked/1000,age/1000);
++    return true;
++}
++static void df_queue_frame(uint32_t address,unsigned target) {
++    df_pending_irq=df_d[0x40/4];
++    df_write(df_d,0x40,df_pending_irq|(1u<<13)|1u);
++    df_write(df_i,4,(df_i[1]&0xffffu)|0xab0000u);df_write(df_d,0x4c,1u<<13);
++    df_pending_start=mach_absolute_time();df_pending_target=target;df_pending=true;
++    df_write(df_i,0x40,address);df_write(df_i,0x44,address);
++    df_write(df_d,0x60,df_d[0x60/4]|0x8000003f);
++    if(df_flip_count<4||df_flip_count%30==0)
++        IOLog("DREAM FLIP PIPE: submitted=%u target=%u ready_GPU=1\n",df_flip_count+1,target);
++}
+ static bool dream_display_to_boot() {
+     if(!df_active) return !df_failed;
++    if(!df_finish_pending()) return false;
+     if(!df_failed && df_front==(df_private2?2u:0u) && !(df_d[0x60/4]&0x8000003f)) return true;
+     if(df_latch(0xcc000000)) {df_front=df_private2?2:0;return true;}
+     df_failed=true;
+@@ -214,6 +267,7 @@
+ static int dream_display_frame_copy(SweetSurface *src,SweetSurface *boot,unsigned w,unsigned h,unsigned sb,unsigned db) {
+     if(df_failed) return -1;
+     if(!df_active) return 0;
++    if(!df_finish_pending()) return -1;
+     unsigned target=df_private2?(df_front==0?1:0):1-df_front;
+     SweetSurface *dst=df_private2?(target?df_private2:sweet_stage_surface):(target?sweet_stage_surface:boot);
+     int ret=dream_gpu_frame_copy(src,dst,w,h,sb,db);
+@@ -240,6 +294,7 @@
+     }
+     uint64_t begin=mach_absolute_time();
+     uint32_t address=df_private2?(target?0x72000000:0x70000000):(target?0x70000000:0xcc000000);
++    if(df_pipe) {df_queue_frame(address,target);return 1;}
+     if(!df_latch(address)) {
+         // The requested buffer may be scanned even without confirmation. Never
+         // write either buffer again until a return to boot has been confirmed.
