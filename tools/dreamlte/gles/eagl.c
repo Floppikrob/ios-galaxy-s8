@@ -2421,6 +2421,7 @@ number_text(const float *values, size_t from, size_t count)
 }
 
 static void *ca_context;                /* CoreAnimation's GLContext */
+void hakios_gl_function_context(void *context) { ca_context = context; }
 static GLfloat function_values[90][20];
 static uint8_t function_given[90];
 
@@ -2431,7 +2432,7 @@ hakios_gl_function_values(void *context, unsigned function, unsigned index, size
 	static uint8_t said[90];
 
 	ca_context = context;
-	if (function >= 90 || index != 0 || components * count > 20) {
+	if (function >= 90 || index != 0 || !values || !components || components > 20 || !count || count > 20 / components) {
 		return;
 	}
 	/* (boot-arg glnumbers=1: every set of numbers a function is given that is not the one before,
@@ -4735,6 +4736,8 @@ install(void)
     dlopen("/System/Library/Frameworks/OpenGLES.framework/OpenGLES",RTLD_NOW|RTLD_LOCAL);
     Class class = objc_getClass("EAGLContext");
     if(!dream_gles_probe())return;
+    extern void dream_ca_gl_hooks(void);
+    dream_ca_gl_hooks();
 	unsigned replaced = 0;
 	char arguments[1024] = "";
 	size_t size = sizeof(arguments) - 1;

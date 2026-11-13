@@ -10,6 +10,6 @@ out=${1:-libdream.gles.dylib}
  -dynamiclib -Wl,-x -install_name /redwood/lib/libdream.gles.dylib \
  -framework CoreFoundation -framework IOKit -framework IOSurface -lobjc \
  "$MESA_DYLIB" -o "$out" "$src/eagl.c" "$src/gl_osmesa.c" \
- "$src/surface_checksum.c" "$src/dream-gles-probe.c"
+ "$src/surface_checksum.c" "$src/dream-gles-probe.c" "$src/ca-gl-bridge.c"
 "$LDID" -S "$out"
 echo "Built and locally signed $out"

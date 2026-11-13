@@ -1,0 +1,54 @@
+--- a/iokit/Kernel/arm/DreamSurfaceAddress.inc
++++ b/iokit/Kernel/arm/DreamSurfaceAddress.inc
+@@ -36,15 +36,36 @@
+     IOMemoryDescriptor *memory = IOMemoryDescriptor::withAddressRange(start, length, kIODirectionInOut, owner);
+     if (!memory) return kIOReturnNoMemory;
+     IOReturn ret = memory->prepare();
++    bool snapshot = false;
++    if (ret == KERN_PROTECTION_FAILURE) {
++        // Immutable image pages cannot be pinned for device writes. Pin them
++        // read-only in the actual owner, then copy into an owned snapshot.
++        memory->release();
++        memory = IOMemoryDescriptor::withAddressRange(start, length, kIODirectionOut, owner);
++        if (!memory) return kIOReturnNoMemory;
++        ret = memory->prepare(); snapshot = true;
++    }
+     if (ret != kIOReturnSuccess) { memory->release(); return ret; }
+     uint64_t previous = (uint64_t)OSAddAtomic64(length, (volatile SInt64 *)&sweet_surface_wired);
+     if (previous + length > SWEET_SURFACE_WIRED_MAX) {
+         OSAddAtomic64(-(SInt64)length, (volatile SInt64 *)&sweet_surface_wired);
+         memory->complete(); memory->release(); return kIOReturnNoMemory;
+     }
++    if (snapshot) {
++        IOBufferMemoryDescriptor *copy = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
++            kIODirectionInOut | kIOMemoryKernelUserShared, (vm_size_t)length, page_size);
++        bool copied = copy && memory->readBytes(0, copy->getBytesNoCopy(), length) == length;
++        memory->complete(); memory->release();
++        if (!copied) {
++            OSSafeReleaseNULL(copy);
++            OSAddAtomic64(-(SInt64)length, (volatile SInt64 *)&sweet_surface_wired);
++            return kIOReturnNoMemory;
++        }
++        memory = copy;
++    }
+     s->allocSize = (uint32_t)length; // Exact external span, never its rounded allocation size.
+     s->memory = memory;
+-    s->userMemoryPrepared = true;
++    s->userMemoryPrepared = !snapshot;
+     s->mapCache = kIOMapDefaultCache;
+     return kIOReturnSuccess;
+ }
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -744,8 +744,9 @@
+     static unsigned address_reports;
+     if (externalAddress && address_reports++ < 24) {
+         char name[32]; proc_selfname(name,sizeof(name));
+-        IOLog("DREAM SURF ADDRESS: %s id=%u %ux%u fmt=%x bytes=%u caller-pixels=%u ret=%x\n",
+-            name,s->id,s->width,s->height,s->pixelFormat,s->allocSize,s->userMemoryPrepared,ret);
++        IOLog("DREAM SURF ADDRESS: %s id=%u %ux%u fmt=%x bytes=%u caller-pixels=%u readonly-copy=%u ret=%x\n",
++            name,s->id,s->width,s->height,s->pixelFormat,s->allocSize,s->userMemoryPrepared,
++            ret==kIOReturnSuccess && !s->userMemoryPrepared,ret);
+     }
+ 	if (ret != kIOReturnSuccess || sweet_surface_creates_logged < 64) {
+ 		char name[32];

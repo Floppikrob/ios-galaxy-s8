@@ -5,14 +5,15 @@
 #include <map>
 #include <string>
 #include <vector>
-using IOReturn=int;using task_t=uintptr_t;using SInt64=int64_t;
-constexpr int kIOReturnSuccess=0,kIOReturnBadArgument=1,kIOReturnNoMemory=2,kIOReturnNoResources=3,kIOReturnUnsupported=4;
-constexpr int kIODirectionInOut=3,kIOMemoryKernelUserShared=4,kIOMapDefaultCache=0;
+using IOReturn=int;using task_t=uintptr_t;using SInt64=int64_t;using vm_size_t=uint64_t;
+constexpr int kIOReturnSuccess=0,kIOReturnBadArgument=11,kIOReturnNoMemory=12,kIOReturnNoResources=13,kIOReturnUnsupported=14;
+constexpr int kIODirectionInOut=3,kIODirectionOut=1,kIOMemoryKernelUserShared=4,kIOMapDefaultCache=0,KERN_PROTECTION_FAILURE=2;
 constexpr unsigned SWEET_SURFACE_MAX_PROPS=65536,SWEET_SURFACE_MAX_ALLOC=256u<<20,page_size=4096;
 constexpr uint64_t SWEET_SURFACE_WIRED_MAX=1536ull<<20;constexpr task_t kernel_task=1;
 static uint64_t sweet_surface_wired;static unsigned sweet_surface_creates_logged;
 static int prepares,completes,external_frees,buffer_allocations,publishes;
 static bool fail_prepare,fail_factory,fail_publish;static task_t actual_owner;
+static bool readonly_source,short_read,fail_copy;
 static uint64_t actual_address,actual_length;
 static int64_t OSAddAtomic64(int64_t n,volatile int64_t*p){int64_t old=*p;*p=old+n;return old;}
 struct OSObject{virtual ~OSObject(){};virtual void release(){};void free(){}};
@@ -24,22 +25,22 @@ struct OSDictionary:OSObject{
 #define OSDynamicCast(type,p) dynamic_cast<type*>(p)
 #define OSSafeReleaseNULL(p) do{if(p){(p)->release();p=nullptr;}}while(0)
 struct IOMemoryDescriptor:OSObject{
- uint64_t address=0,length=0;bool external=false;
+ uint64_t address=0,length=0;bool external=false;int direction=0;
  static IOMemoryDescriptor*withAddressRange(uint64_t a,uint64_t n,int dir,task_t owner){
-  assert(dir==kIODirectionInOut);actual_owner=owner;actual_address=a;actual_length=n;
+  assert(dir==kIODirectionInOut||dir==kIODirectionOut);actual_owner=owner;actual_address=a;actual_length=n;
   if(fail_factory)return nullptr;
-  auto*m=new IOMemoryDescriptor;m->address=a;m->length=n;m->external=true;return m;
+  auto*m=new IOMemoryDescriptor;m->address=a;m->length=n;m->external=true;m->direction=dir;return m;
  }
- int prepare(){++prepares;return fail_prepare?kIOReturnNoMemory:0;}
+ int prepare(){++prepares;return fail_prepare?kIOReturnNoMemory:readonly_source&&direction==kIODirectionInOut?KERN_PROTECTION_FAILURE:0;}
  void complete(){++completes;}
  uint64_t getLength(){return length;}
- size_t readBytes(unsigned off,void*out,unsigned n){memcpy(out,(void*)(uintptr_t)(address+off),n);return n;}
+ size_t readBytes(unsigned off,void*out,unsigned n){memcpy(out,(void*)(uintptr_t)(address+off),n);return short_read?n-1:n;}
  void release()override{external_frees+=external;delete this;}
 };
 struct IOBufferMemoryDescriptor:IOMemoryDescriptor{
  std::vector<uint8_t>bytes;
  static IOBufferMemoryDescriptor*inTaskWithOptions(task_t owner,int,unsigned n,unsigned){
-  assert(owner==kernel_task);++buffer_allocations;auto*m=new IOBufferMemoryDescriptor;m->bytes.resize(n);m->length=n;return m;
+  assert(owner==kernel_task);if(fail_copy)return nullptr;++buffer_allocations;auto*m=new IOBufferMemoryDescriptor;m->bytes.resize(n);m->length=n;m->address=(uintptr_t)m->bytes.data();return m;
  }
  void*getBytesNoCopy(){return bytes.data();}
 };
@@ -106,5 +107,14 @@ int main(int argc,char**){
  sweet_surface_wired=SWEET_SURFACE_WIRED_MAX-1;n=completes;assert(client.create(&args)==kIOReturnNoMemory&&!returned&&completes==n+1&&sweet_surface_wired==SWEET_SURFACE_WIRED_MAX-1);sweet_surface_wired=0;
  fail_publish=true;n=completes;assert(client.create(&args)==kIOReturnNoResources&&!returned&&completes==n+1&&sweet_surface_wired==0);fail_publish=false;
  assert(buffer_allocations==1);
+ readonly_source=true;n=completes;
+ assert(client.create(&args)==0&&returned&&!returned->userMemoryPrepared&&actual_owner==0x55&&buffer_allocations==2);
+ assert(completes==n+1&&returned->allocSize==pixels.size()&&sweet_surface_wired==pixels.size());
+ auto*copy=dynamic_cast<IOBufferMemoryDescriptor*>(returned->memory);assert(copy&&copy->bytes==pixels);
+ auto snapshot=copy->bytes;pixels[82]^=0xff;assert(copy->bytes==snapshot);
+ returned->release();returned=nullptr;assert(sweet_surface_wired==0);
+ short_read=true;n=completes;assert(client.create(&args)==kIOReturnNoMemory&&!returned&&sweet_surface_wired==0&&completes==n+1);short_read=false;
+ fail_copy=true;n=completes;assert(client.create(&args)==kIOReturnNoMemory&&!returned&&sweet_surface_wired==0&&completes==n+1);fail_copy=false;
+ readonly_source=false;assert(client.create(&args)==0&&returned&&returned->userMemoryPrepared);returned->release();returned=nullptr;assert(sweet_surface_wired==0);
  puts("PASS: production create/address/free; actual icon bytes shared and never zeroed; caller task; exact external span; fresh allocation preserved; publication and mapping/prepare/quota/type/range failures");
 }

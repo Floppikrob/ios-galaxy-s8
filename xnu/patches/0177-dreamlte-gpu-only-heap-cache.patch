@@ -1,0 +1,103 @@
+--- a/iokit/Kernel/arm/DreamPanfrostClient.inc
++++ b/iokit/Kernel/arm/DreamPanfrostClient.inc
+@@ -180,6 +180,7 @@
+ 	uint64_t address, size;
+ 	uint64_t last_seq;                      /* the last job given it (kPanfrostSubmit's bo_handles) */
+ 	bool prepared;
++    bool gpuOnlyHeap, heapPrimed, cpuMapped; // Any CPU mapping permanently restores full cache sync.
+ };
+ 
+ static IOLock * gMaliLock;
+@@ -390,6 +391,8 @@
+ 	}
+ 	OSIncrementAtomic((SInt32 *) &gMaliBuffers);
+ 	b->size = size;
++    b->gpuOnlyHeap = (flags & PANFROST_BO_HEAP) != 0;
++    b->heapPrimed = false; b->cpuMapped = false;
+ 	return b;
+ }
+ 
+@@ -528,6 +531,7 @@
+ 	IOLockLock(gMaliLock);
+ 	b = buffer(type);
+ 	if (b != NULL) {
++        if (!dpf_begin_cpu_mapping(b)) { IOLockUnlock(gMaliLock); return kIOReturnNotReady; }
+ 		b->memory->retain();
+ 		*memory = b->memory;
+ 		/* (fb_zc: the scan-out pool is no memory of the kernel's, and would be mapped as a device's: write-combined) */
+@@ -660,6 +664,8 @@
+ 
+ 		fSubmits++;
+ 		gMaliSubmits++;
++        uint64_t cacheBegin = mach_absolute_time();
++        uint64_t cleanBefore = dpf_clean_bytes, invalidBefore = dpf_invalidate_bytes, skipBefore = dpf_heap_skips;
+ 		/* first what the processors wrote into the surfaces it names, out to memory (flushSurface) */
+ 		for (uint32_t i = 0; gMaliFlush && r.submit.jc != 0 && i < r.submit.bo_handle_count && i < 4096; i += 64) {
+ 			uint32_t handles[64];
+@@ -675,9 +681,11 @@
+ 				}
+ 			}
+ 		}
++        uint64_t cacheSubmitted = mach_absolute_time();
+ 		if (r.submit.jc != 0) {
+ 			seq = hakios_mali_enqueue(r.submit.jc, r.submit.requirements & PANFROST_JD_REQ_FS);
+ 		}
++        uint64_t cacheCompleted = mach_absolute_time();
+ 		for (uint32_t i = 0; seq != 0 && i < r.submit.bo_handle_count && i < 4096; i += 64) {
+ 			uint32_t handles[64];
+ 			uint32_t n = r.submit.bo_handle_count - i < 64 ? r.submit.bo_handle_count - i : 64;
+@@ -696,6 +704,16 @@
+ 				}
+ 			}
+ 		}
++        uint64_t cacheDone = mach_absolute_time();
++        if (r.submit.jc && (fSubmits <= 8 || fSubmits % 120 == 0)) {
++            uint64_t cleanNs, jobNs, invalidateNs;
++            absolutetime_to_nanoseconds(cacheSubmitted-cacheBegin,&cleanNs);
++            absolutetime_to_nanoseconds(cacheCompleted-cacheSubmitted,&jobNs);
++            absolutetime_to_nanoseconds(cacheDone-cacheCompleted,&invalidateNs);
++            IOLog("DREAM GLES CACHE: submit=%u clean=%llu invalidate=%llu heap_skip=%llu clean_us=%llu job_us=%llu invalidate_us=%llu\n",
++                fSubmits,dpf_clean_bytes-cleanBefore,dpf_invalidate_bytes-invalidBefore,dpf_heap_skips-skipBefore,
++                cleanNs/1000,jobNs/1000,invalidateNs/1000);
++        }
+ 		if(r.submit.jc && !seq)ret=kIOReturnIOError;
+ 		r.submit.jc = seq;
+ 		break;
+--- a/iokit/Kernel/arm/DreamPanfrostCache.inc
++++ b/iokit/Kernel/arm/DreamPanfrostCache.inc
+@@ -2,8 +2,13 @@
+  * G71 is non-coherent: cover ordinary BOs as well as imported surfaces before
+  * submission and after synchronous completion. Never invalidate live DMA.
+  */
++static uint64_t dpf_clean_bytes, dpf_invalidate_bytes, dpf_heap_skips;
+ static void dpf_sync_buffer(struct mali_buffer *b, bool to_gpu) {
+     if (!b || !b->memory) return;
++    bool heap = b->gpuOnlyHeap && !b->cpuMapped && !b->surface;
++    // This BO has never been mapped to a CPU client. Publish allocator writes
++    // once, then leave GPU-owned heap/cache lines alone. Never invalidate live DMA.
++    if (heap && (b->heapPrimed || !to_gpu)) { ++dpf_heap_skips; return; }
+     void *address=NULL;
+     uint64_t length=b->size;
+     if (b->surface) {
+@@ -14,8 +19,19 @@
+         if(m) address=m->getBytesNoCopy();
+     }
+     if(!address || !length || length>b->memory->getLength()) return;
+-    if(to_gpu) dm_clean(address,length);
+-    else dm_invalidate(address,length);
++    if(to_gpu) {
++        dm_clean(address,length); dpf_clean_bytes += length;
++        if (heap) b->heapPrimed = true;
++    } else { dm_invalidate(address,length); dpf_invalidate_bytes += length; }
+ }
+ static void flushSubmit(struct mali_buffer *b) { dpf_sync_buffer(b,true); }
+ static void flushComplete(struct mali_buffer *b) { dpf_sync_buffer(b,false); }
++
++static bool dpf_begin_cpu_mapping(struct mali_buffer *b) {
++    // Never invalidate or expose storage still owned by a failed GPU chain.
++    if (!b || !hakios_mali_ready()) return false;
++    bool used = b->gpuOnlyHeap && !b->cpuMapped && b->heapPrimed;
++    b->cpuMapped = true;
++    if (used) flushComplete(b);
++    return true;
++}
