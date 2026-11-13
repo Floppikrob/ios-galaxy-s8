@@ -1,0 +1,80 @@
+--- /dev/null
++++ b/iokit/Kernel/arm/DreamDisplayIommu.inc
+@@ -0,0 +1,58 @@
++/* Exynos SYSMMU v5/v6 table preparation, no hardware writes.
++ * Samsung exynos-iommu.h: PTE PA >> 4, PT_BASE_PPN PA >> 12.
++ * Retain tables/storage until reboot. Existing translations must not be replaced
++ * until the runtime version, owner and complete mappings have been established.
++ */
++static void dm_clean(void *,unsigned);
++static IOBufferMemoryDescriptor *df_tables;
++static void dream_display_iommu_prepare(SweetSurface *surface) {
++    static const uint64_t mmu_pa[3]={0x12900000,0x12910000,0x12920000};
++    for(unsigned i=0;i<3;i++) {
++        IOLog("DREAM SYSMMU: reading unit=%u base=%llx\n",i,mmu_pa[i]);
++        uintptr_t va=ml_io_map(mmu_pa[i],0x1000);if(!va) continue;
++        volatile uint32_t *r=(volatile uint32_t *)va;
++        IOLog("DREAM SYSMMU: unit=%u control=%x config=%x status=%x pt_ppn=%x version=%x capa=%x capa1=%x irq=%x\n",
++            i,r[0],r[1],r[2],r[3],r[0x34/4],r[0x30/4],r[0x38/4],r[0x60/4]);
++    }
++    const uint64_t bytes=surface->memory->getLength();
++    const unsigned sections=(unsigned)((bytes+0xfffff)>>20);
++    const unsigned table_bytes=(16384+sections*1024+4095)&~4095u;
++    if(!bytes || sections>32) return;
++    df_tables=IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
++        kIODirectionInOut|kIOMemoryPhysicallyContiguous,table_bytes,16384);
++    if(!df_tables) {IOLog("DREAM SYSMMU TABLE: allocation failed\n");return;}
++    uint32_t *root=(uint32_t *)df_tables->getBytesNoCopy();
++    bzero(root,table_bytes);
++    IOByteCount span=0;uint64_t pa=df_tables->getPhysicalSegment(0,&span,kIOMemoryMapperNone);
++    bool ok=pa && !(pa&16383) && pa+table_bytes<=(1ULL<<36);
++    for(unsigned off=0;off<table_bytes && ok;off+=4096) {
++        uint64_t actual=df_tables->getPhysicalSegment(off,&span,kIOMemoryMapperNone);
++        if(actual!=pa+off) ok=false;
++    }
++    // Identity entries preserve 32-bit boot addresses in this candidate only.
++    // Do NOT install over an existing active translation table.
++    for(unsigned i=0;i<4096;i++) root[i]=(i<<16)|2;
++    const uint32_t iova=0x70000000;
++    for(unsigned i=0;i<sections;i++) root[(iova>>20)+i]=(uint32_t)((pa+16384+i*1024)>>4)|1;
++    uint32_t *leaf=root+4096;unsigned pages=0;
++    for(uint64_t off=0;off<bytes && ok;off+=4096) {
++        uint64_t actual=surface->memory->getPhysicalSegment(off,&span,kIOMemoryMapperNone);
++        if(!actual || (actual&4095) || actual+4096>(1ULL<<36) || span<4096) {ok=false;break;}
++        leaf[off/4096]=(uint32_t)(actual>>4)|2;pages++;
++    }
++    // Walk the candidate hierarchy for EVERY buffer page and compare with the MD.
++    for(uint64_t off=0;off<bytes && ok;off+=4096) {
++        uint32_t va=iova+(uint32_t)off, first=root[va>>20];
++        uint64_t l2=(uint64_t)(first&~0x3fu)<<4;
++        if((first&7)!=1 || l2<pa+16384 || l2+1024>pa+table_bytes) {ok=false;break;}
++        uint32_t pte=((uint32_t *)((uint8_t *)root+l2-pa))[(va>>12)&255];
++        uint64_t actual=surface->memory->getPhysicalSegment(off,&span,kIOMemoryMapperNone);
++        if((pte&3)!=2 || ((uint64_t)(pte&~255u)<<4)!=actual) ok=false;
++    }
++    unsigned identity_bad=0;
++    for(unsigned i=0;i<4096;i++) if((i<(iova>>20)||i>=(iova>>20)+sections) && root[i]!=((i<<16)|2)) identity_bad++;
++    ok=ok&&!identity_bad;
++    df_tables->prepare(kIODirectionOut);dm_clean(root,table_bytes);
++    IOLog("DREAM SYSMMU TABLE: %s root_pa=%llx root_ppn=%llx iova=%x bytes=%llu pages=%u sections=%u identity_bad=%u hardware_enabled=0 flip=0\n",
++        ok?"PASS":"FAIL",pa,pa>>12,iova,bytes,pages,sections,identity_bad);
++}
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -427,6 +427,7 @@
+ #if defined(DREAMLTE)
+ static bool sweet_stage_attempted;
+ static SweetSurface *sweet_stage_surface; // Retain DMA storage until reboot.
++#include "DreamDisplayIommu.inc"
+ static void sweet_stage_probe(SweetSurface *src,unsigned w,unsigned h,unsigned sb,unsigned db) {
+     if(sweet_stage_attempted) return;
+     sweet_stage_attempted=true;
+@@ -461,6 +462,8 @@
+     }
+     IOLog("DREAM STAGE: GPU_result=%d samples=%u mismatch=%u %s (real source, separate cached buffer, no flip)\n",
+         result,samples,bad,result>0&&!bad?"PASS":"FAIL");
++    int iommu=0;PE_parse_boot_argn("s8iommu",&iommu,sizeof(iommu));
++    if(iommu && result>0 && !bad) dream_display_iommu_prepare(sweet_stage_surface);
+ }
+ #endif
+ 
