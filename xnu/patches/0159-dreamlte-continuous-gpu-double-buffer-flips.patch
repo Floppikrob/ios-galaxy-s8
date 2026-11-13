@@ -1,0 +1,153 @@
+--- a/iokit/Kernel/arm/DreamDisplayIommu.inc
++++ b/iokit/Kernel/arm/DreamDisplayIommu.inc
+@@ -6,6 +6,11 @@
+ static void dm_clean(void *,unsigned);
+ static IOBufferMemoryDescriptor *df_tables;
+ static void dream_display_flip_trial(uint64_t);
++static void df_start_cont(uint64_t);
++static bool df_active, df_failed;
++static unsigned df_front, df_flip_count;
++static volatile uint32_t *df_m, *df_d, *df_i;
++
+ static void dream_display_iommu_prepare(SweetSurface *surface) {
+     // Runtime photograph confirmed 0x12900000 version 0x70000011 (v7).
+     // Reading the v5 capability register at +0x30 raises an external abort.
+@@ -121,4 +126,74 @@
+     IOLog("DREAM FLIP TRIAL: %s rollback_latch=%u old_frame_retired=%u original_mmu=%u base=%x retained=1 continuous=0\n",
+         taken&&frame&&!fault&&retired&&mmu_restored?"PASS":"FAIL",
+         restored,retired,mmu_restored,i[0x40/4]);
++    if(taken&&frame&&!fault&&retired&&mmu_restored) df_start_cont(root_pa);
+ }
++
++// Only entered after the full one-frame round trip has succeeded this boot.
++static void df_start_cont(uint64_t root_pa) {
++    int cont=0;PE_parse_boot_argn("s8flipcont",&cont,sizeof(cont));if(!cont) return;
++    df_m=(volatile uint32_t *)ml_io_map(0x12900000,0x1000);
++    df_d=(volatile uint32_t *)ml_io_map(0x12860000,0x1000);
++    df_i=(volatile uint32_t *)ml_io_map(0x128b1000,0x1000);
++    if(!df_m||!df_d||!df_i||df_m[0]!=4||df_m[3]||df_i[16]!=0xcc000000) return;
++    df_write(df_m,0,7);
++    if(!df_wait(df_m,8,1,1,20)) {df_write(df_m,0,4);return;}
++    df_write(df_m,0xc,(uint32_t)(root_pa>>12));df_write(df_m,0x10,1);df_write(df_m,0,5);
++    df_active=true;df_front=0;
++    IOLog("DREAM FLIP CONT: enabled front=boot back=stage buffers=2 GPU=1\n");
++}
++static bool dream_display_is_active() { return df_active; }
++// fPresentLock serializes both swaps and power-off transitions.
++static bool df_latch(uint32_t address) {
++    uint32_t saved=df_d[0x40/4];df_write(df_d,0x40,saved|(1u<<13)|1u);
++    df_write(df_i,0x40,address);df_write(df_i,0x44,address);
++    df_write(df_d,0x60,df_d[0x60/4]|0x8000003f);
++    bool taken=df_wait(df_d,0x60,0x8000003f,0,100);
++    df_write(df_d,0x4c,1u<<13);
++    bool done=taken&&df_wait(df_d,0x4c,1u<<13,1u<<13,40);
++    df_write(df_d,0x40,saved);
++    return taken&&done&&!df_m[0x60/4];
++}
++static bool dream_display_to_boot() {
++    if(!df_active) return !df_failed;
++    if(!df_failed && df_front==0 && !(df_d[0x60/4]&0x8000003f)) return true;
++    if(df_latch(0xcc000000)) {df_front=0;return true;}
++    df_failed=true;
++    IOLog("DREAM FLIP CONT: return-to-boot failed; retain DMA, suppress writes\n");
++    return false;
++}
++static bool dream_display_frame_ok(const uint8_t *rec) {
++    if(df_failed) return false;
++    bool full=get32(rec,0x104)==1 && get32(rec,0x64)==0 && get32(rec,0x68)==0 &&
++        get32(rec,0x6c)==1125 && get32(rec,0x70)==2436 &&
++        get32(rec,0xc4)==0 && get32(rec,0xc8)==0 && get32(rec,0xcc)==1125 && get32(rec,0xd0)==2436;
++    if(!full && !dream_display_to_boot()) return false;
++    return true;
++}
++static int dream_display_frame_copy(SweetSurface *src,SweetSurface *boot,unsigned w,unsigned h,unsigned sb,unsigned db) {
++    if(df_failed) return -1;
++    if(!df_active) return 0;
++    unsigned target=1-df_front;
++    SweetSurface *dst=target?sweet_stage_surface:boot;
++    int ret=dream_gpu_frame_copy(src,dst,w,h,sb,db);
++    if(ret<=0) {
++        bool safe=dream_display_to_boot();
++        IOLog("DREAM FLIP CONT: GPU copy unavailable result=%d boot_safe=%u\n",ret,safe);
++        return ret<0||!safe?-1:0;
++    }
++    uint64_t begin=mach_absolute_time();
++    if(!df_latch(target?0x70000000:0xcc000000)) {
++        // The requested buffer may be scanned even without confirmation. Never
++        // write either buffer again until a return to boot has been confirmed.
++        df_failed=true;
++        IOLog("DREAM FLIP CONT: latch timeout/fault front=%u target=%u MMU=%x; writes suppressed, DMA retained\n",
++            df_front,target,df_m[0x60/4]);
++        return -1;
++    }
++    df_front=target;
++    uint64_t ns;absolutetime_to_nanoseconds(mach_absolute_time()-begin,&ns);
++    if(++df_flip_count<=4 || df_flip_count%30==0)
++        IOLog("DREAM FLIP CONT: frame=%u front=%u latch=1 retired=1 wait_us=%llu mmu_irq=%x\n",
++            df_flip_count,df_front,ns/1000,df_m[0x60/4]);
++    return 1;
++}
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -80,6 +80,10 @@
+ #define SWEET_FB_VSYNC_US               sweet_fb_vsync_us
+ static uint32_t sweet_fb_vsync_us = 16667;
+ static bool sweet_fb_owned;
++#if defined(DREAMLTE)
++static bool dream_display_is_active();
++static bool dream_display_to_boot();
++#endif
+ #if defined(ARM64_BOARD_CONFIG_A5XELTE)
+ #define SWEET_FB_DOT_PITCH              424     /* 1080 pixels across 5.2 inches */
+ #else
+@@ -306,12 +310,19 @@
+ 		}
+ 		IOLockUnlock(fb->fLock);
+ 		if (step <= 6) {
++            IOLockLock(fb->fPresentLock);
++#if defined(DREAMLTE)
++            if(dream_display_is_active() && !dream_display_to_boot()) {
++                IOLockUnlock(fb->fPresentLock);sender->setTimeoutUS(SWEET_FB_VSYNC_US);return;
++            }
++#endif
+ 			for (uint32_t y = 0; y < fb->fHeight; y++) {
+ 				volatile uint32_t *row = (volatile uint32_t *)(fb->fPixels + (uint64_t)y * fb->fRowBytes);
+ 				for (uint32_t x = 0; x < fb->fWidth; x++) {
+ 					row[x] = step < 6 ? (row[x] >> 1) & 0x7f7f7f7f : 0;
+ 				}
+ 			}
++            IOLockUnlock(fb->fPresentLock);
+ 		}
+ 		sender->setTimeoutUS(SWEET_FB_VSYNC_US);
+ 		return;
+@@ -552,6 +563,12 @@
+ 		}
+ 		fViewportCleared=true;
+ 	}
++#if defined(DREAMLTE)
++    if(!dream_display_frame_ok(rec)) { IOLockUnlock(fPresentLock);return; }
++    bool flip_full = mask==1 && get32(rec,0x64)==0 && get32(rec,0x68)==0 &&
++        get32(rec,0xc4)==0 && get32(rec,0xc8)==0 &&
++        get32(rec,0xcc)==fLogicalW && get32(rec,0xd0)==fLogicalH;
++#endif
+ 	for (uint32_t layer = 0; layer < SWEET_FB_LAYERS; layer++) {
+ 		uint32_t id = get32(rec, 0x54 + 4 * layer);
+ 		const uint8_t *a = rec + 0x64 + 16 * layer;
+@@ -631,8 +648,16 @@
+ 			    w == (int32_t)(fRenderX?fLogicalW:fWidth) && h == (int32_t)(fRenderX?fLogicalH:fHeight) &&
+ 			    s->pixelFormat == SWEET_FB_FORMAT_BGRA) {
+                 if(fRenderX) sweet_stage_probe(s,1368,fHeight,s->bytesPerRow,fRowBytes);
+-				gpu_copy = dream_gpu_frame_copy(s, fScanoutSurface, fRenderX?1368:w, fHeight, s->bytesPerRow, fRowBytes);
++                if(flip_full) gpu_copy=dream_display_frame_copy(s,fScanoutSurface,fRenderX?1368:w,fHeight,s->bytesPerRow,fRowBytes);
++                if(gpu_copy==0) {
++                    if(!dream_display_to_boot()) gpu_copy=-1;
++                    else gpu_copy=dream_gpu_frame_copy(s,fScanoutSurface,fRenderX?1368:w,fHeight,s->bytesPerRow,fRowBytes);
++                }
+ 			}
++#endif
++#if defined(DREAMLTE)
++            // Also cover CPU fallback for unexpected formats/partial surfaces.
++            if(gpu_copy==0 && !dream_display_to_boot()) gpu_copy=-1;
+ #endif
+             if(gpu_copy>0) sweet_fb_gpu_layers++;
+             else if(gpu_copy==0) sweet_fb_cpu_layers++;
