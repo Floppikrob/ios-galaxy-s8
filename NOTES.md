@@ -1,3 +1,7 @@
+## Dream2lte installed rollback / active repair — 2026-11-13
+
+0171 now hardware-proved GPU GLES triangle13PASS, but backboardd crashes12times at identical PC1d1b01e70/FAR30;0UIpresents. Slowboot was crash loop, not measured allocation latency. Saved fresh ring and failing BOOT, then restored full working0169 BOOT SHA256d0af6aafd2c4158f7e8f4f559f9fbb1776ef8fbbe123cb6b9f928ff809b91747/readbackPASS/rebootissued. GPU/2GiB/8AS intact, root unchanged. Build sources still0171; installed kernel0169. User explicitly requested trying to fix integration. Investigate exact IOSurface/EDR metadata function: crash stack starts lock -> IOSurface -> CA::Render::iosurface_get_edr_factor -> wrap_buffer/retain_image. b3a8 attachment refused just before crash, causality unproven. Read latest handoff first. Local only/no push.
+
 ## Dream2lte urgent status — 2026-11-13 slow boot0171
 
 User reports0171 console-only boot>~10min vs usual~2min. ADBdevice unavailable; cause/stuck stage unknown. No new flash/reboot. Return TWRP, capture fresh ring/photo first, then restore known booting0169 full BOOT boot-before-g71-product.img SHA256d0af6aafd2c4158f7e8f4f559f9fbb1776ef8fbbe123cb6b9f928ff809b91747 (locally reverified). GPU/2GiB/8AS retained.0170 backup before cached-BO is crashing;0171 is not working checkpoint. Read docs/CONTINUE_IOS_S8_PLUS.md first. Original GLES/UI fix remains unfinished; don't keep making speculative allocation trials before usable boot/evidence restored.

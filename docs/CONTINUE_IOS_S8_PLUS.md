@@ -2,7 +2,7 @@
 
 ## Актуальное продолжение GLES / Mesa / Panfrost — 2026-11-13
 
-Статус: Пользователь сообщает0171 не дошёл доUI почти10мин (раньше~2мин); ADBне видит устройство. Точный этап/причина неизвестны. Новых записей/перезагрузок не выполнялось. Нужно вернутьTWRP, сначала сохранить журнал/фото, затем восстановить рабочий0169 BOOT boot-before-g71-product.img SHA d0af6aaf... (GPU/2GiB/8AS).0170panic и0171долгая загрузка НЕ рабочие checkpoint.
+Статус: Свежий0171 журнал подтвердил GPU GLES triangle13PASS, но backboardd12SIGSEGV/13starts и0UIpresents. Причина долгой загрузки — compositor crash loop. После сохранения журнала/аварийногоBOOT восстановлен полный рабочий0169 BOOT, SHA d0af6aaf...readbackPASS, adb reboot. GPU/2GiB/8AS сохранены; rootнеизменён. Пользователь просит продолжить исправление; локально исследуется IOSurface/EDR metadata crash. Исходники0171, установленное ядро0169.
 
 Пользователь попросил продолжить предыдущий чат «Продолжить портирование iOS»; последняя задача — попробовать OpenGL ES и Mesa/Panfrost для отрисовки интерфейса. GPU не отключать, сохранить 2048 MiB, 4 KiB страницы, 8 CPU и 8 GPU-контекстов. Частоты/напряжения не повышались. Предыдущий ход завершился прерыванием до записи системы/нового BOOT; файлы передачи тогда не были обновлены.
 
@@ -77,6 +77,19 @@ User reports last cached-BO0171 trial remains on console after nearly10minutes v
 Next action: user returns phone to TWRP, preferably retains photo of last console lines. Capture fresh ring BEFORE any rollback, compare freshness against prior identical e8e9c508... ring, inspect DREAM GLES BO allocate/allocated/ready plus product/probe/chain/panic. Then restore the known booting0169 checkpoint rather than launching another speculative trial. Keep GPU/2GiB/8AS enabled. The full BOOT outputs/boot-before-g71-product.img41943040B SHA256d0af6aafd2c4158f7e8f4f559f9fbb1776ef8fbbe123cb6b9f928ff809b91747 was re-verified locally now. It ran UI with working GPU-copy/pipeline/8AS; Mesa loaded but software probe gated EAGL. Root libraries have remained unchanged, so BOOT-only rollback is applicable. This fallback does not solve original UI bugs or full GLES rendering.
 
 Do NOT restore boot-before-cached-bo.img as a working fallback: it is0170 with first-BO photo panic. Current0171 BOOT backup/readback existence does not establish it works. Do not disable GPU, reduce RAM or silently classify software rendering as acceleration. Need understand the actual memory/cache/addressing failure before attempting more new allocation changes. User has NOT requested abandoning GLES work; first restore usable boot and retain evidence. No whole-system comparison. Local notes only, no push.
+
+
+## 2026-11-13:0171 hardware triangle PASS, backboardd crash loop,0169 restored
+
+User returned TWRP after console loops. Fresh cached-bo-loop.bin/.txt total1171457Bflush47; freshness/new BO markers confirmed. Cached allocation128MiB and smaller BOs now complete, Mesa renderer Mali-G71(Panfrost) GLES3.1, real vertex/tiler JS1 and fragment JS0 finish with restore_AS0=1 and8context limit.13triangle probes center255,0,0,255 corner0,0,255,255 error0 PASS. Kernel panic/GPU failure not logged. This establishes real GPU GLES rendering of test geometry, NOT CoreAnimation UI success.
+
+EAGL8/8method replacements install, real Mesa ES3 context created. However backboardd executes13times, crashes12times with sameSIGSEGV FAR30 PC1d1b01e70 LR1a3983ffc, and0UIpresent calls. One client closes after exactly2completed probe chains each iteration; no unfinished jobs. Thus slow boot was a userland compositor crash loop, not proof of a10minute BO allocation. Before crash IOSurface b3a8 planes2 attachment is refused; relation to crash not yet proved. Source-level cache-symbol resolution: PC __os_unfair_lock_lock_slow in libsystem_platform, LR nearest local symbol __iosConnectInitalize in IOSurface, caller CA::Render::iosurface_get_edr_factor, then CA::WindowServer::IOSurface::wrap_buffer, CA::OGL::GLESContext::retain_image/bind_image_impl. Need resolve exported IOSurface function and exact EDR metadata path before next fix.
+
+Saved failing fullBOOT boot-cached-bo-loop-before-rollback.img41943040B SHA2560e4983611e68ba5b2a308e785df126f65fda7d519f38774aabe2bf1e2aa5bdcb; installed prefix16211984B stillc71f7649a0869398ad086d4bbd47991d993cf43bf40cac7cbfc54eecfbcbcba1. This is hardware-triangle-working but UI-crashing evidence, not preferred daily BOOT. No need discard0170/0171 source improvements, but integration not usable.
+
+As promised, after journal/backup capture restored known booting0169 fullBOOT boot-before-g71-product.img41943040B. Dream2lte/sda7size/currentSHA/uploadSHA checked, full BOOT readback SHA256d0af6aafd2c4158f7e8f4f559f9fbb1776ef8fbbe123cb6b9f928ff809b91747 matched; adb reboot issued. Root/recovery/EFS/GPT unchanged. GPUcopy/2GiB/4KiB/8CPU/8AS remain in restored checkpoint; Mesa loads but softpipe gate keeps old EAGL renderer. New physical GUI confirmation after rollback pending. Source build tree still contains0171, installedBOOT now0169—do NOT conflate them. No whole-system comparison.
+
+User subsequently explicitly requested trying to fix crash. Continue local targeted IOSurface/EDR/EAGL diagnosis while phone boots restored image; no new hardware trial until concrete validated change prepared. Artifact cached-bo-loop-result.json has counts/rollback. This supersedes prior unknown-cause/slowboot entries. Local only/no push.
 
 ## Результат аппаратного теста GLES — 2026-11-13
 
