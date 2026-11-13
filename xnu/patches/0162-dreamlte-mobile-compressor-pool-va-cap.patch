@@ -1,0 +1,20 @@
+--- a/osfmk/vm/vm_compressor.c
++++ b/osfmk/vm/vm_compressor.c
+@@ -868,6 +868,17 @@
+ 		compressor_pool_size = max_mem;
+ 	}
+ 	compressor_pool_multiplier = 1;
++#endif
++#if defined(DREAMLTE)
++	/* The compact ARM64 heap cannot reserve the macOS 16x-RAM pool.
++	 * Match the mobile default: cap the in-core compressor pool at RAM.
++	 * Keep explicit vm_compression_limit overrides and all swap accounting.
++	 */
++	if (vm_compression_limit == 0 && compressor_pool_size > max_mem) {
++		compressor_pool_size = max_mem;
++	}
++	printf("DREAM COMPRESSOR: RAM=%llu pool=%llu bytes (compact VA cap)\n",
++	    (unsigned long long)max_mem, (unsigned long long)compressor_pool_size);
+ #endif
+ 	if (compressor_pool_size > compressor_pool_max_size) {
+ 		compressor_pool_size = compressor_pool_max_size;
