@@ -1,0 +1,146 @@
+--- a/iokit/Kernel/arm/DreamDisplayIommu.inc
++++ b/iokit/Kernel/arm/DreamDisplayIommu.inc
+@@ -9,6 +9,7 @@
+ static void df_start_cont(uint64_t);
+ static bool df_active, df_failed;
+ static unsigned df_front, df_flip_count;
++static SweetSurface *df_private2;
+ static volatile uint32_t *df_m, *df_d, *df_i;
+ 
+ static void dream_display_iommu_prepare(SweetSurface *surface) {
+@@ -25,7 +26,13 @@
+     if(major!=7) {IOLog("DREAM SYSMMU TABLE: unsupported runtime major, no changes\n");return;}
+     const uint64_t bytes=surface->memory->getLength();
+     const unsigned sections=(unsigned)((bytes+0xfffff)>>20);
+-    const unsigned table_bytes=(16384+sections*1024+4095)&~4095u;
++    int v2=0;PE_parse_boot_argn("s8flipv2",&v2,sizeof(v2));
++    if(v2) {
++        df_private2=sweet_surface_create_buffer(1440,2960,5760,SWEET_FB_FORMAT_BGRA);
++        if(!df_private2) {IOLog("DREAM SYSMMU TABLE: second buffer allocation failed\n");return;}
++    }
++    const unsigned buffers=df_private2?2:1;
++    const unsigned table_bytes=(16384+buffers*sections*1024+4095)&~4095u;
+     if(!bytes || sections>32) return;
+     df_tables=IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
+         kIODirectionInOut|kIOMemoryPhysicallyContiguous,table_bytes,16384);
+@@ -42,24 +49,36 @@
+     // Do NOT install over an existing active translation table.
+     for(unsigned i=0;i<4096;i++) root[i]=(i<<16)|2;
+     const uint32_t iova=0x70000000;
+-    for(unsigned i=0;i<sections;i++) root[(iova>>20)+i]=(uint32_t)((pa+16384+i*1024)>>4)|1;
+-    uint32_t *leaf=root+4096;unsigned pages=0;
+-    for(uint64_t off=0;off<bytes && ok;off+=4096) {
+-        uint64_t actual=surface->memory->getPhysicalSegment(off,&span,kIOMemoryMapperNone);
+-        if(!actual || (actual&4095) || actual+4096>(1ULL<<36) || span<4096) {ok=false;break;}
+-        leaf[off/4096]=(uint32_t)(actual>>4)|2;pages++;
+-    }
+-    // Walk the candidate hierarchy for EVERY buffer page and compare with the MD.
+-    for(uint64_t off=0;off<bytes && ok;off+=4096) {
+-        uint32_t va=iova+(uint32_t)off, first=root[va>>20];
+-        uint64_t l2=(uint64_t)(first&~0x3fu)<<4;
+-        if((first&7)!=1 || l2<pa+16384 || l2+1024>pa+table_bytes) {ok=false;break;}
+-        uint32_t pte=((uint32_t *)((uint8_t *)root+l2-pa))[(va>>12)&255];
+-        uint64_t actual=surface->memory->getPhysicalSegment(off,&span,kIOMemoryMapperNone);
+-        if((pte&3)!=2 || ((uint64_t)(pte&~255u)<<4)!=actual) ok=false;
++    unsigned pages=0;
++    for(unsigned buffer=0;buffer<buffers;buffer++) {
++        SweetSurface *s=buffer?df_private2:surface;
++        uint32_t base=iova+buffer*0x02000000;
++        for(unsigned i=0;i<sections;i++) root[(base>>20)+i]=(uint32_t)((pa+16384+(buffer*sections+i)*1024)>>4)|1;
++        uint32_t *leaf=root+4096+buffer*sections*256;
++        for(uint64_t off=0;off<bytes && ok;off+=4096) {
++            uint64_t actual=s->memory->getPhysicalSegment(off,&span,kIOMemoryMapperNone);
++            if(!actual || (actual&4095) || actual+4096>(1ULL<<36) || span<4096) {ok=false;break;}
++            leaf[off/4096]=(uint32_t)(actual>>4)|2;pages++;
++        }
++        for(uint64_t off=0;off<bytes && ok;off+=4096) {
++            uint32_t va=base+(uint32_t)off,first=root[va>>20];
++            uint64_t l2=(uint64_t)(first&~0x3fu)<<4;
++            if((first&7)!=1 || l2<pa+16384 || l2+1024>pa+table_bytes) {ok=false;break;}
++            uint32_t pte=((uint32_t *)((uint8_t *)root+l2-pa))[(va>>12)&255];
++            uint64_t actual=s->memory->getPhysicalSegment(off,&span,kIOMemoryMapperNone);
++            if((pte&3)!=2 || ((uint64_t)(pte&~255u)<<4)!=actual) ok=false;
++        }
+     }
+     unsigned identity_bad=0;
+-    for(unsigned i=0;i<4096;i++) if((i<(iova>>20)||i>=(iova>>20)+sections) && root[i]!=((i<<16)|2)) identity_bad++;
++    for(unsigned i=0;i<4096;i++) {
++        bool mapped=false;
++        for(unsigned n=0;n<buffers;n++) {
++            unsigned first=(iova>>20)+n*32;
++            if(i>=first && i<first+sections) mapped=true;
++        }
++        if(!mapped && root[i]!=((i<<16)|2)) identity_bad++;
++    }
++    IOLog("DREAM SYSMMU BUFFERS: count=%u private_scanout=%u iova0=70000000 iova1=72000000\n",buffers,df_private2!=NULL);
+     ok=ok&&!identity_bad;
+     df_tables->prepare(kIODirectionOut);dm_clean(root,table_bytes);
+     IOLog("DREAM SYSMMU TABLE: %s root_pa=%llx root_ppn=%llx iova=%x bytes=%llu pages=%u sections=%u identity_bad=%u hardware_enabled=0 flip=0\n",
+@@ -139,25 +158,26 @@
+     df_write(df_m,0,7);
+     if(!df_wait(df_m,8,1,1,20)) {df_write(df_m,0,4);return;}
+     df_write(df_m,0xc,(uint32_t)(root_pa>>12));df_write(df_m,0x10,1);df_write(df_m,0,5);
+-    df_active=true;df_front=0;
+-    IOLog("DREAM FLIP CONT: enabled front=boot back=stage buffers=2 GPU=1\n");
++    df_active=true;df_front=df_private2?2:0;
++    IOLog("DREAM FLIP CONT: enabled buffers=2 private=%u front=boot GPU=1\n",df_private2!=NULL);
+ }
+ static bool dream_display_is_active() { return df_active; }
+ // fPresentLock serializes both swaps and power-off transitions.
+ static bool df_latch(uint32_t address) {
+     uint32_t saved=df_d[0x40/4];df_write(df_d,0x40,saved|(1u<<13)|1u);
++    // Clear BEFORE commit. Do not discard the completion observed during latch.
++    df_write(df_d,0x4c,1u<<13);
+     df_write(df_i,0x40,address);df_write(df_i,0x44,address);
+     df_write(df_d,0x60,df_d[0x60/4]|0x8000003f);
+     bool taken=df_wait(df_d,0x60,0x8000003f,0,100);
+-    df_write(df_d,0x4c,1u<<13);
+     bool done=taken&&df_wait(df_d,0x4c,1u<<13,1u<<13,40);
+     df_write(df_d,0x40,saved);
+     return taken&&done&&!df_m[0x60/4];
+ }
+ static bool dream_display_to_boot() {
+     if(!df_active) return !df_failed;
+-    if(!df_failed && df_front==0 && !(df_d[0x60/4]&0x8000003f)) return true;
+-    if(df_latch(0xcc000000)) {df_front=0;return true;}
++    if(!df_failed && df_front==(df_private2?2u:0u) && !(df_d[0x60/4]&0x8000003f)) return true;
++    if(df_latch(0xcc000000)) {df_front=df_private2?2:0;return true;}
+     df_failed=true;
+     IOLog("DREAM FLIP CONT: return-to-boot failed; retain DMA, suppress writes\n");
+     return false;
+@@ -173,16 +193,32 @@
+ static int dream_display_frame_copy(SweetSurface *src,SweetSurface *boot,unsigned w,unsigned h,unsigned sb,unsigned db) {
+     if(df_failed) return -1;
+     if(!df_active) return 0;
+-    unsigned target=1-df_front;
+-    SweetSurface *dst=target?sweet_stage_surface:boot;
++    unsigned target=df_private2?(df_front==0?1:0):1-df_front;
++    SweetSurface *dst=df_private2?(target?df_private2:sweet_stage_surface):(target?sweet_stage_surface:boot);
+     int ret=dream_gpu_frame_copy(src,dst,w,h,sb,db);
+     if(ret<=0) {
+         bool safe=dream_display_to_boot();
+         IOLog("DREAM FLIP CONT: GPU copy unavailable result=%d boot_safe=%u\n",ret,safe);
+         return ret<0||!safe?-1:0;
+     }
++    // Validate both destinations while the selected one is still off-screen.
++    if(df_flip_count<8 || df_flip_count%120==0) {
++        const uint8_t *sv=(const uint8_t *)src->kernelAddress()+src->offset;
++        const uint8_t *dv=(const uint8_t *)dst->kernelAddress();
++        uint32_t sh=2166136261u,dh=2166136261u;unsigned samples=0,bad=0,white=0;
++        for(unsigned y=0;y<h;y+=17) for(unsigned x=0;x<w;x+=13) {
++            uint32_t expected=((const uint32_t *)(sv+(uint64_t)(y*609/740)*sb))[x*125/152];
++            uint32_t actual=((const uint32_t *)(dv+(uint64_t)y*db+144))[x];
++            sh=(sh^expected)*16777619u;dh=(dh^actual)*16777619u;
++            samples++;if(expected!=actual)bad++;if((actual&0xffffff)==0xffffff)white++;
++        }
++        IOLog("DREAM BUFFER CHECK: frame=%u target=%u samples=%u mismatch=%u source_hash=%x dest_hash=%x white=%u\n",
++            df_flip_count+1,target,samples,bad,sh,dh,white);
++        if(bad) {df_failed=true;IOLog("DREAM FLIP CONT: pixel mismatch before latch; writes suppressed\n");return -1;}
++    }
+     uint64_t begin=mach_absolute_time();
+-    if(!df_latch(target?0x70000000:0xcc000000)) {
++    uint32_t address=df_private2?(target?0x72000000:0x70000000):(target?0x70000000:0xcc000000);
++    if(!df_latch(address)) {
+         // The requested buffer may be scanned even without confirmation. Never
+         // write either buffer again until a return to boot has been confirmed.
+         df_failed=true;
