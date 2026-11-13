@@ -2,7 +2,7 @@
 
 ## Актуальное продолжение GLES / Mesa / Panfrost — 2026-11-13
 
-Статус: Обновление root (46 диапазонов, 20316160B) и новый BOOT прошиты, все изменённые диапазоны и префикс BOOT совпали при чтении с телефона. Полную 16GiB сверку устройства пользователь явно отменил; она остановлена, partial SHA отброшен. adb reboot выполнен. Аппаратные GLES/интерфейс ещё НЕ проверены; нужен отчёт пользователя и возврат TWRP.
+Статус: Проверен свежий аппаратный запуск: ядро/transport G71/HakiosMali стартовали, но Mesa и EAGL-адаптер НЕ загрузились в backboardd; GLES-клиентов/цепочек/triangle probe нет. GPU-копирование, 2GiB/4KiB/8CPU/8AS и pipeline работают. GLES-отрисовка и ускорение НЕ подтверждены. Телефон оставлен в TWRP, новых прошивок/перезагрузок в ходе проверки нет.
 
 Пользователь попросил продолжить предыдущий чат «Продолжить портирование iOS»; последняя задача — попробовать OpenGL ES и Mesa/Panfrost для отрисовки интерфейса. GPU не отключать, сохранить 2048 MiB, 4 KiB страницы, 8 CPU и 8 GPU-контекстов. Частоты/напряжения не повышались. Предыдущий ход завершился прерыванием до записи системы/нового BOOT; файлы передачи тогда не были обновлены.
 
@@ -21,6 +21,18 @@ Mesa 25.0.7 (softpipe,panfrost), arm64 iOS16.5 SDK. libOSMesa.8.dylib SHA256 a9c
 Следующий аппаратный анализ: fresh ring из sda27 skip13487482 count1025 bs4096 -> sweet-log.py. Искать DREAM GLES transport ready, HakiosMali client/BO, real chain PASS restore_AS0=1, DREAM GLES PROBE renderer/triangle PASS, установленные EAGL методы и реальные UI frames. Проверить RAM/page size, контексты, DMA/GPU/MMU fault, panic/backboardd crashes. Triangle PASS сам по себе ещё не доказывает UI acceleration; сравнить UI/load с gles-baseline.txt и получить visual report пользователя. Никаких обещаний FPS.
 
 Текущие deliverables/скрипты: Windows C:/Users/rybce/Documents/Codex/2026-11-13/new-chat/outputs и work. Исторические данные предыдущего чата C:/Users/rybce/Documents/Codex/2026-11-12/new-chat/outputs. Репо WSL /home/rybce/S8Port/ios-galaxy-s8 branch dream2lte-port; сборка /home/rybce/S8Port/linux-xnu/s8-buildtree. Userland исходники/build.sh/PROVENANCE сохранены tools/dreamlte/gles. Не коммитить дампы, бинарные библиотеки, SDK/Apple binaries или серийный номер. Локальные выбранные коммиты, без push.
+
+## Результат аппаратного теста GLES — 2026-11-13
+
+Fresh outputs/gles-result.bin/.txt: ring total755696B flush84, журнал с uptime до870189ms. Новый transport ready root885f08000 и HakiosMali service подтверждены. AMFI bridge registered1 error0; два policy result0. Но ни одного «a client opened the GPU», GLES chain PASS или DREAM GLES PROBE. 572 dyld print entry fragments реконструированы из31-byte backboardd stderr: libdream.gles.dylib / libOSMesa.8.dylib отсутствуют. Значит пользовательский GLES backend не активировался; отсутствие triangle нельзя выдавать за неуспешный GPU triangle, он вообще не запускался. GPU-копирование готовых CPU-кадров — отдельная работа, уже действовавшая ранее. Надпись DREAM LAYER PERF gpu=120 относится к blitter, НЕ доказательство GLES/CoreAnimation rendering.
+
+Точечное read-only чтение актуального HFS подтвердило: launchd cache SHA256 a51cb00abcbe2b97080c2cd6c2f25755987f389c3f25afe9479689db8715a9e9, EnvironmentVariables backboardd всё ещё содержит DYLD_INSERT_LIBRARIES=/redwood/lib/libdream.gles.dylib, PAN_MESA_DEBUG=noafbc, DYLD_PRINT_LIBRARIES=1. Библиотеки есть в каталоге, размеры547008 и14908784. Не объявлять причину «файлы не установлены». Следующий блокер — выяснить, почему dyld пропустил/не загрузил insertion; точная причина пока НЕ установлена. Это НЕ установленная несовместимость Panfrost с G71. Полная сверка16GiB не запускалась.
+
+Runtime RAM2147483648 page4096, free506052+wired18236=524288pages; limit8 AS_PRESENTff и AS0..7 реально mapped. Pipelined private scanout работает, completion до2520, 29 pixel checks537950samples mismatch0, 0 held/context_capacity rejects, в журнале нет GPU/MMU/DMA/flip failures или panic. backboardd exec1, не обнаружен crash loop. Температуры максимальные залогированные M2 62C/A53 61C, это журнал датчиков, не thermal-throttling assertion; частоты неизменны1066/1053MHz.
+
+21×120 present blocks mean7957.57us median7797us. Непосредственный gles-baseline был всего1×120 mean8682us за261442ms vs новый870189ms; такой разный сценарий и startup/tracing не дают доказательства ускорения. Ранее подтверждённый pipeline mean7925us (3 блока) практически совпадает с новым7958us; не FPS и не input-to-photon latency. Активные CPU samples backboardd>=100% median274.65% (98/300) vs baseline250.4% (17/112), peak523.1% vs360.3%; сценарии разные, нельзя приписывать регрессию GLES. CPU-композиция остаётся дорогой; GPU shader blit median2416us vs2479us, это копирование готовых кадров.
+
+outputs/gles-hardware-comparison.json, gles-device-connection.json и reconstruct stderr сохранены локально. Новый full BOOT checkpoint boot-working-2g-gpu8-gles-transport-only.img41943040B SHA256 f50789ee4eba8dedc9805217918754db6e0f160a2a3617daca8b25b94df6dbdd. Префикс16211984B по-прежнему563b1ecb06198d7e52faca7fe712ce5505e66d7367277214e524ed63e211d0a1. Это checkpoint работающего GPU-copy + kernel GLES service, НЕ рабочего Mesa renderer. Предыдущие backup сохранены. В этом ходе только read/log/backup/docs; flash/reboot/root changes не выполнялись, GPU/2GiB/8AS сохранены. Local commit без push.
 
 ## Предыдущая история (более старые статусы ниже)
 

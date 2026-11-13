@@ -1,3 +1,7 @@
+## Dream2lte latest runtime result — 2026-11-13
+
+Fresh hardware trial boots with2GiB/4KiB/8CPU/8blitAS and working GPU copies/pipeline. G71 transport service starts, but the Mesa/EAGL libraries are absent from backboardd dyld mapping trace; zero GLES clients/chains/probe. GLES rendering is NOT working/verified and no acceleration is established (present7.958ms vs historical pipeline7.925ms).537950 sampled pixels match, no GPU/DMA/panic/held errors. User asked only to verify; no new flash/reboot/root changes. Phone remains TWRP. Read docs/CONTINUE_IOS_S8_PLUS.md latest result first. Next blocker is userland dylib loading, not proven GPU job failure.
+
 ## Dream2lte active handoff — 2026-11-13 GLES trial
 
 The S8+ task resumed in a new chat. Mesa/EAGL root delta and kernel patch0168 have been installed with changed-range/BOOT readback and adb reboot issued. Runtime GLES/UI remains unverified; next is user UI exercise and fresh TWRP ring. GPU/2GiB/4KiB/8CPU/8blitAS preserved. Whole16GiB device comparison was explicitly cancelled by user; partial hash discarded. Read docs/CONTINUE_IOS_S8_PLUS.md and the latest docs/dream2lte-fts-transport.md entry first. Windows outputs now 2026-11-13/new-chat, prior backups remain 2026-11-12/new-chat. Never publish local dumps or claim hardware acceleration from build/flash alone.
