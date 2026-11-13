@@ -1,0 +1,118 @@
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -444,6 +444,37 @@
+ static bool sweet_stage_attempted;
+ static SweetSurface *sweet_stage_surface; // Retain DMA storage until reboot.
+ #include "DreamDisplayIommu.inc"
++#include "DreamB3a8.h"
++// Single serialized BGRA stage. Retained until reboot, including on GPU/DMA faults.
++static SweetSurface *dream_b3a8_stage;
++static SweetSurface *dream_b3a8_for_display(SweetSurface *source, unsigned width, unsigned height) {
++    if (source->pixelFormat != 0x62336138) return source;
++    if (dream_gpu_frame_copy(NULL, NULL, 0, 0, 0, 0) < 0 || source->planeCount != 2 ||
++        source->width != width || source->height != height || !source->memory) return NULL;
++    uintptr_t base = source->kernelAddress();
++    uint64_t length = source->memory->getLength();
++    const sweet_surface_plane *r = &source->planes[0], *a = &source->planes[1];
++    if (!base || r->offset > length || a->offset > length ||
++        r->width < width || a->width < width || r->height < height || a->height < height ||
++        !dream_b3a8_span(r->size, r->bytesPerRow, width, height, 4) ||
++        !dream_b3a8_span(a->size, a->bytesPerRow, width, height, 1) ||
++        r->size > length - r->offset || a->size > length - a->offset ||
++        (r->offset < a->offset ? r->size > a->offset - r->offset : a->size > r->offset - a->offset)) return NULL;
++    if (!dream_b3a8_stage) dream_b3a8_stage = sweet_surface_create_buffer(width, height,
++        (width * 4 + 255) & ~255u, SWEET_FB_FORMAT_BGRA);
++    SweetSurface *stage = dream_b3a8_stage;
++    if (!stage || !stage->memory || stage->width != width || stage->height != height) return NULL;
++    uintptr_t out = stage->kernelAddress();
++    if (!dream_b3a8_unpack((uint8_t *)out, stage->memory->getLength(), stage->bytesPerRow,
++        (const uint8_t *)(base + r->offset), r->size, r->bytesPerRow,
++        (const uint8_t *)(base + a->offset), a->size, a->bytesPerRow, width, height, 0)) return NULL;
++    static unsigned reports;
++    if (reports++ < 8) IOLog("DREAM B3A8: surface=%u -> BGRA stage=%u %ux%u GPU-copy-kept=1\n",
++        source->id, stage->id, width, height);
++    stage->retain(); // caller releases the substituted reference at the end of present.
++    return stage;
++}
++
+ static void sweet_stage_probe(SweetSurface *src,unsigned w,unsigned h,unsigned sb,unsigned db) {
+     if(sweet_stage_attempted) return;
+     sweet_stage_attempted=true;
+@@ -609,6 +640,9 @@
+ 		}
+ #if defined(DREAMLTE)
+         if(!HakiosMaliDrawn(s,500)) {IOLog("DREAM GLES: surface %u not finished, hold previous frame\n",s->id);s->release();continue;}
++        SweetSurface *display = dream_b3a8_for_display(s, fLogicalW, fLogicalH);
++        if (!display) { IOLog("DREAM B3A8: invalid layout or unavailable stage, hold frame\n"); s->release(); continue; }
++        if (display != s) { s->release(); s = display; }
+ #endif
+ 		uintptr_t src = s->kernelAddress();
+ 		uint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;
+--- /dev/null
++++ b/iokit/Kernel/arm/DreamB3a8.h
+@@ -0,0 +1,65 @@
++/* SDR bridge for uncompressed IOSurface 'b3a8': X2R10G10B10 wide RGB + A8.
++ * RGB code 384 is black; an 8-bit SDR step is two codes (white 894).
++ * The extra range is clipped on the 8-bit panel. No premultiplication change.
++ * Callers own locking, GPU completion, allocation, and disjoint storage.
++ */
++#ifndef DREAM_B3A8_H
++#define DREAM_B3A8_H
++#include <stddef.h>
++#include <stdint.h>
++
++static inline int
++dream_b3a8_span(size_t bytes, size_t row, uint32_t w, uint32_t h, unsigned bpe)
++{
++    if (!w || !h || w > 16384 || h > 16384 || (bpe != 1 && bpe != 4)) return 0;
++    uint64_t used = (uint64_t)w * bpe;
++    return row >= used && (uint64_t)row <= UINT64_MAX / h &&
++        (uint64_t)row * (h - 1) + used <= bytes;
++}
++
++static inline uint8_t dream_b3a8_sdr(unsigned code)
++{
++    return code <= 384 ? 0 : code >= 894 ? 255 : (uint8_t)((code - 384 + 1) / 2);
++}
++
++static inline int
++dream_b3a8_unpack(uint8_t *bgra, size_t nb, size_t rb,
++    const uint8_t *rgb, size_t nr, size_t rr, const uint8_t *alpha, size_t na, size_t ra,
++    uint32_t w, uint32_t h, int invert)
++{
++    if (!bgra || !rgb || !alpha || !dream_b3a8_span(nb, rb, w, h, 4) ||
++        !dream_b3a8_span(nr, rr, w, h, 4) || !dream_b3a8_span(na, ra, w, h, 1)) return 0;
++    for (uint32_t y = 0; y < h; ++y) {
++        size_t sy = invert ? h - 1 - y : y;
++        const uint8_t *r = rgb + sy * rr, *a = alpha + sy * ra;
++        uint8_t *b = bgra + (size_t)y * rb;
++        for (uint32_t x = 0; x < w; ++x, r += 4, b += 4) {
++            uint32_t v = (uint32_t)r[0] | (uint32_t)r[1] << 8 | (uint32_t)r[2] << 16 | (uint32_t)r[3] << 24;
++            b[0] = dream_b3a8_sdr(v & 1023);
++            b[1] = dream_b3a8_sdr((v >> 10) & 1023);
++            b[2] = dream_b3a8_sdr((v >> 20) & 1023);
++            b[3] = a[x];
++        }
++    }
++    return 1;
++}
++
++static inline int
++dream_b3a8_pack(uint8_t *rgb, size_t nr, size_t rr, uint8_t *alpha, size_t na, size_t ra,
++    const uint8_t *bgra, size_t nb, size_t rb, uint32_t w, uint32_t h, int invert)
++{
++    if (!bgra || !rgb || !alpha || !dream_b3a8_span(nb, rb, w, h, 4) ||
++        !dream_b3a8_span(nr, rr, w, h, 4) || !dream_b3a8_span(na, ra, w, h, 1)) return 0;
++    for (uint32_t y = 0; y < h; ++y) {
++        size_t dy = invert ? h - 1 - y : y;
++        uint8_t *r = rgb + dy * rr, *a = alpha + dy * ra;
++        const uint8_t *b = bgra + (size_t)y * rb;
++        for (uint32_t x = 0; x < w; ++x, r += 4, b += 4) {
++            uint32_t v = (384u + 2u * b[0]) | (384u + 2u * b[1]) << 10 | (384u + 2u * b[2]) << 20;
++            r[0] = (uint8_t)v; r[1] = (uint8_t)(v >> 8); r[2] = (uint8_t)(v >> 16); r[3] = (uint8_t)(v >> 24);
++            a[x] = b[3];
++        }
++    }
++    return 1;
++}
++#endif

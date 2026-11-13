@@ -7,7 +7,7 @@ set -eu
 src=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 out=${1:-libdream.gles.dylib}
 "$XNU_CC" -arch arm64 -isysroot "$IOS_SDK" -O2 -DGLES_SILENCE_DEPRECATION -I"$src" \
- -dynamiclib -install_name /redwood/lib/libdream.gles.dylib \
+ -dynamiclib -Wl,-x -install_name /redwood/lib/libdream.gles.dylib \
  -framework CoreFoundation -framework IOKit -framework IOSurface -lobjc \
  "$MESA_DYLIB" -o "$out" "$src/eagl.c" "$src/gl_osmesa.c" \
  "$src/surface_checksum.c" "$src/dream-gles-probe.c"

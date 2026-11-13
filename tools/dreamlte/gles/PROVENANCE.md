@@ -15,3 +15,5 @@ g++ -std=c++17 -Wall -Wextra -Werror -Wno-format -I/path/to/xnu/iokit/Kernel/arm
 ```
 
 -Wno-format handles the Linux/Darwin difference in uint64_t printf typedefs; it does not alter production code.
+
+2026-11-13: Local b3a8 SDR display bridge added after actual CoreAnimation output attachment was refused. CPU pack/unpack and readback are an initial correctness path; full HDR/gamut and UI acceleration are not claimed. dream_b3a8.h is identical to kernel DreamB3a8.h in patch0174; production extraction tests enforce this. -Wl,-x strips local nonexported symbols to fit existing adapter file data without HFS metadata edits.

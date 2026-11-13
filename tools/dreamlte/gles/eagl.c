@@ -229,10 +229,13 @@ struct group_texture {
 static int group_vibrant_on = 1;        /* boot-arg glgroup=0 */
 static unsigned group_covered, group_laid, group_flattened;    /* (glframes=1) this frame's */
 
+#include "dream_b3a8.h"
+
 /* A texture that stands for an IOSurface. */
 struct image {
 	GLuint texture;
 	IOSurfaceRef surface;
+	bool b3a8;                      /* RGB10 wide + separate alpha; copied through BGRA8 */
 	bool target;                    /* drawn into (attachImage) rather than shown (texImageIOSurface) */
 	bool invert, drawn;
 	bool shared;                    /* the texture is the surface's memory: nothing to copy */
@@ -900,7 +903,7 @@ surface_mirrored(struct eagl *e, struct image *image)
 	IOSurfaceRef surface = image->surface;
 	GLint bound = 0;
 
-	if (!blit_targets || !share_surfaces || !image->target || image->alpha_first ||
+	if (image->b3a8 || !blit_targets || !share_surfaces || !image->target || image->alpha_first ||
 	    image->format != GL_BGRA || image->type != GL_UNSIGNED_BYTE || image->plane != 0 ||
 	    (size_t)image->width != IOSurfaceGetWidth(surface) || (size_t)image->height != IOSurfaceGetHeight(surface)) {
 		return false;
@@ -928,7 +931,7 @@ surface_shared(struct eagl *e, struct image *image)
 {
 	IOSurfaceRef surface = image->surface;
 
-	if (!share_surfaces || image->invert || image->alpha_first || image->format != GL_BGRA || image->type != GL_UNSIGNED_BYTE ||
+	if (image->b3a8 || !share_surfaces || image->invert || image->alpha_first || image->format != GL_BGRA || image->type != GL_UNSIGNED_BYTE ||
 	    image->plane != 0 || (size_t)image->width != IOSurfaceGetWidth(surface) ||
 	    (size_t)image->height != IOSurfaceGetHeight(surface) ||
 	    !hakios_gl_surface_texture(e->gl, IOSurfaceGetID(surface))) {
@@ -1009,6 +1012,30 @@ surface_changed(struct eagl *e, struct image *image)
 	return true;
 }
 
+/* Validate both planes against the complete mapped allocation before any access. */
+static bool
+b3a8_planes(IOSurfaceRef surface, uint8_t **rgb, size_t *nr, size_t *rr,
+    uint8_t **alpha, size_t *na, size_t *ra, uint32_t w, uint32_t h)
+{
+    uintptr_t base = (uintptr_t)IOSurfaceGetBaseAddress(surface);
+    size_t alloc = IOSurfaceGetAllocSize(surface);
+    if (!base || IOSurfaceGetPlaneCount(surface) != 2 || IOSurfaceGetPixelFormat(surface) != 'b3a8') return false;
+    for (unsigned i = 0; i < 2; ++i) {
+        uintptr_t ptr = (uintptr_t)IOSurfaceGetBaseAddressOfPlane(surface, i);
+        size_t row = IOSurfaceGetBytesPerRowOfPlane(surface, i);
+        if (ptr < base || ptr - base > alloc || IOSurfaceGetWidthOfPlane(surface, i) < w ||
+            IOSurfaceGetHeightOfPlane(surface, i) < h ||
+            !dream_b3a8_span(alloc - (ptr - base), row, w, h, i ? 1 : 4)) return false;
+        if (!i) { *rgb = (uint8_t *)ptr; *nr = alloc - (ptr - base); *rr = row; }
+        else { *alpha = (uint8_t *)ptr; *na = alloc - (ptr - base); *ra = row; }
+    }
+    uintptr_t r = (uintptr_t)*rgb, a = (uintptr_t)*alpha;
+    uint64_t rs = (uint64_t)*rr * (h - 1) + (uint64_t)w * 4;
+    uint64_t as = (uint64_t)*ra * (h - 1) + w;
+    if (r < a ? rs > a - r : as > r - a) return false;
+    return true;
+}
+
 /* Fill a texture, which is bound, from its IOSurface, unless it is the surface. */
 static void
 surface_to_texture(struct eagl *e, struct image *image)
@@ -1035,7 +1062,20 @@ surface_to_texture(struct eagl *e, struct image *image)
 		return;
 	}
 	base = planar ? IOSurfaceGetBaseAddressOfPlane(surface, image->plane) : IOSurfaceGetBaseAddress(surface);
-	if ((image->invert || alpha_first) && (flipped = calloc(row, (size_t)image->height)) != NULL) {
+    if (image->b3a8) {
+        uint8_t *rgb = NULL, *alpha = NULL;
+        size_t nr = 0, na = 0, rr = 0, ra = 0;
+        row = (size_t)image->width * 4;
+        if (!b3a8_planes(surface, &rgb, &nr, &rr, &alpha, &na, &ra, image->width, image->height) ||
+            !(flipped = malloc(row * (size_t)image->height)) ||
+            !dream_b3a8_unpack(flipped, row * (size_t)image->height, row, rgb, nr, rr, alpha, na, ra,
+                image->width, image->height, image->invert)) {
+            free(flipped); IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, NULL); return;
+        }
+        base = flipped;
+    }
+
+	if (!image->b3a8 && (image->invert || alpha_first) && (flipped = calloc(row, (size_t)image->height)) != NULL) {
 		for (GLsizei y = 0; y < image->height; y++) {
 			const uint8_t *from = base + row * (size_t)(image->invert ? image->height - 1 - y : y);
 			uint8_t *to = flipped + row * (size_t)y;
@@ -1136,6 +1176,48 @@ target_to_surface(struct eagl *e, struct image *image)
 		}
 		return;
 	}
+    if (image->b3a8) {
+        uint8_t *rgb = NULL, *alpha = NULL;
+        size_t nr = 0, na = 0, rr = 0, ra = 0, packed = (size_t)image->width * 4;
+        uint8_t *pixels = malloc(packed * (size_t)image->height);
+        GLint old_row = 0, old_align = 0;
+        if (!pixels || IOSurfaceLock(surface, 0, NULL) != 0) { free(pixels); return; }
+        if (!b3a8_planes(surface, &rgb, &nr, &rr, &alpha, &na, &ra, image->width, image->height)) {
+            IOSurfaceUnlock(surface, 0, NULL); free(pixels); return;
+        }
+        if (e->reader == 0) glGenFramebuffers(1, &e->reader);
+        glBindFramebuffer(GL_FRAMEBUFFER, e->reader);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, image->texture, 0);
+        glGetIntegerv(GL_PACK_ROW_LENGTH, &old_row); glGetIntegerv(GL_PACK_ALIGNMENT, &old_align);
+        glPixelStorei(GL_PACK_ROW_LENGTH, 0); glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        /* Never publish uninitialized readback memory or a failed framebuffer. */
+        GLenum pending = glGetError();
+        GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        GLenum error = 0;
+        if (status == 0x8cd5) { /* GL_FRAMEBUFFER_COMPLETE */
+            /* GLES3 guarantees RGBA/UNSIGNED_BYTE readback. */
+            glReadPixels(0, 0, image->width, image->height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+            error = glGetError();
+        }
+        if (status != 0x8cd5 || error) {
+            say("DREAM GLES OUTPUT: b3a8 readback failed fbo=%#x error=%#x prior=%#x\n",status,error,pending);
+            glPixelStorei(GL_PACK_ROW_LENGTH, old_row); glPixelStorei(GL_PACK_ALIGNMENT, old_align);
+            glBindFramebuffer(GL_FRAMEBUFFER, e->framebuffer);
+            IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, NULL); free(pixels); return;
+        }
+        for (size_t at = 0; at < packed * (size_t)image->height; at += 4) {
+            uint8_t red = pixels[at]; pixels[at] = pixels[at + 2]; pixels[at + 2] = red;
+        }
+        dream_b3a8_pack(rgb, nr, rr, alpha, na, ra, pixels, packed * (size_t)image->height, packed,
+            image->width, image->height, image->invert);
+        glPixelStorei(GL_PACK_ROW_LENGTH, old_row); glPixelStorei(GL_PACK_ALIGNMENT, old_align);
+        IOSurfaceUnlock(surface, 0, NULL); free(pixels);
+        glBindFramebuffer(GL_FRAMEBUFFER, e->framebuffer);
+        static unsigned reports;
+        if (reports++ < 8) say("DREAM GLES OUTPUT: b3a8 surface=%u copied RGB10+A8 from GPU texture=%u\n",
+            IOSurfaceGetID(surface), image->texture);
+        return;
+    }
 	if (e->reader == 0) {
 		glGenFramebuffers(1, &e->reader);
 	}
@@ -4512,8 +4594,14 @@ my_attachImage(id self, SEL selector, unsigned long target, IOSurfaceRef surface
 	clear_now(e);
 	glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture);
 	pixels = IOSurfaceGetPixelFormat(surface);
-	if (target != GL_TEXTURE_2D || texture == 0 || (pixels != 'BGRA' && pixels != 0) ||
-	    IOSurfaceGetBytesPerElement(surface) != 4 || IOSurfaceGetPlaneCount(surface) != 0) {
+	bool b3a8 = pixels == 'b3a8';
+    uint8_t *rgb = NULL, *alpha = NULL;
+    size_t nr = 0, na = 0, rr = 0, ra = 0;
+    bool layout_ok = b3a8 ? b3a8_planes(surface, &rgb, &nr, &rr, &alpha, &na, &ra,
+        (uint32_t)IOSurfaceGetWidth(surface), (uint32_t)IOSurfaceGetHeight(surface)) :
+        (pixels == 'BGRA' || pixels == 0) && IOSurfaceGetBytesPerElement(surface) == 4 &&
+        IOSurfaceGetPlaneCount(surface) == 0;
+    if (target != GL_TEXTURE_2D || texture == 0 || !layout_ok) {
 		say("hakios-gl: -attachImage: target %#lx, texture %d, an IOSurface of '%.4s': not done\n", target, texture,
 		    (const char *)&(uint32_t){ __builtin_bswap32(pixels) });
 		return NO;
@@ -4522,7 +4610,7 @@ my_attachImage(id self, SEL selector, unsigned long target, IOSurfaceRef surface
 		/* (no room, as above: what the surface holds now, once, and nothing drawn reaches it) */
 		struct image once = {
 			.texture = (GLuint)texture, .surface = surface, .to = GL_TEXTURE_2D, .internal = GL_BGRA, .format = GL_BGRA,
-			.type = GL_UNSIGNED_BYTE, .invert = inverted, .alpha_first = pixels == 0,
+			.type = GL_UNSIGNED_BYTE, .invert = inverted, .alpha_first = pixels == 0, .b3a8 = b3a8,
 			.width = (GLsizei)IOSurfaceGetWidth(surface), .height = (GLsizei)IOSurfaceGetHeight(surface),
 		};
 
@@ -4532,6 +4620,7 @@ my_attachImage(id self, SEL selector, unsigned long target, IOSurfaceRef surface
 		eagl_leave(e, 0x970);
 		return YES;
 	}
+	image->b3a8 = b3a8;
 	image->target = true;
 	image->to = GL_TEXTURE_2D;
 	image->invert = inverted;
