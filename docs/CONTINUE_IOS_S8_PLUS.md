@@ -2,7 +2,7 @@
 
 ## Актуальное продолжение GLES / Mesa / Panfrost — 2026-11-13
 
-Статус: 0170 распознал G71, но упал на первом CREATE_BO: фото phystokv_range illegalPA0xbe1d3000; сохранённый ring СТАРЫЙ. Подготовлен/проверен/прошит толькоBOOT0171 с обычными cached BO и явной синхронизацией кэша, readbackPASS/rebootissued. GPU/2GiB/4KiB/8CPU/8AS сохранены. Устранение panic/GLES/UI ещё НЕ подтверждены. Рабочий fallback0169 boot-before-g71-product.img; backup перед0171 содержит аварийный0170.
+Статус: Пользователь сообщает0171 не дошёл доUI почти10мин (раньше~2мин); ADBне видит устройство. Точный этап/причина неизвестны. Новых записей/перезагрузок не выполнялось. Нужно вернутьTWRP, сначала сохранить журнал/фото, затем восстановить рабочий0169 BOOT boot-before-g71-product.img SHA d0af6aaf... (GPU/2GiB/8AS).0170panic и0171долгая загрузка НЕ рабочие checkpoint.
 
 Пользователь попросил продолжить предыдущий чат «Продолжить портирование iOS»; последняя задача — попробовать OpenGL ES и Mesa/Panfrost для отрисовки интерфейса. GPU не отключать, сохранить 2048 MiB, 4 KiB страницы, 8 CPU и 8 GPU-контекстов. Частоты/напряжения не повышались. Предыдущий ход завершился прерыванием до записи системы/нового BOOT; файлы передачи тогда не были обновлены.
 
@@ -68,6 +68,15 @@ Host production cache-helper test PASS: ordinary BO and surface clean->invalidat
 Fresh BOOT backup boot-before-cached-bo.img41943040B SHA256983ba0cc33048b22e4a970171453e5b3fe1d6420b145f9609be3fe4c9aa7780d matches device; THIS IS THE CRASHING0170 IMAGE, not a working rollback choice. Known booting fallback is boot-before-g71-product.img SHA256d0af6aafd2c4158f7e8f4f559f9fbb1776ef8fbbe123cb6b9f928ff809b91747 (0169 Mesa-loaded/softpipe-gated, GPU-copy/2GiB/8AS working); earlier backups retained. Do not mark0170 as working just because a full BOOT backup exists.
 
 Continuing the authorized repair: checked dream2lte/BOOTsda7size41943040/currentBOOTSHA/uploadSHA, wrote BOOT only, exact16211984B prefix readback matchedc71f7649..., adb reboot issued. Recovery/EFS/GPT/root not written; no whole-system comparison. GPU/2GiB/4KiB/8CPU/8AS remain configured.0171 hardware allocation/GLES/visual result still pending. Next user short UI test if booted, return TWRP; inspect fresh ring freshness, BO stages, Panfrost renderer/triangle and real chains. If panic persists capture exact new stage/PA/photo, preserve bounds and DMA memory ownership. Local commit only, no push.
+
+
+## 2026-11-13:0171 failed to reach UI within~10min; recovery required
+
+User reports last cached-BO0171 trial remains on console after nearly10minutes versus previous~2minute UI boot. ADB devices returned no device. This is a user-observed severe regression / incomplete boot, not successful GPU rendering. No current fresh log/photo yet; exact stuck stage, allocation size, cache cost, VM deadlock or GPU wait cause is UNKNOWN. Do not claim a measured10min allocation duration or assume cache flushing alone is the cause. No new flash/reboot attempted while device inaccessible.
+
+Next action: user returns phone to TWRP, preferably retains photo of last console lines. Capture fresh ring BEFORE any rollback, compare freshness against prior identical e8e9c508... ring, inspect DREAM GLES BO allocate/allocated/ready plus product/probe/chain/panic. Then restore the known booting0169 checkpoint rather than launching another speculative trial. Keep GPU/2GiB/8AS enabled. The full BOOT outputs/boot-before-g71-product.img41943040B SHA256d0af6aafd2c4158f7e8f4f559f9fbb1776ef8fbbe123cb6b9f928ff809b91747 was re-verified locally now. It ran UI with working GPU-copy/pipeline/8AS; Mesa loaded but software probe gated EAGL. Root libraries have remained unchanged, so BOOT-only rollback is applicable. This fallback does not solve original UI bugs or full GLES rendering.
+
+Do NOT restore boot-before-cached-bo.img as a working fallback: it is0170 with first-BO photo panic. Current0171 BOOT backup/readback existence does not establish it works. Do not disable GPU, reduce RAM or silently classify software rendering as acceleration. Need understand the actual memory/cache/addressing failure before attempting more new allocation changes. User has NOT requested abandoning GLES work; first restore usable boot and retain evidence. No whole-system comparison. Local notes only, no push.
 
 ## Результат аппаратного теста GLES — 2026-11-13
 
