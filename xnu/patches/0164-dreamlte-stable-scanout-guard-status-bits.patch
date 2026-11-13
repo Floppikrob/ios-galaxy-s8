@@ -1,0 +1,34 @@
+--- a/iokit/Kernel/arm/DreamDisplayIommu.inc
++++ b/iokit/Kernel/arm/DreamDisplayIommu.inc
+@@ -100,13 +100,25 @@
+     volatile uint32_t *i=(volatile uint32_t *)ml_io_map(0x128b1000,0x1000);
+     if(!m||!d||!i) return;
+     const uint32_t shadow=0x8000003f;
++    // Wait for an outstanding shadow update, then check only invariant mode
++    // bits. DECON RUN_STATUS (bit4) and IDLE_STATUS (bit5) change per frame.
++    bool idle_update=df_wait(d,0x60,shadow,0,40);
+     uint32_t ctrl=m[0],cfg=m[1],pt=m[3],base=i[0x40/4],base_c=i[0x44/4];
+-    if(ctrl!=4||pt!=0||m[0x34/4]!=0x70000011||
+-        base!=0xcc000000||i[0x10/4]!=0x0b9005a0||i[0x14/4]!=0||
+-        i[0x18/4]!=0x0b9005a0||d[0]!=0x113||d[0x70/4]!=0x1281||
+-        (d[0x60/4]&shadow)||(root_pa&16383)||root_pa>=(1ULL<<36)) {
+-        IOLog("DREAM FLIP TRIAL: guard rejected ctrl=%x cfg=%x pt=%x base=%x\n",ctrl,cfg,pt,base);return;
+-    }
++    uint32_t ver=m[0x34/4],size=i[0x10/4],off=i[0x14/4],img=i[0x18/4];
++    uint32_t control=d[0],trigger=d[0x70/4],update=d[0x60/4];
++    unsigned reason=0;
++    if(ctrl!=4||pt!=0) reason|=1;
++    if(ver!=0x70000011) reason|=2;
++    if(base!=0xcc000000) reason|=4;
++    if(size!=0x0b9005a0||img!=0x0b9005a0) reason|=8;
++    if(off) reason|=16;
++    if((control&~0x30u)!=0x103) reason|=32;
++    if(trigger!=0x1281) reason|=64;
++    if(!idle_update||(update&shadow)) reason|=128;
++    if((root_pa&16383)||root_pa>=(1ULL<<36)) reason|=256;
++    IOLog("DREAM FLIP GUARD: reasons=%x ctrl=%x cfg=%x pt=%x version=%x base=%x size=%x offset=%x img=%x decon=%x trigger=%x shadow=%x root=%llx\n",
++        reason,ctrl,cfg,pt,ver,base,size,off,img,control,trigger,update,root_pa);
++    if(reason) {IOLog("DREAM FLIP TRIAL: guard rejected reasons=%x\n",reason);return;}
+     // No existing domain is replaced: this exact runtime state has MMU bypass on.
+     IOLog("DREAM FLIP TRIAL: begin identity bootfb + scatter IOVA70000000 root=%llx\n",root_pa);
+     df_write(m,0,7);
