@@ -1,3 +1,7 @@
+## Dream2lte active handoff — 2026-11-13 GLES trial
+
+The S8+ task resumed in a new chat. Mesa/EAGL root delta and kernel patch0168 have been installed with changed-range/BOOT readback and adb reboot issued. Runtime GLES/UI remains unverified; next is user UI exercise and fresh TWRP ring. GPU/2GiB/4KiB/8CPU/8blitAS preserved. Whole16GiB device comparison was explicitly cancelled by user; partial hash discarded. Read docs/CONTINUE_IOS_S8_PLUS.md and the latest docs/dream2lte-fts-transport.md entry first. Windows outputs now 2026-11-13/new-chat, prior backups remain 2026-11-12/new-chat. Never publish local dumps or claim hardware acceleration from build/flash alone.
+
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
 ## a5xelte fork handoff (2026-10-20)

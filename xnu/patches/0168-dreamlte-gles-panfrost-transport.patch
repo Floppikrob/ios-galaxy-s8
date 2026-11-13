@@ -1,0 +1,1179 @@
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -36,6 +36,7 @@
+  */
+ #include "SweetSurface.h"
+ #if defined(DREAMLTE)
++bool HakiosMaliDrawn(SweetSurface *, uint64_t);
+ static int dream_gpu_frame_copy(SweetSurface *, SweetSurface *, unsigned, unsigned, unsigned, unsigned);
+ #endif
+ 
+@@ -606,6 +607,9 @@
+ 			OSSafeReleaseNULL(s);
+ 			continue;
+ 		}
++#if defined(DREAMLTE)
++        if(!HakiosMaliDrawn(s,500)) {IOLog("DREAM GLES: surface %u not finished, hold previous frame\n",s->id);s->release();continue;}
++#endif
+ 		uintptr_t src = s->kernelAddress();
+ 		uint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;
+ 		if (w <= 0 || h <= 0) {
+@@ -889,3 +893,7 @@
+ #include "DreamMali.inc"
+ 
+ #include "DreamMaliBlit.inc"
++#if defined(DREAMLTE)
++#include "DreamPanfrostBackend.inc"
++#include "DreamPanfrostClient.inc"
++#endif
+--- a/iokit/Kernel/arm/SweetSurface.h
++++ b/iokit/Kernel/arm/SweetSurface.h
+@@ -28,6 +28,7 @@
+ 	OSDeclareDefaultStructors(SweetSurface);
+ 
+ public:
++	volatile uint64_t maliSeq; /* GPU completion number, 0=CPU, ~0=frame being assembled */
+ 	uint32_t id;
+ 	uint32_t width, height, bytesPerRow, offset, pixelFormat, allocSize;
+ 	uint16_t bytesPerElement;
+@@ -40,7 +41,7 @@
+ 	IOBufferMemoryDescriptor *state;        /* shared state page, read-only for users */
+ 	IOMemoryMap              *kernelMap;    /* lazily created for kernel copies */
+ 
+-	bool init() APPLE_KEXT_OVERRIDE { return OSObject::init(); }
++	bool init() APPLE_KEXT_OVERRIDE { maliSeq=0; return OSObject::init(); }
+ 	void free() APPLE_KEXT_OVERRIDE;
+ 
+ 	/* Kernel address of the pixels (mapped on first use), or 0. */
+--- a/iokit/Kernel/arm/DreamMali.inc
++++ b/iokit/Kernel/arm/DreamMali.inc
+@@ -5,6 +5,7 @@
+ #include "DreamMaliTest.inc"
+ #if defined(DREAMLTE)
+ static void dream_gpu_copy_start(vm_offset_t gpu);
++static void dream_panfrost_start();
+ #endif
+ #if defined(DREAMLTE)
+ class DreamMali : public IOService {
+@@ -64,7 +65,7 @@
+             } else if (test) {
+                 IOLog("DREAM GPU TEST: skipped, unsupported ID or GPU busy\n");
+             }
+-            if (id == 0x60a00001 && gpu_status == 0) dream_gpu_copy_start(gpu);
++            if (id == 0x60a00001 && gpu_status == 0) {dream_gpu_copy_start(gpu);dream_panfrost_start();}
+         } else {
+             IOLog("DREAM GPU: GPU mapping failed\n");
+         }
+--- a/bsd/kern/sweet_amfi.c
++++ b/bsd/kern/sweet_amfi.c
+@@ -385,12 +385,41 @@
+ 
+ static mac_policy_handle_t sweet_amfi_mac_handle;
+ 
++#if defined(DREAMLTE)
++/* Local GLES bridge only: let backboardd's explicitly configured DYLD insertion
++ * reach our EAGL library. All other AMFI syscall cases retain ENOPOLICY.
++ * No changes to vnode signature/page hash verification or other processes.
++ */
++static TUNABLE(uint32_t,dream_gles_policy,"s8gl",0);
++static int dream_gles_dyld_policy(struct proc *p,int call,user_addr_t arg)
++{
++    char name[32];
++    if(!dream_gles_policy||call!=0x5a)return ENOPOLICY;
++    proc_name(proc_pid(p),name,sizeof(name));
++    if(strcmp(name,"backboardd"))return ENOPOLICY;
++    struct {uint64_t input;user_addr_t output;} a;
++    int error=copyin(arg,&a,sizeof(a));uint64_t flags=0xff;
++    if(!error)error=copyout(&flags,a.output,sizeof(flags));
++    printf("DREAM GLES: backboardd dyld bridge policy result=%d\n",error);
++    return error;
++}
++static const struct mac_policy_ops dream_gles_dyld_ops={.mpo_policy_syscall=dream_gles_dyld_policy};
++static struct mac_policy_conf dream_gles_dyld_conf={.mpc_name="AMFI",.mpc_fullname="S8 GLES dyld bridge",.mpc_ops=&dream_gles_dyld_ops};
++static mac_policy_handle_t dream_gles_dyld_handle;
++#endif
++
+ /* Called from bsd_init once MAC policies can register, before any exec. */
+ void sweet_amfi_policy_register(void);
+ 
+ void
+ sweet_amfi_policy_register(void)
+ {
++#if defined(DREAMLTE)
++    if(dream_gles_policy) {
++        int e=mac_policy_register(&dream_gles_dyld_conf,&dream_gles_dyld_handle,NULL);
++        printf("DREAM GLES: dyld policy registered=%u error=%d\n",e==0,e);
++    }
++#endif
+ 	int error = mac_policy_register(&sweet_amfi_mac_conf, &sweet_amfi_mac_handle, NULL);
+ 	printf(PORT_NAME " AMFI: platform binary policy %s (%d)\n",
+ 	    error ? "NOT registered" : "registered", error);
+--- a/bsd/dev/mem.c
++++ b/bsd/dev/mem.c
+@@ -153,7 +153,7 @@
+ 	return 0;
+ }
+ 
+-#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if defined(ARM64_BOARD_CONFIG_SWEET) || defined(DREAMLTE)
+ /*
+  * SWEET: daemons started by launchd write stdout/stderr to /dev/null, and
+  * pointing a launchd job at /dev/console stops it from launching at all
+@@ -254,7 +254,7 @@
+ 			if (rw == UIO_READ) {
+ 				return 0;
+ 			}
+-#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if defined(ARM64_BOARD_CONFIG_SWEET) || defined(DREAMLTE)
+ 			{
+ 				char name[32];
+ 				if (sweet_null_tee(name, sizeof(name))) {
+--- /dev/null
++++ b/iokit/Kernel/arm/DreamPanfrostBackend.inc
+@@ -0,0 +1,153 @@
++/* Exynos8895/G71 Panfrost transport. Uses the proven S8 GPU power state.
++ * No S9 power/PLL/PMIC addresses. Eight blit AS mappings remain allocated.
++ * AS0 is time shared only while dmb_lock excludes every display GPU job;
++ * its complete translation state is restored before returning to the blitter.
++ */
++#include "DreamPanfrostVa.h"
++static void dream_panfrost_start();
++static bool dpf_ready, dpf_failed;
++static uint64_t dpf_root, dpf_seq, dpf_done, dpf_live_bytes;
++static struct mali_va dpf_va;
++static unsigned dpf_pages, dpf_jobs;
++static struct {uint64_t pa;uint64_t *va;} dpf_page_records[2048];
++static bool dpf_ram(uint64_t pa) {return pa>=0x880000000ULL&&pa+4096<=0x900000000ULL;}
++static uint32_t dpf_saved[6];
++static const unsigned dpf_as_offsets[]={0,4,8,12,0x30,0x34};
++static uint64_t *dpf_table_page(uint64_t *pa) {
++    if(dpf_pages>=2048) return NULL;
++    IOBufferMemoryDescriptor *m=IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
++        kIODirectionInOut|kIOMemoryKernelUserShared,4096,4096);
++    if(!m) return NULL;
++    if(m->prepare()!=kIOReturnSuccess) {m->release();return NULL;}
++    IOByteCount n=0;*pa=m->getPhysicalSegment(0,&n,kIOMemoryMapperNone);
++    if(!*pa||(*pa&4095)||n<4096||!dpf_ram(*pa)) {
++        m->complete();m->release();return NULL;
++    }
++    uint64_t *v=(uint64_t *)m->getBytesNoCopy();bzero(v,4096);dm_clean(v,4096);
++    // Retained for the life of the GPU translation domain, including faults.
++    dpf_page_records[dpf_pages].pa=*pa;dpf_page_records[dpf_pages].va=v;
++    dpf_pages++;return v;
++}
++static uint64_t *dpf_table(uint64_t pa) {
++    pa&=0x000000fffffff000ULL;
++    for(unsigned i=0;i<dpf_pages;i++)if(dpf_page_records[i].pa==pa)return dpf_page_records[i].va;
++    return NULL;
++}
++static uint64_t *dpf_pte(uint64_t va,bool create) {
++    if(va>=0x100000000ULL||!dpf_root) return NULL;
++    uint64_t *t=dpf_table(dpf_root);if(!t)return NULL;
++    for(int shift=39;shift>12;shift-=9) {
++        uint64_t *e=&t[(va>>shift)&511];
++        if(!(*e&1)) {
++            if(!create)return NULL;
++            uint64_t pa=0;uint64_t *child=dpf_table_page(&pa);if(!child)return NULL;
++            *e=pa|3;dm_clean(e,8);
++        }
++        t=dpf_table(*e);if(!t)return NULL;
++    }
++    return &t[(va>>12)&511];
++}
++static bool dpf_update() {
++    if(!dmb_wait(0x2428,1,0))return false;
++    dm_write(dmb_gpu,0x2418,1);
++    return dmb_wait(0x2428,1,0);
++}
++extern "C" bool hakios_mali_ready() {return dpf_ready&&!dpf_failed;}
++extern "C" bool hakios_mali_map(uint64_t va,uint64_t pa) {
++    if(!hakios_mali_ready()||(va&4095)||(pa&4095)||!dpf_ram(pa))return false;
++    uint64_t *e=dpf_pte(va,true);if(!e||(*e&1))return false;
++    // G71 legacy format already used by every successful S8 compute copy.
++    *e=pa|0x2c1;dm_clean(e,8);return true;
++}
++extern "C" uint64_t hakios_mali_address(uint64_t size,bool executable) {
++    if(!hakios_mali_ready()||!size||(size&4095)||size>256ULL*1024*1024||(executable&&size>16ULL*1024*1024)||
++        dpf_live_bytes+size>768ULL*1024*1024)return 0;
++    uint64_t va=mali_va_alloc(&dpf_va,size,executable);
++    if(va)dpf_live_bytes+=size;
++    return va;
++}
++extern "C" void hakios_mali_mapped() {} // UPDATE is mandatory immediately before each chain.
++extern "C" void hakios_mali_unmap(uint64_t va,uint64_t size) {
++    if(dpf_failed)return; // Retain physical storage too; the user client checks this state.
++    IOLockLock(dmb_lock);
++    for(uint64_t off=0;off<size;off+=4096) {
++        uint64_t *e=dpf_pte(va+off,false);if(e){*e=0;dm_clean(e,8);}
++    }
++    // AS0 is restored to a blit domain, never this table, whenever the lock is free.
++    if(mali_va_free(&dpf_va,va,size))dpf_live_bytes-=size;
++    IOLockUnlock(dmb_lock);
++}
++extern "C" void hakios_mali_tag(uint64_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t) {}
++extern "C" bool hakios_mali_parameter(uint32_t which,uint64_t *value) {
++    if(!hakios_mali_ready())return false;
++    static const uint16_t simple[]={0,0,0,0,0,0xe00,0x18,0x1c,4,8,12,16,20,0xac,0xa0,0xa4,0xa8,0x300,0xb0,0xb4,0xb8,0xbc};
++    if(which==0){*value=dm_read(dmb_gpu,0)>>16;return true;}
++    if(which==1){*value=dm_read(dmb_gpu,0)&65535;return true;}
++    if(which>=2&&which<=4){unsigned r=0x100+(which-2)*16;*value=dm_read(dmb_gpu,r)|((uint64_t)dm_read(dmb_gpu,r+4)<<32);return true;}
++    if(which>=22&&which<=37){*value=dm_read(dmb_gpu,0xc0+(which-22)*4);return true;}
++    if(which==38){*value=__builtin_popcount(dm_read(dmb_gpu,0x120));return true;}
++    if(which==39){uint32_t a=dm_read(dmb_gpu,0x310),b=dm_read(dmb_gpu,0xa0);*value=a>b?a:b;return true;}
++    if(which==40){*value=0;return true;}
++    if(which<sizeof(simple)/sizeof(simple[0])&&simple[which]){*value=dm_read(dmb_gpu,simple[which]);return true;}
++    return false;
++}
++static bool dpf_idle() {
++    for(unsigned slot=0;slot<3;slot++)if(dm_read(dmb_gpu,0x1824+slot*0x80)||dm_read(dmb_gpu,0x1860+slot*0x80))return false;
++    return true;
++}
++extern "C" uint64_t hakios_mali_enqueue(uint64_t chain,bool fragment) {
++    if(!hakios_mali_ready()||!chain||(chain&7))return 0;
++    uint64_t *entry=dpf_pte(chain,false);if(!entry||!(*entry&1))return 0;
++    IOLockLock(dmb_lock);
++    bool ok=hakios_mali_ready()&&dmb_ready&&!dmb_poisoned&&dpf_idle();
++    bool switched=false;uint32_t irq=0,mmu=0;unsigned slot=fragment?0:1,js=0x1800+slot*0x80;
++    if(ok) {
++        for(unsigned i=0;i<6;i++)dpf_saved[i]=dm_read(dmb_gpu,0x2400+dpf_as_offsets[i]);
++        ok=dmb_wait(0x2428,1,0);
++        if(ok){
++            switched=true;
++            dm_write(dmb_gpu,0x2400,(uint32_t)dpf_root|7);dm_write(dmb_gpu,0x2404,dpf_root>>32);
++            dm_write(dmb_gpu,0x2408,0x00888d88);dm_write(dmb_gpu,0x240c,0);
++            dm_write(dmb_gpu,0x2430,0);dm_write(dmb_gpu,0x2434,0);ok=dpf_update();
++        }
++    }
++    if(ok) {
++        dm_write(dmb_gpu,0x1004,0xffffffff);dm_write(dmb_gpu,0x2004,0xffffffff);
++        dm_write(dmb_gpu,js+0x40,(uint32_t)chain);dm_write(dmb_gpu,js+0x44,chain>>32);
++        dm_write(dmb_gpu,js+0x50,dmb_shaders);dm_write(dmb_gpu,js+0x54,0);
++        dm_write(dmb_gpu,js+0x58,(8u<<16)|(3u<<8)|(1u<<10)|(3u<<12));dm_write(dmb_gpu,js+0x60,1);
++        ok=false;
++        for(unsigned n=0;n<1000;n++) {
++            irq=dm_read(dmb_gpu,0x1000);mmu=dm_read(dmb_gpu,0x2000);
++            if(mmu||(irq&((1u<<slot)|(1u<<(slot+16))))) {
++                ok=!mmu&&(irq&((1u<<slot)|(1u<<(slot+16))))==(1u<<slot);break;
++            }
++            IOSleep(1);
++        }
++        if(ok)ok=dpf_idle();
++    }
++    if(ok&&switched) {
++        dm_write(dmb_gpu,0x1004,0xffffffff);
++        for(unsigned i=0;i<6;i++)dm_write(dmb_gpu,0x2400+dpf_as_offsets[i],dpf_saved[i]);
++        ok=dpf_update();
++    }
++    uint64_t seq=0;
++    if(ok){seq=++dpf_seq;dpf_done=seq;if(++dpf_jobs<=12||dpf_jobs%300==0)IOLog("DREAM GLES: chain=%llu slot=%u PASS restore_AS0=1 blit_contexts=%u\n",seq,slot,DMB_CONTEXT_LIMIT);}
++    else {
++        dpf_failed=true;dmb_poisoned=true;
++        IOLog("DREAM GLES: FAILED chain=%llx slot=%u irq=%x MMU=%x fault=%x address=%x:%x JS=%x; DMA storage retained, reboot required\n",
++            chain,slot,irq,mmu,dm_read(dmb_gpu,0x241c),dm_read(dmb_gpu,0x2424),dm_read(dmb_gpu,0x2420),dm_read(dmb_gpu,js+0x24));
++        // No reset invalidating eight live contexts, and no freeing hardware-owned memory.
++    }
++    IOLockUnlock(dmb_lock);return seq;
++}
++extern "C" bool hakios_mali_wait(uint64_t seq,uint64_t) {return !dpf_failed&&seq<=dpf_done;}
++static void dpf_backend_start() {
++    if(!dmb_ready||dmb_poisoned||dm_read(dmb_gpu,0)!=0x60a00001)return;
++    uint32_t tiler=dm_read(dmb_gpu,0x110);
++    if(!tiler)return;
++    dm_write(dmb_gpu,0x190,tiler);if(!dmb_wait(0x150,tiler,tiler))return;
++    uint64_t *root=dpf_table_page(&dpf_root);if(!root)return;
++    dpf_ready=true;
++    IOLog("DREAM GLES: G71 transport ready, root=%llx, synchronous chains, AS0 shared with 8 retained blit contexts, tiler=%x\n",dpf_root,tiler);
++}
+--- /dev/null
++++ b/iokit/Kernel/arm/DreamPanfrostClient.inc
+@@ -0,0 +1,750 @@
++/*
++ * HakiosMali: the Galaxy S9's Mali-G72 for programs to draw with.
++ *
++ * Where it comes from: HakiOS's RedwoodMali, the same service for the Infinix Hot 20's Mali-G52,
++ * kernel/iokit/Kernel/RedwoodMali.cpp of github.com/oosexgang/hakios-mt6768 at commit 93ea250 (Apple Public Source
++ * License 2.0, as every file of that repository's kernel/ is), renamed: RedwoodMali to HakiosMali, its user client
++ * HakiosMaliUserClient, redwood_mali_* to hakios_mali_*, its own requests' names kRedwood* to kHakiosMali* (their numbers
++ * and structures are the same: a program built for RedwoodMali needs only the service's new name). Nothing in it is
++ * the X6826B's: it changes with the GPU only in what drivers/gpu/hakios.mali.c answers it.
++ *
++ * drivers/gpu/hakios.mali.c brings the GPU up (boot-arg mali=N) and, at its last step, once a job has run through the
++ * GPU's page tables, starts this service. A program that opens it speaks the interface of Linux's panfrost DRM driver,
++ * the one Mesa's panfrost knows: every request is a call of the user client with the request's number as the selector
++ * and its structure passed in and back -- as HakiosGPU (hakios.gpu.cpp) does it for the POCO's Adreno and freedreno.
++ * What Linux does with mmap() on the device is the client memory of the type that is the buffer's handle.
++ *
++ * What there is: parameters, buffers (made, entered into the GPU's address space, told their address, mapped, given
++ * back), and job chains, queued and run one at a time by a thread of hakios.mali.c's, with a number to wait for. A
++ * buffer is wired kernel memory, zero when made and write-combined, so what the program writes goes to memory where the
++ * GPU, which does not look into the processors' caches here, reads it. Requests 0x7c to 0x7f are ours: an IOSurface's
++ * memory as a buffer, the job a surface is drawn by, a wait for a job by its number, and a test's pixels shown. Not here
++ * yet: an address space for each program, interrupts, buffers shared between programs as file descriptors.
++ *
++ * Who may open it: whoever asks, as HakiosGPU. The window server's process, backboardd, does not run as root (PixOS
++ * found that out on another phone), so nothing here asks for root.
++ *
++ * The display waits for a surface's pixels before it shows them (MiniIOSurfaceDrawn(), the display's driver): for one
++ * the Mali draws into that is HakiosMaliDrawn() here, which waits for the surface's job (`maliSeq`, MiniIOSurface.h).
++ * The original's common tree had that wait in MiniIOSurfaceDrawn() itself; this tree's is the Adreno's
++ * (hakios.gpu.cpp), or drivers/core/hakios.stubs.cpp's without it, and both ask this one.
++ *
++ * Status: written and built into the S9's kernel (CONFIG_HAKIOS_MALI); not yet run on the phone.
++ */
++
++#include <IOKit/IOLib.h>
++#include <IOKit/IOLocks.h>
++#include <IOKit/IOKitKeys.h>
++#include <IOKit/IOPlatformExpert.h>
++#include <IOKit/IOService.h>
++#include <IOKit/IOUserClient.h>
++#include <IOKit/IOBufferMemoryDescriptor.h>
++#include <IOKit/IOSubMemoryDescriptor.h>
++#include <kern/clock.h>
++#include <kern/thread.h>
++#include <mach/mach_time.h>
++#include <mach/vm_param.h>
++#include <sys/systm.h>
++
++#include "SweetSurface.h"
++
++#include <pexpert/pexpert.h>
++
++extern "C" void hakios_keep(const char * format, ...) __printflike(1, 2);
++
++extern "C" {
++/* drivers/gpu/hakios.mali.c (declared in bsd/sys/hakios.input.h, which is not seen from here) */
++bool hakios_mali_ready(void);
++bool hakios_mali_parameter(uint32_t which, uint64_t * value);
++uint64_t hakios_mali_address(uint64_t size, bool executable);
++bool hakios_mali_map(uint64_t gpu, uint64_t phys);
++void hakios_mali_mapped(void);
++void hakios_mali_unmap(uint64_t gpu, uint64_t size);
++void hakios_mali_tag(uint64_t address, uint32_t kind, uint32_t width, uint32_t height, uint32_t row_bytes,
++    uint32_t format, uint32_t offset);
++uint32_t hakios_mali_submit(uint64_t chain, bool fragment);
++uint64_t hakios_mali_enqueue(uint64_t chain, bool fragment);
++bool hakios_mali_wait(uint64_t seq, uint64_t timeout_ns);
++
++void HakiosMaliStart(void);
++void MiniIOMobileFramebufferShow(const uint8_t * pixels, uint32_t width, uint32_t height, uint32_t rowBytes);
++void FlushPoC_DcacheRegion(vm_offset_t va, size_t length);      /* osfmk/arm64/caches_asm.s */
++void loader_log_line(const char *line);
++
++/* what programs have done with the GPU so far, for drivers/gpu/hakios.mali.c to repeat in the log */
++uint32_t gMaliClients, gMaliBuffers, gMaliSubmits, gMaliFailed, gMaliShown;
++/* the first buffers ever made, for matching a GPU fault's address to one of them */
++struct mali_made { uint64_t address, size; uint32_t asked, flags; };
++struct mali_made gMaliMade[32];
++}
++
++/* Linux's include/uapi/drm/panfrost_drm.h and drm.h: the requests' numbers and structures. */
++enum {
++	kDrmGemClose            = 0x09,
++	kPanfrostSubmit         = 0x40,
++	kPanfrostWaitBO         = 0x41,
++	kPanfrostCreateBO       = 0x42,
++	kPanfrostMmapBO         = 0x43,
++	kPanfrostGetParam       = 0x44,
++	kPanfrostGetBOOffset    = 0x45,
++	kPanfrostMadvise        = 0x48,
++	kHakiosMaliSurfaceSeq   = 0x7c,         /* ours: a surface's last job, or "drawing, not yet sent" (struct mali_surface_seq) */
++	kHakiosMaliWait         = 0x7d,         /* ours: wait for a job by its number (struct mali_wait) */
++	kHakiosMaliSurface      = 0x7e,         /* ours, as HakiosGPU's: an IOSurface's memory as a buffer */
++	kHakiosMaliShow         = 0x7f,         /* ours, as HakiosGPU's: a test's pixels onto the panel */
++};
++
++struct mali_surface {
++	uint32_t surface;                       /* the IOSurface's ID */
++	uint32_t handle;                        /* kMaliDescribe: no buffer is wanted; else, back: the buffer, */
++	uint64_t size;                          /* how big it is, */
++	uint32_t offset, rowBytes;              /* where the pixels start in it and how long a row of them is, */
++	uint32_t width, height, pixelFormat, planes;    /* and what they are */
++};
++#define kMaliDescribe           0xffffffffu
++
++/* kHakiosMaliWait: job `seq` (what kPanfrostSubmit gave back in `jc`) done within timeout_ns, or kIOReturnTimeout */
++struct mali_wait {
++	uint64_t seq;
++	int64_t timeout_ns;
++};
++
++/* kHakiosMaliSurfaceSeq: the job after which the surface is drawn (HakiosMaliDrawn), or MALI_SEQ_PENDING while the
++ * Metal driver's thread has its frame still to send */
++struct mali_surface_seq {
++	uint32_t surface, pad;
++	uint64_t seq;
++};
++#define MALI_SEQ_PENDING        (~0ull)
++
++struct mali_show {
++	uint64_t pixels;
++	uint32_t width, height, rowBytes, pad;
++};
++
++struct drm_gem_close {
++	uint32_t handle, pad;
++};
++
++struct drm_panfrost_submit {
++	uint64_t jc;
++	uint64_t in_syncs;
++	uint32_t in_sync_count;
++	uint32_t out_sync;
++	uint64_t bo_handles;
++	uint32_t bo_handle_count;
++	uint32_t requirements;
++};
++#define PANFROST_JD_REQ_FS      (1u << 0)
++
++struct drm_panfrost_wait_bo {
++	uint32_t handle, pad;
++	int64_t timeout_ns;
++};
++
++struct drm_panfrost_create_bo {
++	uint32_t size, flags, handle, pad;
++	uint64_t offset;
++};
++/* its flags: NOEXEC, no code is run from it (its addresses may then cross a 16 MB line); HEAP, the tiler's heap, which
++ * Linux grows on a fault and which is made whole here (Mesa's is 128 MB). Both taken from Mesa as 1.1 of the interface
++ * has them. */
++#define PANFROST_BO_NOEXEC      (1u << 0)
++#define PANFROST_BO_HEAP        (1u << 1)
++
++struct drm_panfrost_mmap_bo {
++	uint32_t handle, flags;
++	uint64_t offset;
++};
++
++struct drm_panfrost_get_param {
++	uint32_t param, pad;
++	uint64_t value;
++};
++
++struct drm_panfrost_get_bo_offset {
++	uint32_t handle, pad;
++	uint64_t offset;
++};
++
++struct drm_panfrost_madvise {
++	uint32_t handle, madv, retained;
++};
++
++#define MALI_BUFFERS            4096
++#define MALI_BUFFER_MAX         (256ull << 20)
++
++struct mali_buffer {
++	IOMemoryDescriptor * memory;            /* made here, or the pixels of an IOSurface (`surface`) */
++	SweetSurface * surface;
++	uint64_t address, size;
++	uint64_t last_seq;                      /* the last job given it (kPanfrostSubmit's bo_handles) */
++	bool prepared;
++};
++
++static IOLock * gMaliLock;
++
++/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
++
++/*
++ * Whether the Mali is done with a surface's pixels, waiting for at most so many milliseconds: what the display asks
++ * before it shows a surface (MiniIOSurfaceDrawn()). The surface's `maliSeq` is the last job that names it (0: none, so
++ * nothing to wait for), or MALI_SEQ_PENDING while the program drawing into it has not sent its frame yet: that is waited
++ * out first, asking again every 200 us, and then the job.
++ */
++#define MALI_ASK_AGAIN_US       200
++
++/*
++ * The GPU here is not coherent with the processors (COHERENCY_ENABLE = 31, drivers/gpu/hakios.mali.c): it reads and
++ * writes memory, never the processors' caches. The buffers this client makes are mapped write-combining and need
++ * nothing; an IOSurface's pixels are ordinary cached memory, written by programs (CoreAnimation's layers drawn by the
++ * processor, uploads) and read by the processor (the display, which copies them to the panel; a program reading back).
++ * So their cache lines are written back and invalidated, to the point of coherency, around the GPU's use of them:
++ *   - before a job that names one is queued (what a processor wrote, in memory for the GPU to read);
++ *   - after a job that wrote one is waited for, by the display (HakiosMaliDrawn()) or by the program (WAIT_BO): what
++ *     the GPU wrote is not hidden behind lines the processor fetched before.
++ * Through the kernel's own mapping of the pixels (kpixels): the data caches are physically tagged, so that covers every
++ * mapping of the same pages. An upstream port on a non-coherent Mali (the Infinix Hot 20's G52) saw some frames drawn
++ * wrong and nothing here did this. Boot-arg mali_flush=0: not done (for measuring what it costs).
++ */
++static uint32_t gMaliFlush=1;
++static void flushSubmit(struct mali_buffer *b) {
++    SweetSurface *s=b->surface;
++    if(s&&s->kernelAddress())dm_clean((void *)s->kernelAddress(),s->allocSize);
++}
++bool HakiosMaliDrawn(SweetSurface *s,uint64_t milliseconds) {
++    if(!s)return true;
++    uint64_t ns=0,start=mach_absolute_time();
++    while(__atomic_load_n(&s->maliSeq,__ATOMIC_ACQUIRE)==~0ULL) {
++        absolutetime_to_nanoseconds(mach_absolute_time()-start,&ns);
++        if(ns>=milliseconds*1000000)return false;
++        IOSleep(1);
++    }
++    uint64_t seq=__atomic_load_n(&s->maliSeq,__ATOMIC_ACQUIRE);
++    if(!seq)return true;
++    if(!hakios_mali_wait(seq,0))return false;
++    if(s->kernelAddress())dm_invalidate((void *)s->kernelAddress(),s->allocSize);
++    return true;
++}
++
++class HakiosMali : public IOService
++{
++	OSDeclareDefaultStructors(HakiosMali);
++
++public:
++	virtual bool start(IOService * provider) APPLE_KEXT_OVERRIDE;
++};
++
++OSDefineMetaClassAndStructors(HakiosMali, IOService);
++
++bool
++HakiosMali::start(IOService * provider)
++{
++	if (!IOService::start(provider)) {
++		return false;
++	}
++	setProperty(kIOUserClientClassKey, "HakiosMaliUserClient");
++	setName("HakiosMali");
++	registerService();
++	return true;
++}
++
++void
++HakiosMaliStart(void)
++{
++	IOService * provider = IOService::getPlatform();
++	HakiosMali * gpu;
++
++	gMaliLock = IOLockAlloc();
++    if(!gMaliLock)return;
++	gpu = OSTypeAlloc(HakiosMali);
++	if (gpu == NULL || provider == NULL || !gpu->init() || !gpu->attach(provider)) {
++		OSSafeReleaseNULL(gpu);
++		IOLog("HakiosMali: cannot create the service\n");
++		return;
++	}
++	if (!gpu->start(provider)) {
++		gpu->detach(provider);
++		IOLog("HakiosMali: the service did not start\n");
++	}
++	gpu->release();
++	IOLog("HakiosMali: the GPU is there for programs to draw with\n");
++}
++
++/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
++
++class HakiosMaliUserClient : public IOUserClient
++{
++	OSDeclareDefaultStructors(HakiosMaliUserClient);
++
++	struct mali_buffer *    fBuffers;               /* handle n is fBuffers[n - 1] */
++	uint32_t                fNextBuffer;
++	uint32_t                fSubmits, fFailed, fRequests;
++
++	struct mali_buffer * buffer(uint32_t handle);
++	void freeBuffer(struct mali_buffer * b);
++	IOReturn createBO(struct drm_panfrost_create_bo * request);
++	struct mali_buffer * newBuffer(IOMemoryDescriptor * memory, uint64_t from, uint64_t size, uint32_t * handle,
++	    uint32_t flags);
++	IOReturn surfaceBuffer(struct mali_surface * request);
++
++public:
++	virtual bool start(IOService * provider) APPLE_KEXT_OVERRIDE;
++	virtual IOReturn clientClose(void) APPLE_KEXT_OVERRIDE;
++	virtual void free(void) APPLE_KEXT_OVERRIDE;
++	virtual IOReturn clientMemoryForType(UInt32 type, IOOptionBits * options, IOMemoryDescriptor ** memory) APPLE_KEXT_OVERRIDE;
++	virtual IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments * args,
++	    IOExternalMethodDispatch * dispatch, OSObject * target, void * reference) APPLE_KEXT_OVERRIDE;
++};
++
++OSDefineMetaClassAndStructors(HakiosMaliUserClient, IOUserClient);
++
++bool
++HakiosMaliUserClient::start(IOService * provider)
++{
++	if (!hakios_mali_ready() || !IOUserClient::start(provider)) {
++		IOLog("HakiosMali: a client could not be started\n");
++		return false;
++	}
++	IOLog("HakiosMali: a client opened the GPU\n");
++	OSIncrementAtomic((SInt32 *) &gMaliClients);
++	fBuffers = IONewZero(struct mali_buffer, MALI_BUFFERS);
++	return fBuffers != NULL;
++}
++
++struct mali_buffer *
++HakiosMaliUserClient::buffer(uint32_t handle)
++{
++	if (handle == 0 || handle > MALI_BUFFERS || fBuffers[handle - 1].memory == NULL) {
++		return NULL;
++	}
++	return &fBuffers[handle - 1];
++}
++
++/* With the lock held. */
++void
++HakiosMaliUserClient::freeBuffer(struct mali_buffer * b)
++{
++	/* not while a job queued or running may still use it (jobs are run in a queue) */
++	if(dpf_failed) { IOLog("DREAM GLES: retain buffer after GPU failure\n"); bzero(b,sizeof(*b)); return; }
++	if (b->last_seq != 0) {
++		(void)hakios_mali_wait(b->last_seq, 2ull * NSEC_PER_SEC);
++	}
++	hakios_mali_unmap(b->address, b->size);
++	if(b->prepared)b->memory->complete();
++	b->memory->release();
++	if (b->surface != NULL) {
++		b->surface->release();
++	}
++	bzero(b, sizeof(*b));
++}
++
++/*
++ * A handle and GPU addresses for `size` bytes of `memory` from byte `from` on, every page entered into the GPU's tables.
++ * `flags` are Linux's PANFROST_BO_*: without NOEXEC the GPU may run code from it, and its addresses do not cross a 16 MB
++ * line (hakios_mali_address()).
++ * With the lock held; NULL: no handle, no addresses, or a page that would not go in. The caller sets `memory` (and
++ * `surface`) of what comes back.
++ */
++struct mali_buffer *
++HakiosMaliUserClient::newBuffer(IOMemoryDescriptor * memory, uint64_t from, uint64_t size, uint32_t * handle,
++    uint32_t flags)
++{
++	struct mali_buffer * b = NULL;
++	bool mapped = true;
++
++	for (uint32_t n = 0; n < MALI_BUFFERS; n++) {
++		uint32_t i = (fNextBuffer + n) % MALI_BUFFERS;
++
++		if (fBuffers[i].memory == NULL) {
++			b = &fBuffers[i];
++			*handle = i + 1;
++			fNextBuffer = i + 1;
++			break;
++		}
++	}
++	if (b == NULL) {
++		IOLog("HakiosMali: no handles left\n");
++		return NULL;
++	}
++	if(memory->prepare()!=kIOReturnSuccess)return NULL;
++	b->prepared=true;
++	b->address = hakios_mali_address(size, !(flags & PANFROST_BO_NOEXEC));
++	/* every 4 KB of it: the GPU's pages, a quarter of the kernel's 16 KB ones */
++	for (uint64_t offset = 0; offset < size && mapped && b->address != 0; offset += 4096) {
++		IOByteCount length = 0;
++		addr64_t phys = memory->getPhysicalSegment(from + offset, &length, kIOMemoryMapperNone);
++
++		/* (hakios_mali_map() takes only memory the kernel manages: pmap_valid_address()) */
++		mapped = phys != 0 && length >= 4096 && hakios_mali_map(b->address + offset, phys);
++	}
++	if (b->address == 0 || !mapped) {
++		if (b->address != 0) {
++			hakios_mali_unmap(b->address, size);
++		}
++		if(b->prepared)memory->complete();
++		bzero(b, sizeof(*b));
++		IOLog("HakiosMali: a buffer of %llu bytes cannot be entered into the GPU's address space\n", size);
++		return NULL;
++	}
++	hakios_mali_mapped();
++	if (gMaliBuffers < 32) {
++		gMaliMade[gMaliBuffers] = (struct mali_made) { b->address, size, (uint32_t) size, flags };
++	}
++	OSIncrementAtomic((SInt32 *) &gMaliBuffers);
++	b->size = size;
++	return b;
++}
++
++/* With the lock held. */
++IOReturn
++HakiosMaliUserClient::createBO(struct drm_panfrost_create_bo * request)
++{
++	uint64_t size = round_page_64(request->size);
++	IOBufferMemoryDescriptor * memory;
++	struct mali_buffer * b;
++
++	if (size == 0 || size > MALI_BUFFER_MAX || (request->flags & ~3u)) {
++		return kIOReturnBadArgument;
++	}
++	memory = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, kIODirectionInOut | kIOMemoryKernelUserShared |
++	    kIOMapWriteCombineCache, (vm_size_t) size, PAGE_SIZE);
++	if (memory == NULL) {
++		IOLog("HakiosMali: no memory for a buffer of %llu bytes\n", size);
++		return kIOReturnNoMemory;
++	}
++	b = newBuffer(memory, 0, size, &request->handle, request->flags);
++	if (b == NULL) {
++		memory->release();
++		return kIOReturnNoMemory;
++	}
++	b->memory = memory;
++	request->offset = b->address;
++	hakios_mali_tag(b->address, 1, 0, 0, 0, 0, 0);
++	return kIOReturnSuccess;
++}
++
++/*
++ * The pixels of an IOSurface as a buffer, from the page after the surface's shared state on (MiniIOSurface.h): what the
++ * window server draws into, and what is shown. The surface is held for as long as the buffer is there; a surface that is
++ * a buffer of this client's already is that buffer again. Asked only to describe (kMaliDescribe), no buffer is made. As
++ * HakiosGPU's.
++ */
++IOReturn
++HakiosMaliUserClient::surfaceBuffer(struct mali_surface * request)
++{
++	SweetSurface * s = sweet_surface_copy(request->surface);
++	struct mali_buffer * b = NULL;
++	IOMemoryDescriptor * memory;
++	uint64_t size;
++
++	if (s == NULL) {
++		return kIOReturnNotFound;
++	}
++	if (!OSDynamicCast(IOBufferMemoryDescriptor,s->memory)) {                /* a program's own memory with a surface around it: not whole pages */
++		s->release();
++		return kIOReturnUnsupported;
++	}
++	size = round_page_64(s->allocSize);
++	/* (fb_zc: the pixels are the scan-out pool's, not the pages after the shared state) */
++	memory = s->memory;
++    if(memory)memory->retain();
++	if (memory == NULL || size == 0 || size > MALI_BUFFER_MAX) {
++		OSSafeReleaseNULL(memory);
++		s->release();
++		return kIOReturnNoMemory;
++	}
++	request->size = size;
++	request->offset = s->offset;
++	request->rowBytes = s->bytesPerRow;
++	request->width = s->width;
++	request->height = s->height;
++	request->pixelFormat = s->pixelFormat;
++	request->planes = s->planeCount;
++	if (request->handle == kMaliDescribe) {
++		request->handle = 0;
++		memory->release();
++		s->release();
++		return kIOReturnSuccess;
++	}
++	for (uint32_t i = 0; i < MALI_BUFFERS; i++) {
++		if (fBuffers[i].memory != NULL && fBuffers[i].surface == s) {
++			b = &fBuffers[i];
++			request->handle = i + 1;
++			break;
++		}
++	}
++	if (b != NULL) {
++		memory->release();
++		s->release();
++		return kIOReturnSuccess;
++	}
++	b = newBuffer(memory,0,size,&request->handle,PANFROST_BO_NOEXEC);
++	if (b == NULL) {
++		memory->release();
++		s->release();
++		return kIOReturnNoMemory;
++	}
++	b->memory = memory;
++	b->surface = s;
++	hakios_mali_tag(b->address, 2, s->width, s->height, s->bytesPerRow, s->pixelFormat,
++	    (uint32_t) s->offset);
++	return kIOReturnSuccess;
++}
++
++IOReturn
++HakiosMaliUserClient::clientClose(void)
++{
++	IOLockLock(gMaliLock);
++	for (uint32_t i = 0; fBuffers != NULL && i < MALI_BUFFERS; i++) {
++		if (fBuffers[i].memory != NULL) {
++			freeBuffer(&fBuffers[i]);
++		}
++	}
++	IOLockUnlock(gMaliLock);
++	if (fSubmits != 0) {
++		IOLog("HakiosMali: a client goes after %u job chains, %u of them unfinished\n", fSubmits, fFailed);
++	}
++	terminate();
++	return kIOReturnSuccess;
++}
++
++void
++HakiosMaliUserClient::free(void)
++{
++	if (fBuffers != NULL) {
++		IODelete(fBuffers, struct mali_buffer, MALI_BUFFERS);
++		fBuffers = NULL;
++	}
++	IOUserClient::free();
++}
++
++IOReturn
++HakiosMaliUserClient::clientMemoryForType(UInt32 type, IOOptionBits * options, IOMemoryDescriptor ** memory)
++{
++	struct mali_buffer * b;
++	IOReturn ret = kIOReturnBadArgument;
++
++	IOLockLock(gMaliLock);
++	b = buffer(type);
++	if (b != NULL) {
++		b->memory->retain();
++		*memory = b->memory;
++		/* (fb_zc: the scan-out pool is no memory of the kernel's, and would be mapped as a device's: write-combined) */
++		*options = b->surface ? b->surface->mapCache : kIOMapWriteCombineCache;
++		ret = kIOReturnSuccess;
++	}
++	IOLockUnlock(gMaliLock);
++	return ret;
++}
++
++IOReturn
++HakiosMaliUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments * args,
++    IOExternalMethodDispatch * dispatch, OSObject * target, void * reference)
++{
++	union {
++		struct drm_gem_close close;
++		struct drm_panfrost_submit submit;
++		struct drm_panfrost_wait_bo wait;
++		struct drm_panfrost_create_bo create;
++		struct drm_panfrost_mmap_bo mmap;
++		struct drm_panfrost_get_param param;
++		struct drm_panfrost_get_bo_offset offset;
++		struct drm_panfrost_madvise madvise;
++		struct mali_show show;
++		struct mali_surface surface;
++		struct mali_wait waitseq;
++		struct mali_surface_seq sseq;
++	} r;
++	size_t size = args->structureInputSize;
++	struct mali_buffer * b;
++	IOReturn ret = kIOReturnSuccess;
++
++	if (args->structureInput == NULL || size > sizeof(r) || fBuffers == NULL) {
++		return kIOReturnBadArgument;
++	}
++	if (!hakios_mali_ready()) {
++		return kIOReturnNotReady;
++	}
++    size_t expected=0;
++    switch(selector) {
++    case kDrmGemClose:expected=sizeof(r.close);break;
++    case kPanfrostSubmit:expected=sizeof(r.submit);break;
++    case kPanfrostWaitBO:expected=sizeof(r.wait);break;
++    case kPanfrostCreateBO:expected=sizeof(r.create);break;
++    case kPanfrostMmapBO:expected=sizeof(r.mmap);break;
++    case kPanfrostGetParam:expected=sizeof(r.param);break;
++    case kPanfrostGetBOOffset:expected=sizeof(r.offset);break;
++    case kPanfrostMadvise:expected=sizeof(r.madvise);break;
++    case kHakiosMaliSurface:expected=sizeof(r.surface);break;
++    case kHakiosMaliSurfaceSeq:expected=sizeof(r.sseq);break;
++    case kHakiosMaliWait:expected=sizeof(r.waitseq);break;
++    default:return kIOReturnUnsupported;
++    }
++    if(size!=expected || !args->structureOutput || args->structureOutputSize<size)return kIOReturnBadArgument;
++	bzero(&r, sizeof(r));
++	memcpy(&r, args->structureInput, size);
++    if(selector==kPanfrostSubmit) {
++        if(r.submit.bo_handle_count>4096 || r.submit.in_sync_count || (r.submit.requirements&~1u) ||
++            r.submit.bo_handles+4ULL*r.submit.bo_handle_count<r.submit.bo_handles)return kIOReturnBadArgument;
++        uint32_t handles[64];
++        IOLockLock(gMaliLock);
++        bool valid=true;
++        for(unsigned i=0;i<r.submit.bo_handle_count && valid;i+=64) {
++            unsigned n=r.submit.bo_handle_count-i<64?r.submit.bo_handle_count-i:64;
++            if(copyin((user_addr_t)(r.submit.bo_handles+i*4ULL),handles,n*4)!=0){valid=false;break;}
++            for(unsigned k=0;k<n;k++)if(!buffer(handles[k]))valid=false;
++        }
++        IOLockUnlock(gMaliLock);
++        if(!valid)return kIOReturnBadArgument;
++    }
++
++
++	/* the two waits, without holding everybody else up */
++	if (selector == kHakiosMaliWait || selector == kPanfrostWaitBO) {
++		uint64_t seq = r.waitseq.seq;
++		int64_t timeout = r.waitseq.timeout_ns;
++
++		if (selector == kPanfrostWaitBO) {
++			IOLockLock(gMaliLock);
++			b = buffer(r.wait.handle);
++			seq = b != NULL ? b->last_seq : 0;
++			IOLockUnlock(gMaliLock);
++			timeout = r.wait.timeout_ns;
++			if (b == NULL) {
++				return kIOReturnNotFound;
++			}
++		}
++		ret = seq == 0 || hakios_mali_wait(seq, timeout > 0 ? (uint64_t) timeout : 0) ? kIOReturnSuccess : kIOReturnTimeout;
++		if (selector == kPanfrostWaitBO && ret == kIOReturnSuccess && seq != 0) {
++			/* the program is about to read what the GPU wrote: a surface's lines invalidated (flushSurface) */
++			IOLockLock(gMaliLock);
++			b = buffer(r.wait.handle);
++			if (b != NULL && b->surface != NULL) {
++				if(b->surface->kernelAddress())dm_invalidate((void *)b->surface->kernelAddress(),b->surface->allocSize);
++			}
++			IOLockUnlock(gMaliLock);
++		}
++		if (args->structureOutput != NULL && args->structureOutputSize >= size) {
++			memcpy(args->structureOutput, &r, size);
++			args->structureOutputSize = (uint32_t) size;
++		}
++		return ret;
++	}
++	IOLockLock(gMaliLock);
++	if (fRequests++ < 32) {                 /* the first ones a client makes, for following it from the log */
++		IOLog("HakiosMali: request %#x, %zu bytes\n", selector, size);
++	}
++	switch (selector) {
++	case kPanfrostGetParam:
++		if (!hakios_mali_parameter(r.param.param, &r.param.value)) {
++			ret = kIOReturnBadArgument;
++		}
++		break;
++	case kPanfrostCreateBO:
++		ret = createBO(&r.create);
++		break;
++	case kPanfrostMmapBO:                   /* the offset is the handle: the program maps client memory of that type */
++		ret = buffer(r.mmap.handle) != NULL ? kIOReturnSuccess : kIOReturnNotFound;
++		r.mmap.offset = (uint64_t) r.mmap.handle << 12;
++		break;
++	case kPanfrostGetBOOffset:
++		b = buffer(r.offset.handle);
++		ret = b != NULL ? kIOReturnSuccess : kIOReturnNotFound;
++		r.offset.offset = b != NULL ? b->address : 0;
++		break;
++	case kPanfrostSubmit: {
++		/* queued, not run here: the job's number goes back in `jc`, and every buffer it names
++		 * remembers it (kPanfrostWaitBO, and no buffer is freed under a job that uses it) */
++		uint64_t seq = 0;
++
++		fSubmits++;
++		gMaliSubmits++;
++		/* first what the processors wrote into the surfaces it names, out to memory (flushSurface) */
++		for (uint32_t i = 0; gMaliFlush && r.submit.jc != 0 && i < r.submit.bo_handle_count && i < 4096; i += 64) {
++			uint32_t handles[64];
++			uint32_t n = r.submit.bo_handle_count - i < 64 ? r.submit.bo_handle_count - i : 64;
++
++			if (copyin((user_addr_t) (r.submit.bo_handles + i * sizeof(uint32_t)), handles, n * sizeof(uint32_t)) != 0) {
++				break;
++			}
++			for (uint32_t k = 0; k < n; k++) {
++				b = buffer(handles[k]);
++				if (b != NULL && b->surface != NULL) {
++					flushSubmit(b);
++				}
++			}
++		}
++		if (r.submit.jc != 0) {
++			seq = hakios_mali_enqueue(r.submit.jc, r.submit.requirements & PANFROST_JD_REQ_FS);
++		}
++		for (uint32_t i = 0; seq != 0 && i < r.submit.bo_handle_count && i < 4096; i += 64) {
++			uint32_t handles[64];
++			uint32_t n = r.submit.bo_handle_count - i < 64 ? r.submit.bo_handle_count - i : 64;
++
++			if (copyin((user_addr_t) (r.submit.bo_handles + i * sizeof(uint32_t)), handles, n * sizeof(uint32_t)) != 0) {
++				break;
++			}
++			for (uint32_t k = 0; k < n; k++) {
++				b = buffer(handles[k]);
++				if (b != NULL) {
++					b->last_seq = seq;
++					if (b->surface != NULL) {
++						__atomic_store_n(&b->surface->maliSeq,seq,__ATOMIC_RELEASE);      /* (HakiosMaliDrawn) */
++					}
++				}
++			}
++		}
++		if(r.submit.jc && !seq)ret=kIOReturnIOError;
++		r.submit.jc = seq;
++		break;
++	}
++	case kHakiosMaliSurface:
++		ret = surfaceBuffer(&r.surface);
++		break;
++	case kHakiosMaliSurfaceSeq: {
++		SweetSurface * surface = sweet_surface_copy(r.sseq.surface);
++
++		if (surface != NULL) {
++			__atomic_store_n(&surface->maliSeq,r.sseq.seq,__ATOMIC_RELEASE);
++			surface->release();
++			
++		} else {
++			ret = kIOReturnNotFound;
++		}
++		break;
++	}
++	case kHakiosMaliShow: ret=kIOReturnUnsupported;break;
++	case kPanfrostWaitBO:                   /* (answered above, without the lock) */
++		ret = buffer(r.wait.handle) != NULL ? kIOReturnSuccess : kIOReturnNotFound;
++		break;
++	case kPanfrostMadvise:
++		r.madvise.retained = 1;
++		break;
++	case kDrmGemClose:
++		b = buffer(r.close.handle);
++		if (b != NULL) {
++			freeBuffer(b);
++		} else {
++			ret = kIOReturnNotFound;
++		}
++		break;
++	default:
++		IOLog("HakiosMali: request %#x (%zu bytes) is not known here\n", selector, size);
++		ret = kIOReturnUnsupported;
++		break;
++	}
++	IOLockUnlock(gMaliLock);
++
++	if (args->structureOutput != NULL && args->structureOutputSize >= size) {
++		memcpy(args->structureOutput, &r, size);
++		args->structureOutputSize = (uint32_t) size;
++	}
++	return ret;
++}
++
++static void dream_panfrost_start() {
++    int enabled=0;PE_parse_boot_argn("s8gl",&enabled,sizeof(enabled));if(!enabled)return;
++    dpf_backend_start();
++    if(hakios_mali_ready())HakiosMaliStart();
++}
+--- /dev/null
++++ b/iokit/Kernel/arm/DreamPanfrostVa.h
+@@ -0,0 +1,137 @@
++/*
++ * The GPU addresses the Galaxy S9's Mali gives programs' buffers (drivers/gpu/hakios.mali.c, hakios_mali_address() and
++ * hakios_mali_unmap()): plain C with no kernel in it, so that tools/mali_va_test.c checks it on a build machine.
++ *
++ * The range is Linux panfrost's, 32 MB up to 4 GB, which is what Mesa's panfrost assumes and leans on (Mesa 25.0.7,
++ * src/panfrost/lib/kmod/panfrost_kmod.c: "Lower 32MB are reserved, and the address space is limited to 32-bit"). On
++ * Bifrost a blend shader's address is given in 32 bits, its upper half taken to be the fragment shader's
++ * (src/gallium/drivers/panfrost/pan_cmdstream.c, `cfg.shader.pc = (uint32_t)blend_shaders[i]`), and workgroup storage
++ * must not cross a 4 GB line (src/panfrost/lib/pan_desc.c): two buffers either side of 4 GB would send a blend shader
++ * to the wrong place, with nothing said. The original driver (the Infinix Hot 20's) handed out 32 GB, never an address
++ * twice, which Mesa got away with only for as long as the first 4 GB lasted.
++ *
++ * And a buffer the GPU runs code from must not cross a 16 MB line, the program counter being 24 bits there: Linux
++ * panfrost keeps executable buffers inside one (panfrost_gem.c, aligned to their size), and Mesa counts on it
++ * (src/panfrost/midgard/midgard_compile.c: "the kernel makes sure shader BOs can't cross 16MB boundaries").
++ *
++ * So addresses are given out and taken back. The range is cut into 64 KB granules; a buffer takes the granules its size
++ * covers plus one left empty after it (an overrun faults rather than writing into the next buffer), found by a walk that
++ * carries on from where the last one ended and starts again from the bottom when it reaches 4 GB, so an address freed
++ * is not given out again at once: a job still using a buffer just freed faults where it can be said, not in another
++ * buffer's memory. The caller gives an address back only once nothing of the buffer is left in the GPU's tables or its
++ * MMU (hakios_mali_unmap()). Sources: Linux panfrost (panfrost_gem.c, panfrost_mmu.c) and Mesa 25.0.7, read for these
++ * facts; nothing of their code.
++ */
++#ifndef HAKIOS_MALI_VA_H
++#define HAKIOS_MALI_VA_H
++
++#include <stdbool.h>
++#include <stdint.h>
++
++#define MALI_VA_FIRST           0x02000000ull                           /* 32 MB, as Linux panfrost */
++#define MALI_VA_END             0x100000000ull                          /* 4 GB */
++#define MALI_VA_GRANULE         0x10000ull                              /* 64 KB */
++#define MALI_VA_GRANULES        (MALI_VA_END / MALI_VA_GRANULE)         /* 65536, the first 512 never given */
++#define MALI_VA_EXEC_LINE       0x1000000ull                            /* 16 MB: code does not cross one */
++
++struct mali_va {
++	uint64_t used[MALI_VA_GRANULES / 64];   /* a bit a granule */
++	uint64_t next;                          /* the granule the next walk starts from (0: the bottom) */
++	uint64_t taken;                         /* granules in use, the empty ones after buffers included */
++};
++
++static inline bool
++mali_va_used(const struct mali_va *va, uint64_t g)
++{
++	return (va->used[g / 64] >> (g % 64)) & 1;
++}
++
++static inline void
++mali_va_mark(struct mali_va *va, uint64_t first, uint64_t count, bool used)
++{
++	for (uint64_t g = first; g < first + count; g++) {
++		if (used) {
++			va->used[g / 64] |= 1ull << (g % 64);
++		} else {
++			va->used[g / 64] &= ~(1ull << (g % 64));
++		}
++	}
++	va->taken = used ? va->taken + count : va->taken - count;
++}
++
++/* The granules a buffer of `size` bytes takes, the empty one after it included. */
++static inline uint64_t
++mali_va_granules(uint64_t size)
++{
++	return (size + MALI_VA_GRANULE - 1) / MALI_VA_GRANULE + 1;
++}
++
++/*
++ * The first of `count` free granules in a row from granule `from` on, below 4 GB, whose first `size` bytes do not cross
++ * a 16 MB line when `executable` (and `size` is not more than 16 MB). 0: none.
++ */
++static inline uint64_t
++mali_va_find(const struct mali_va *va, uint64_t from, uint64_t count, uint64_t size, bool executable)
++{
++	uint64_t g = from;
++
++	while (g + count <= MALI_VA_GRANULES) {
++		uint64_t start = g * MALI_VA_GRANULE, run = 0;
++
++		if (executable && size <= MALI_VA_EXEC_LINE && start / MALI_VA_EXEC_LINE != (start + size - 1) / MALI_VA_EXEC_LINE) {
++			g = (start / MALI_VA_EXEC_LINE + 1) * (MALI_VA_EXEC_LINE / MALI_VA_GRANULE);    /* from the next line */
++			continue;
++		}
++		while (run < count && !mali_va_used(va, g + run)) {
++			run++;
++		}
++		if (run == count) {
++			return g;
++		}
++		g += run + 1;                   /* past the one in use */
++	}
++	return 0;
++}
++
++/* `size` bytes of GPU addresses; `executable`: the GPU may run code from them. 0: none left (or a size of nothing). */
++static inline uint64_t
++mali_va_alloc(struct mali_va *va, uint64_t size, bool executable)
++{
++	uint64_t count = mali_va_granules(size), first = MALI_VA_FIRST / MALI_VA_GRANULE, g = 0;
++
++	if (size == 0 || size > MALI_VA_END - MALI_VA_FIRST) {
++		return 0;
++	}
++	if (va->next > first) {
++		g = mali_va_find(va, va->next, count, size, executable);
++	}
++	if (g == 0) {
++		g = mali_va_find(va, first, count, size, executable);
++	}
++	if (g == 0) {
++		return 0;
++	}
++	mali_va_mark(va, g, count, true);
++	va->next = g + count < MALI_VA_GRANULES ? g + count : first;
++	return g * MALI_VA_GRANULE;
++}
++
++/* The addresses of a buffer given back: `address` and `size` as mali_va_alloc() gave and was asked. false: not one of its. */
++static inline bool
++mali_va_free(struct mali_va *va, uint64_t address, uint64_t size)
++{
++	uint64_t g = address / MALI_VA_GRANULE, count = mali_va_granules(size);
++
++	if (address < MALI_VA_FIRST || address % MALI_VA_GRANULE != 0 || size == 0 || g + count > MALI_VA_GRANULES) {
++		return false;
++	}
++	for (uint64_t k = g; k < g + count; k++) {
++		if (!mali_va_used(va, k)) {
++			return false;           /* not given out (or given back already): nothing is changed */
++		}
++	}
++	mali_va_mark(va, g, count, false);
++	return true;
++}
++
++#endif /* HAKIOS_MALI_VA_H */

@@ -1,0 +1,51 @@
+Third-party components in or used by HakiOS
+(full table with origins and status: THIRD_PARTY_LICENSES.md; compliance notes: COMPLIANCE.md)
+
+In the repository:
+
+- XNU (Apple): the kernel sources are fetched by xnu/apply.sh from github.com/apple-oss-distributions/xnu;
+  our patch and files are a derivative work under the Apple Public Source License 2.0 (LICENSE.APSL).
+- libdeflate (Eric Biggers), xnu/files/bsd/miscfs/apfs/libdeflate/: MIT, see its COPYING.
+- SoftwareAES (UniXNU, ArmVirtPlatform contributors), github.com/UniXNU/SoftwareAES at 4a45326da5c2:
+  xnu/files/iokit/Kernel/MiniIOAESAccelerator.cpp is a port of it, under BSD-2-Clause-Patent (notice in the file).
+- mkbootimg.py (Android Open Source Project), devices/redwood/prebuilt/mkbootimg.py: Apache License 2.0.
+- Mu-Silicium / Project Mu (Project Silicium, Microsoft and contributors): devices/redwood/uefi/ holds a
+  patch and files against it; their license applies to the derived parts (BSD-2-Clause-Patent).
+- UEFI driver binaries of the phone's own firmware, devices/redwood/uefi/files/Binaries/redwood/: the
+  vendor's (Qualcomm/Xiaomi), extracted from the phone's xbl.img the way Project Silicium redistributes
+  such drivers for other phones. They are needed only to rebuild the UEFI image; they can be removed and
+  extracted by each user from their own phone's firmware with UEFIReader.
+
+- the Galaxy S9's device repository (Scion-Project/hakios-starlte, checked out at devices/starlte/):
+  prebuilt/SILICIUM_UEFI.fd and BootShim.bin are built from Mu-Silicium with the port's changes
+  (BSD-2-Clause, BSD-2-Clause-Patent); the UEFI image carries Project Silicium's Carbon Hypervisor
+  (Hyp.bin, GPL-2.0, source at github.com/Project-Silicium/Carbon-Hypervisor); prebuilt/mkbootimg.py is
+  AOSP's (Apache 2.0). firmware/audio/ holds Samsung's audio firmware binaries, unchanged from the
+  LineageOS vendor trees: the vendor's, redistribution terms "to verify" (THIRD_PARTY_LICENSES.md).
+
+- the FocalTech touch firmware, drivers/input/hakios.focaltech_fw.h: the touch vendor's;
+  generated from a device blob, redistribution terms "to verify" (THIRD_PARTY_LICENSES.md).
+
+- the Wi-Fi driver: Linux's ath11k (BSD-3-Clause-Clear) and FreeBSD's LinuxKPI headers (BSD-2-Clause) are
+  fetched by tools/mk-ath11k.sh at pinned releases and built on our layer wifi/lx (MIT); only the layer is here.
+- the Galaxy S9's Wi-Fi driver: Linux's brcmfmac and brcmutil (ISC), of the same pinned release, are fetched by
+  tools/mk-brcmfmac.sh, patched with wifi/lx/brcmfmac/patches/ (ISC, as the files it changes) and built on the same
+  layer (wifi/lx/brcmfmac, MIT); only the layer and the patch are here.
+
+- AdrenoMetal (UniXNU, "NativeMetal contributors"), userland/src/metalvk/NativeBridgeMetalFrontend.* and
+  tools/metal/bridge/NativeMetal*: MIT, see LICENSE.AdrenoMetal beside them; the Metal-on-Vulkan plug-in (METAL=vk).
+
+Fetched at build time, never committed:
+
+- the Darwin userland 16.5 IPSW (Apple): the user space of the system image; the user gets it and
+  sysimage/unpack.sh unpacks it on their machine; nothing downloads it; its license is Apple's.
+- the iPhoneOS 16.5 SDK from github.com/theos/sdks, and theos's cctools (Apple's open-source cctools): the
+  kernel's and user space's build tools.
+- the phone's firmware (GPU, Wi-Fi, audio DSP, modem, haptics, cameras): the vendor's, pulled from the
+  user's own phone (devices/redwood/pull-firmware.sh).
+- lzfse (Apple, BSD-3-Clause), built by xnuloader/mkidentity.sh when no LZFSE decoder is installed.
+- Mesa (for GL=1 images), Procursus and Sileo packages (tools/mk-jb.sh): their own licenses.
+- metal2vulkan (github.com/steelbrain/metal2vulkan; GPL-2.0-or-later OR LGPL-3.0-or-later), for METAL=vk images:
+  fetched and patched by tools/metal/mk-metal2vulkan.sh and built only into libmetal2vulkan.dylib, a library of its own
+  that the plug-in links and that can be replaced. None of its code is in this repository's files but our changes to it,
+  patch files in tools/metal/m2v/, which are under its licence and say so in their headers.
