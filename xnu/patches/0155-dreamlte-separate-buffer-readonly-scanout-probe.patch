@@ -1,0 +1,68 @@
+--- a/iokit/Kernel/arm/DreamMaliBlit.inc
++++ b/iokit/Kernel/arm/DreamMaliBlit.inc
+@@ -240,7 +240,7 @@
+     if(src->width<dmb_src_w(w)||src->height<dmb_src_h(h)) return 0;
+     IOLockLock(dmb_lock);
+     int ret=dmb_poisoned?-1:!dmb_ready?0:dmb_copy_locked(src->memory,(void *)src->kernelAddress(),
+-        dst->memory,(void *)dst->kernelAddress(),false,w,h,sb,db);
++        dst->memory,(void *)dst->kernelAddress(),OSDynamicCast(IOBufferMemoryDescriptor,dst->memory)!=NULL,w,h,sb,db);
+     IOLockUnlock(dmb_lock);return ret;
+ }
+ #endif
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -424,6 +424,46 @@
+ // Bounded evidence for transitions after the initial home screen.
+ static uint32_t sweet_fb_transition_logs;
+ static uint64_t sweet_fb_gpu_layers, sweet_fb_cpu_layers, sweet_fb_bad_layers;
++#if defined(DREAMLTE)
++static bool sweet_stage_attempted;
++static SweetSurface *sweet_stage_surface; // Retain DMA storage until reboot.
++static void sweet_stage_probe(SweetSurface *src,unsigned w,unsigned h,unsigned sb,unsigned db) {
++    if(sweet_stage_attempted) return;
++    sweet_stage_attempted=true;
++    int enabled=0;PE_parse_boot_argn("s8stage",&enabled,sizeof(enabled));if(!enabled) return;
++    static const uint64_t bases[6]={0x128b1000,0x128b2000,0x128b3000,0x128b4000,0x128b5000,0x128b7000};
++    for(unsigned i=0;i<6;i++) {
++        uintptr_t va=ml_io_map(bases[i],0x1000);if(!va) continue;
++        volatile uint32_t *reg=(volatile uint32_t *)va;
++        IOLog("DREAM FLIP PROBE: idma=%u en=%x in=%x size=%x offset=%x img=%x base=%x\n",
++            i,reg[0],reg[2],reg[4],reg[5],reg[6],reg[16]);
++    }
++    uintptr_t dc=ml_io_map(0x12860000,0x2000);
++    if(dc) {
++        volatile uint32_t *reg=(volatile uint32_t *)dc;
++        IOLog("DREAM FLIP PROBE: decon control=%x update=%x trigger=%x\n",reg[0],reg[0x60/4],reg[0x70/4]);
++        for(unsigned i=0;i<6;i++) IOLog("DREAM FLIP PROBE: win=%u control=%x\n",i,reg[(0x1000+i*0x30)/4]);
++    }
++    sweet_stage_surface=sweet_surface_create_buffer(1440,h,db,SWEET_FB_FORMAT_BGRA);
++    if(!sweet_stage_surface) {IOLog("DREAM STAGE: allocation failed\n");return;}
++    IOByteCount span=0;uint64_t pa=sweet_stage_surface->memory->getPhysicalSegment(0,&span,kIOMemoryMapperNone);
++    IOLog("DREAM STAGE: allocated bytes=%llu first_pa=%llx span=%llu scanout_switch=0\n",
++        sweet_stage_surface->memory->getLength(),pa,(uint64_t)span);
++    int result=dream_gpu_frame_copy(src,sweet_stage_surface,w,h,sb,db);
++    unsigned bad=0,samples=0;
++    if(result>0) {
++        const uint8_t *s=(const uint8_t *)src->kernelAddress()+src->offset;
++        const uint8_t *d=(const uint8_t *)sweet_stage_surface->kernelAddress();
++        for(unsigned y=0;y<h;y+=17) for(unsigned x=0;x<w;x+=13) {
++            unsigned sx=x*125/152,sy=y*609/740;
++            samples++;if(((const uint32_t *)(d+(uint64_t)y*db+144))[x]!=((const uint32_t *)(s+(uint64_t)sy*sb))[sx]) bad++;
++        }
++    }
++    IOLog("DREAM STAGE: GPU_result=%d samples=%u mismatch=%u %s (real source, separate cached buffer, no flip)\n",
++        result,samples,bad,result>0&&!bad?"PASS":"FAIL");
++}
++#endif
++
+ 
+ 
+ /* Copy each enabled layer's surface into the panel memory (no scaling). */
+@@ -587,6 +627,7 @@
+ 			if (gpu_copy == 0 && sx == 0 && sy == 0 && dx == 0 && dy == 0 &&
+ 			    w == (int32_t)(fRenderX?fLogicalW:fWidth) && h == (int32_t)(fRenderX?fLogicalH:fHeight) &&
+ 			    s->pixelFormat == SWEET_FB_FORMAT_BGRA) {
++                if(fRenderX) sweet_stage_probe(s,1368,fHeight,s->bytesPerRow,fRowBytes);
+ 				gpu_copy = dream_gpu_frame_copy(s, fScanoutSurface, fRenderX?1368:w, fHeight, s->bytesPerRow, fRowBytes);
+ 			}
+ #endif
