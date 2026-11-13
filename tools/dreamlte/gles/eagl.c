@@ -258,6 +258,8 @@ struct eagl {
 	void *table[SLOTS];             /* [0] is the context itself: what every entry gets as its first argument */
 	id object;                      /* the EAGLContext */
 	struct hakios_gl *gl;
+	bool group_original;
+	GLint group_original_mode;
 	int b3a8_probe;
 	unsigned long api;
 	struct image *images;           /* the textures that stand for IOSurfaces (image_new()), image_room of them made room for */
@@ -3159,6 +3161,8 @@ vblur_draw_begin(struct eagl *e, struct vblur_chain *chain, GLint enabled[4])
  * another group that holds nothing yet passes its coverage on. Boot-arg glgroup=0: as before.
  */
 
+#include "dream-group-mask.inc"
+
 static const char group_cover_fragment[] =
     "#version 300 es\n"
     "uniform lowp sampler2D texture0;\n"
@@ -3415,7 +3419,25 @@ group_draw_begin(struct eagl *e, GLint enabled[4])
 			    (into->state == GROUP_VIBRANT && memcmp(into->colours, colours, sizeof(into->colours)) == 0));
 		}
 	}
-	if (colours == NULL || !group_programs(e)) {
+    e->group_original = false;
+    if (colours != NULL && from != NULL) {
+        GLint mode = dream_group_original(e->program, cover, colours);
+        if (mode < 0) {
+            /* This program cannot expose its uncomposited coverage. Keep its
+             * original clipping shader instead of substituting a bare quad. */
+            group_flatten(e, e->bound[0], from);
+            from = NULL; colours = NULL;
+            static unsigned misses;
+            if (misses++ < 8) say("DREAM MASK GROUP: original coverage unavailable; original clipping retained\n");
+        } else {
+            e->group_original = true;
+            e->group_original_mode = mode;
+            static unsigned reports;
+            if (reports++ < 24) say("DREAM MASK GROUP: function=%u program=%u mode=%u original-shader=1\n",
+                function, e->program, cover ? 1 : 2);
+        }
+    }
+	if (colours == NULL || (!e->group_original && !group_programs(e))) {
 		/* not one of ours: what it reads is what CoreAnimation drew, and what it draws into is no longer a
 		 * vibrant layer's coverage, nor empty */
 		for (unsigned unit = 0; unit < 4 && e->groups != NULL; unit++) {
@@ -3431,9 +3453,11 @@ group_draw_begin(struct eagl *e, GLint enabled[4])
 	}
 	clear_now(e);
 	if (cover) {
+        if (!e->group_original) {
 		glUseProgram(e->group_cover);
 		glUniformMatrix4fv(e->group_cover_matrix, 1, 0, matrix);
 		glUniform4fv(e->group_cover_texmat, 1, texmat);
+        }
 		e->group_blend = glIsEnabled(GL_BLEND);
 		glGetIntegerv(GL_BLEND_SRC_RGB, &e->group_blend_func[0]);
 		glGetIntegerv(GL_BLEND_DST_RGB, &e->group_blend_func[1]);
@@ -3447,10 +3471,12 @@ group_draw_begin(struct eagl *e, GLint enabled[4])
 		into->state = GROUP_VIBRANT;
 		group_covered++;
 	} else {
+        if (!e->group_original) {
 		glUseProgram(e->group_over);
 		glUniformMatrix4fv(e->group_over_matrix, 1, 0, matrix);
 		glUniform4fv(e->group_over_texmat, 1, texmat);
 		glUniform4fv(e->group_over_colours, 5, colours);
+        }
 		e->group_blend = glIsEnabled(GL_BLEND);
 		glGetIntegerv(GL_BLEND_SRC_RGB, &e->group_blend_func[0]);
 		glGetIntegerv(GL_BLEND_DST_RGB, &e->group_blend_func[1]);
@@ -3465,7 +3491,7 @@ group_draw_begin(struct eagl *e, GLint enabled[4])
 		}
 		group_laid++;
 	}
-	for (GLuint i = 0; i < 3; i++) {
+	for (GLuint i = 0; !e->group_original && i < 3; i++) {
 		glGetVertexAttribiv(i, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &enabled[i]);
 		if (!enabled[i]) {
 			glEnableVertexAttribArray(i);
@@ -3477,11 +3503,15 @@ group_draw_begin(struct eagl *e, GLint enabled[4])
 static void
 group_draw_end(struct eagl *e, const GLint enabled[4])
 {
-	for (GLuint i = 0; i < 3; i++) {
+	for (GLuint i = 0; !e->group_original && i < 3; i++) {
 		if (!enabled[i]) {
 			glDisableVertexAttribArray(i);
 		}
 	}
+    if (e->group_original) {
+        glUniform1i(e->group_original_mode, 0);
+        e->group_original = false;
+    }
 	(e->group_blend ? glEnable : glDisable)(GL_BLEND);
 	glBlendFuncSeparate((GLenum)e->group_blend_func[0], (GLenum)e->group_blend_func[1], (GLenum)e->group_blend_func[2],
 	    (GLenum)e->group_blend_func[3]);
@@ -4358,8 +4388,8 @@ my_glCreateShader(void *context, GLenum type)
 static void
 my_glShaderSource(void *context, GLuint shader, GLsizei count, const GLchar *const *strings, const GLint *lengths)
 {
-	struct eagl *e = context;
-	bool fragment = e->fragment[shader % 256], fetch;
+	struct eagl *e = (struct eagl *)context;
+	bool fragment = e->fragment[shader % 256], fetch, group = false;
 	const GLchar *parts[6] = { "#version 300 es\n", fragment ? fragment_start : vertex_start, "", NULL, "",
 		                   full_precision ? all_highp : "" };
 	size_t size = 1, extensions = 0;
@@ -4369,7 +4399,7 @@ my_glShaderSource(void *context, GLuint shader, GLsizei count, const GLchar *con
 	for (GLsizei i = 0; i < count; i++) {
 		size += lengths != NULL && lengths[i] >= 0 ? (size_t)lengths[i] : strlen(strings[i]);
 	}
-	if ((text = calloc(1, 2 * size + 64)) == NULL) {
+	if ((text = calloc(1, 2 * size + 256)) == NULL) {
 		glShaderSource(shader, count, strings, lengths);
 		return;
 	}
@@ -4379,6 +4409,9 @@ my_glShaderSource(void *context, GLuint shader, GLsizei count, const GLchar *con
 	/* "#extension" lines must stay ahead of everything that is not the preprocessor's: they move to the top */
 	head = text + size;
 	strcpy(head, parts[0]);
+    fetch = fragment && strstr(text, "gl_LastFragData") != NULL;
+    group = fragment && !fetch && group_vibrant_on && fetch_offered;
+    if (group) strcat(head, "#extension GL_EXT_shader_framebuffer_fetch : require\n");
 	for (line = text; (line = strstr(line, "#extension")) != NULL; line += 2) {
 		size_t length = strcspn(line, "\n");
 
@@ -4391,8 +4424,12 @@ my_glShaderSource(void *context, GLuint shader, GLsizei count, const GLchar *con
 	parts[3] = text;
 	if (fragment) {
 		fetch = strstr(text, "gl_LastFragData") != NULL;
-		parts[2] = fetch ? fragment_fetch : fragment_plain;
-		parts[4] = fetch ? fragment_fetch_end : fragment_plain_end;
+		parts[2] = group ? dream_group_fragment : fetch ? fragment_fetch : fragment_plain;
+		parts[4] = group ? dream_group_fragment_end : fetch ? fragment_fetch_end : fragment_plain_end;
+        static unsigned mask_reports;
+        if (mask_reports++ < 48) say("DREAM MASK SHADER: id=%u group_bridge=%u circle=%u supercircle=%u square=%u texture1=%u fetch=%u\n",
+            shader, group, strstr(text,"circleImage(") != NULL, strstr(text,"supercircleImage(") != NULL,
+            strstr(text,"squareImage(") != NULL, strstr(text,"texture1") != NULL, fetch);
 	}
 	free((void *)e->sources[shader % 256]);
 	e->sources[shader % 256] = text;
