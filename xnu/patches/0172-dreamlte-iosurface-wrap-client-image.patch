@@ -1,0 +1,152 @@
+--- a/iokit/Kernel/arm/SweetSurface.h
++++ b/iokit/Kernel/arm/SweetSurface.h
+@@ -28,6 +28,7 @@
+ 	OSDeclareDefaultStructors(SweetSurface);
+ 
+ public:
++	bool userMemoryPrepared; /* pinned client-owned pixels, paired complete on free */
+ 	volatile uint64_t maliSeq; /* GPU completion number, 0=CPU, ~0=frame being assembled */
+ 	uint32_t id;
+ 	uint32_t width, height, bytesPerRow, offset, pixelFormat, allocSize;
+@@ -41,7 +42,7 @@
+ 	IOBufferMemoryDescriptor *state;        /* shared state page, read-only for users */
+ 	IOMemoryMap              *kernelMap;    /* lazily created for kernel copies */
+ 
+-	bool init() APPLE_KEXT_OVERRIDE { maliSeq=0; return OSObject::init(); }
++	bool init() APPLE_KEXT_OVERRIDE { maliSeq=0; userMemoryPrepared=false; return OSObject::init(); }
+ 	void free() APPLE_KEXT_OVERRIDE;
+ 
+ 	/* Kernel address of the pixels (mapped on first use), or 0. */
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -43,6 +43,7 @@
+ enum {
+ 	kSweetSurfaceCreate             = 0,
+ 	kSweetSurfaceLookup             = 4,
++	kSweetSurfaceWrapClientImage    = 6,
+ 	kSweetSurfaceLimits             = 13,
+ 	kSweetSurfaceLookupFromPort     = 34,
+ 	kSweetSurfaceCreatePort         = 35,
+@@ -80,10 +81,11 @@
+ void
+ SweetSurface::free()
+ {
+-	if (OSDynamicCast(IOBufferMemoryDescriptor, memory) != NULL) {
++	OSSafeReleaseNULL(kernelMap);
++	if(userMemoryPrepared && memory) memory->complete();
++	if (userMemoryPrepared || OSDynamicCast(IOBufferMemoryDescriptor, memory) != NULL) {
+ 		OSAddAtomic64(-(SInt64)allocSize, (volatile SInt64 *)&sweet_surface_wired);
+ 	}
+-	OSSafeReleaseNULL(kernelMap);
+ 	OSSafeReleaseNULL(memory);
+ 	OSSafeReleaseNULL(state);
+ 	OSObject::free();
+@@ -98,7 +100,7 @@
+ 	}
+ 	IOLockLock(sweet_surface_lock);
+ 	if (kernelMap == NULL && memory != NULL) {
+-		kernelMap = memory->map(kIOMapWriteCombineCache);
++		kernelMap = memory->map(mapCache);
+ 	}
+ 	IOLockUnlock(sweet_surface_lock);
+ 	return kernelMap != NULL ? (uintptr_t)kernelMap->getVirtualAddress() : 0;
+@@ -371,6 +373,8 @@
+ 	return kIOReturnSuccess;
+ }
+ 
++#include "DreamSurfaceWrap.inc"
++
+ /* Per-client mapping of one surface. */
+ class SweetSurfaceRef : public OSObject {
+ 	OSDeclareDefaultStructors(SweetSurfaceRef);
+@@ -433,6 +437,7 @@
+ 	IOReturn addRef(SweetSurface *s, SweetSurfaceRef **refOut, bool *existing);
+ 	IOReturn returnSurface(SweetSurface *s, IOExternalMethodArguments *args);
+ 	IOReturn create(IOExternalMethodArguments *args);
++	IOReturn wrapClientImage(IOExternalMethodArguments *args);
+ 
+ public:
+ 	bool initWithTask(task_t owningTask, void *securityID, UInt32 type) APPLE_KEXT_OVERRIDE;
+@@ -745,6 +750,27 @@
+ }
+ 
+ IOReturn
++IOSurfaceRootUserClient::wrapClientImage(IOExternalMethodArguments *args)
++{
++    uint8_t input[sizeof(DreamWrapImageRequest)];
++    if(args->structureInputDescriptor) {
++        if(args->structureInputDescriptor->getLength()!=sizeof(input) ||
++           args->structureInputDescriptor->readBytes(0,input,sizeof(input))!=sizeof(input))return kIOReturnBadArgument;
++    } else {
++        if(!args->structureInput || args->structureInputSize!=sizeof(input))return kIOReturnBadArgument;
++        memcpy(input,args->structureInput,sizeof(input));
++    }
++    SweetSurface *s=NULL;IOReturn ret=dream_surface_wrap(fTask,input,sizeof(input),&s);
++    if(ret!=kIOReturnSuccess)return ret;
++    if(!sweet_surface_publish(s)){s->release();return kIOReturnNoResources;}
++    static unsigned logged;
++    if(logged++<24)IOLog("DREAM SURF WRAP: id=%u %ux%u format=%x bpe=%u bpr=%u span=%u state=real tail=%x\n",
++        s->id,s->width,s->height,s->pixelFormat,s->bytesPerElement,s->bytesPerRow,s->allocSize,
++        ((const DreamWrapImageRequest *)input)->tailWord);
++    ret=returnSurface(s,args);s->release();return ret;
++}
++
++IOReturn
+ IOSurfaceRootUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments *args,
+     __unused IOExternalMethodDispatch *dispatch, __unused OSObject *target,
+     __unused void *reference)
+@@ -762,6 +788,8 @@
+ 	}
+ 	case kSweetSurfaceCreate:
+ 		return create(args);
++	case kSweetSurfaceWrapClientImage:
++		return wrapClientImage(args);
+ 	case kSweetSurfaceLookup: {
+ 		SweetSurface *s = sweet_surface_copy((uint32_t)arg0);
+ 		IOReturn ret = kIOReturnNotFound;
+--- /dev/null
++++ b/iokit/Kernel/arm/DreamSurfaceWrap.inc
+@@ -0,0 +1,43 @@
++/* iOS16.7 IOSurfaceClientWrapClientImage selector6: exact32-byte input,
++ * decoded from the same cache that calls this ABI. Return real mapped state;
++ * a zero-filled successful result creates a bogus client and crashes its
++ * GetBulkAttachments memcpy from state+0x30.
++ */
++struct DreamWrapImageRequest {
++    uint64_t address;
++    uint32_t width,height,pixelFormat,bytesPerElement,bytesPerRow,tailWord;
++};
++static_assert(sizeof(DreamWrapImageRequest)==32,"WrapClientImage ABI");
++static IOReturn
++dream_surface_wrap(task_t owner,const void *input,size_t inputSize,SweetSurface **result)
++{
++    *result=NULL;
++    if(!input || inputSize!=sizeof(DreamWrapImageRequest))return kIOReturnBadArgument;
++    DreamWrapImageRequest q;memcpy(&q,input,sizeof(q));
++    if(!q.address || !q.width || !q.height || q.width>SWEET_SURFACE_MAX_DIM || q.height>SWEET_SURFACE_MAX_DIM)
++        return kIOReturnBadArgument;
++    if(q.bytesPerElement!=1 && q.bytesPerElement!=2 && q.bytesPerElement!=4 && q.bytesPerElement!=8 && q.bytesPerElement!=16)
++        return kIOReturnBadArgument;
++    if((q.pixelFormat==0 || q.pixelFormat==0x42475241 || q.pixelFormat==0x52474241 ||
++        q.pixelFormat==0x41524742 || q.pixelFormat==0x41424752) && q.bytesPerElement!=4)
++        return kIOReturnBadArgument;
++    uint64_t span=(uint64_t)q.bytesPerRow*q.height;
++    if(q.bytesPerRow<(uint64_t)q.width*q.bytesPerElement || !span || span>SWEET_SURFACE_MAX_ALLOC || q.address+span<q.address)
++        return kIOReturnBadArgument;
++    SweetSurface *s=sweet_surface_alloc();if(!s)return kIOReturnNoMemory;
++    IOMemoryDescriptor *memory=IOMemoryDescriptor::withAddressRange(q.address,span,kIODirectionInOut,owner);
++    if(!memory){s->release();return kIOReturnNoMemory;}
++    IOReturn ret=memory->prepare();
++    if(ret!=kIOReturnSuccess){memory->release();s->release();return ret;}
++    uint64_t previous=(uint64_t)OSAddAtomic64(span,(volatile SInt64 *)&sweet_surface_wired);
++    if(previous+span>SWEET_SURFACE_WIRED_MAX) {
++        OSAddAtomic64(-(SInt64)span,(volatile SInt64 *)&sweet_surface_wired);
++        memory->complete();memory->release();s->release();return kIOReturnNoMemory;
++    }
++    s->memory=memory;s->userMemoryPrepared=true;s->mapCache=kIOMapDefaultCache;
++    s->width=q.width;s->height=q.height;s->bytesPerRow=q.bytesPerRow;s->pixelFormat=q.pixelFormat;
++    s->bytesPerElement=(uint16_t)q.bytesPerElement;s->elementWidth=s->elementHeight=1;
++    s->allocSize=(uint32_t)span;s->offset=0;s->planeCount=0;
++    *result=s;
++    return kIOReturnSuccess;
++}

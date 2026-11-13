@@ -1,0 +1,52 @@
+--- a/bsd/kern/DreamGlesExecEnv.inc
++++ b/bsd/kern/DreamGlesExecEnv.inc
+@@ -2,6 +2,7 @@
+  * Preserve every supplied value. Supply missing launch settings only for the
+  * exact executable path, opt-in with the existing s8gl boot argument.
+  */
++static uint32_t dream_gles_exec_attempts;
+ static int
+ dream_gles_exec_env(struct image_params *imgp, int pointer_size)
+ {
+@@ -10,6 +11,12 @@
+     int enabled = 0;
+     PE_parse_boot_argn("s8gl", &enabled, sizeof(enabled));
+     if (!enabled) return 0;
++    /* A failed userland adapter must not keep the phone in a compositor loop.
++     * Two attempts per boot; after that use the old renderer. GPU copy, RAM,
++     * power and the eight blit AS remain enabled and untouched.
++     */
++    uint32_t attempt=__atomic_add_fetch(&dream_gles_exec_attempts,1,__ATOMIC_RELAXED);
++    bool allow_insert=attempt<=2;
+     const char *required[] = {
+         "DYLD_INSERT_LIBRARIES=/redwood/lib/libdream.gles.dylib",
+         "PAN_MESA_DEBUG=noafbc",
+@@ -28,6 +35,9 @@
+         if (!strcmp(cursor, "DYLD_PRINT_LIBRARIES=1")) {
+             memcpy(cursor, "DYLD_PRINT_SEARCHING=1", sizeof("DYLD_PRINT_SEARCHING=1"));
+         }
++        if(!allow_insert && !strcmp(cursor,required[0])) {
++            cursor[0]='_'; /* inert key, same packed string length and accounting */
++        }
+         for (unsigned n = 0; n < 3; n++) {
+             size_t key_size = (size_t)(strchr(required[n], '=') - required[n]) + 1;
+             if (!strncmp(cursor, required[n], key_size)) found[n] = true;
+@@ -38,7 +48,7 @@
+     }
+     unsigned supplied = 0;
+     for (unsigned n = 0; n < 3; n++) {
+-        if (found[n]) continue;
++        if (found[n] || (!n && !allow_insert)) continue;
+         size_t length = strlen(required[n]) + 1;
+         if (pointer_size != 4 && pointer_size != 8) return EINVAL;
+         if (imgp->ip_argspace < pointer_size ||
+@@ -52,7 +62,7 @@
+         if (n == 2) searching_enabled = true;
+         supplied++;
+     }
+-    printf("DREAM GLES EXEC: backboardd insertion_present=%u expected_path=%u supplied=%u searching_trace=%u envc=%d\n",
+-        found[0], insert_expected, supplied, searching_enabled, imgp->ip_envc);
++    printf("DREAM GLES EXEC: backboardd insertion_present=%u expected_path=%u supplied=%u searching_trace=%u envc=%d attempt=%u adapter_allowed=%u GPU_copy_kept=1\n",
++        found[0], insert_expected, supplied, searching_enabled, imgp->ip_envc,attempt,allow_insert);
+     return 0;
+ }

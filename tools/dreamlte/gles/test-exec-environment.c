@@ -20,6 +20,7 @@ static int exec_add_user_string(struct image_params *p,uintptr_t src,int seg,int
 #include "DreamGlesExecEnv.inc"
 static char buffer[4096];
 static struct image_params setup(const char *path,const char **env,int count){
+ dream_gles_exec_attempts=0;
  memset(buffer,0xa5,sizeof(buffer));snprintf(buffer,512,"%s%s",EXECUTABLE_KEY,path);
  char *envstart=buffer+512,*at=envstart;
  for(int i=0;i<count;i++){size_t n=strlen(env[i])+1;memcpy(at,env[i],n);at+=n;}
@@ -45,5 +46,14 @@ int main(void){
  p=setup("/usr/libexec/backboardd",NULL,0);p.ip_strspace=1;assert(dream_gles_exec_env(&p,8)==E2BIG&&!p.ip_envc);
  p=setup("/usr/libexec/backboardd",NULL,0);assert(dream_gles_exec_env(&p,16)==EINVAL&&!p.ip_envc);
  p=setup("/usr/libexec/backboardd",NULL,0);p.ip_envc=1;assert(dream_gles_exec_env(&p,8)==EINVAL);
+ p=setup("/usr/libexec/backboardd",NULL,0);assert(!dream_gles_exec_env(&p,8)&&matches(&p,existing[0])==1);
+ assert(!dream_gles_exec_env(&p,8)&&matches(&p,existing[0])==1); // Second attempt remains enabled.
+ count=p.ip_envc;space=p.ip_argspace;end=p.ip_strendp;
+ assert(!dream_gles_exec_env(&p,8)&&matches(&p,existing[0])==0&&p.ip_envc==count&&p.ip_argspace==space&&p.ip_strendp==end);
+ assert(matches(&p,"PAN_MESA_DEBUG=noafbc")==1); // Other environment preserved.
+ p=setup("/usr/libexec/backboardd",NULL,0);dream_gles_exec_attempts=2;
+ assert(!dream_gles_exec_env(&p,8)&&!matches(&p,existing[0])&&p.ip_envc==2); // Missing insertion is not added.
+ p=setup("/usr/libexec/backboardd",custom,3);dream_gles_exec_attempts=2;
+ assert(!dream_gles_exec_env(&p,8)&&matches(&p,custom[0])==1); // Never edit a foreign insertion setting.
  puts("PASS: exact target/opt-in, existing environment preservation, no duplicates, searching redirect, 32/64-bit pointer accounting, capacity and malformed bounds");
 }
