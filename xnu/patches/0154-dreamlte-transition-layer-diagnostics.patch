@@ -1,0 +1,59 @@
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -421,6 +421,10 @@
+ 
+ static uint32_t sweet_fb_swaps_logged;
+ static uint64_t sweet_fb_swap_count;
++// Bounded evidence for transitions after the initial home screen.
++static uint32_t sweet_fb_transition_logs;
++static uint64_t sweet_fb_gpu_layers, sweet_fb_cpu_layers, sweet_fb_bad_layers;
++
+ 
+ /* Copy each enabled layer's surface into the panel memory (no scaling). */
+ /*
+@@ -517,6 +521,16 @@
+ 			continue;
+ 		}
+ 		SweetSurface *s = sweet_surface_copy(id);
++        bool unusual = layer != 0 || sx != 0 || sy != 0 || dx != 0 || dy != 0 ||
++            w != (int32_t)fLogicalW || h != (int32_t)fLogicalH ||
++            (s && (s->pixelFormat != SWEET_FB_FORMAT_BGRA ||
++            get32(a,8) != (uint32_t)w || get32(a,12) != (uint32_t)h));
++        if(unusual && sweet_fb_transition_logs<64) {
++            sweet_fb_transition_logs++;
++            IOLog("DREAM LAYER: mask=%x layer=%u id=%u surface=%ux%u fmt=%x offset=%u src=%d,%d %ux%u dst=%d,%d %dx%d\n",
++                mask,layer,id,s?s->width:0,s?s->height:0,s?s->pixelFormat:0,s?s->offset:0,
++                sx,sy,get32(a,8),get32(a,12),dx,dy,w,h);
++        }
+ 		if (sweet_fb_swaps_logged < 16) {
+ 			sweet_fb_swaps_logged++;
+ 			IOLog("SWEET FB: swap %u layer %u surface %u %ux%u fmt 0x%x bpr %u a %d,%d %ux%u b %d,%d %dx%d\n",
+@@ -576,6 +590,9 @@
+ 				gpu_copy = dream_gpu_frame_copy(s, fScanoutSurface, fRenderX?1368:w, fHeight, s->bytesPerRow, fRowBytes);
+ 			}
+ #endif
++            if(gpu_copy>0) sweet_fb_gpu_layers++;
++            else if(gpu_copy==0) sweet_fb_cpu_layers++;
++            else sweet_fb_bad_layers++;
+ 			if (gpu_copy == 0 && fRenderX) {
+ 				// Correct nearest-neighbor fallback for partial layers or a failed GPU selftest.
+ 				for(unsigned py=0;py<fHeight;py++) {
+@@ -595,7 +612,7 @@
+ 					    (size_t)w * 4);
+ 				}
+ 			}
+-		}
++		} else sweet_fb_bad_layers++;
+ 		s->release();
+ 	}
+ 	if (sweet_fb_profile) {
+@@ -611,6 +628,9 @@
+ 			absolutetime_to_nanoseconds(mach_absolute_time() - window_start, &window_ns);
+ 			IOLog("SWEET FB PERF: frames=120 present_avg_us=%llu wait_avg_us=%llu max_us=%llu window_ms=%llu\n",
+ 			    total_ns / 120000, wait_ns / 120000, max_ns / 1000, window_ns / 1000000);
++            IOLog("DREAM LAYER PERF: frames=120 gpu=%llu cpu=%llu invalid_or_poisoned=%llu\n",
++                sweet_fb_gpu_layers,sweet_fb_cpu_layers,sweet_fb_bad_layers);
++            sweet_fb_gpu_layers=sweet_fb_cpu_layers=sweet_fb_bad_layers=0;
+ 			frames = total_ns = wait_ns = max_ns = 0;
+ 		}
+ 	}
