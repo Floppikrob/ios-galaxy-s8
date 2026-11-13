@@ -1,0 +1,86 @@
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -77,7 +77,9 @@
+ #define SWEET_FB_LAYERS                 4
+ #define SWEET_FB_NOTIFY_TYPES           8
+ #define SWEET_FB_NOTIFY_VSYNC           5
+-#define SWEET_FB_VSYNC_US               16667
++#define SWEET_FB_VSYNC_US               sweet_fb_vsync_us
++static uint32_t sweet_fb_vsync_us = 16667;
++static bool sweet_fb_owned;
+ #if defined(ARM64_BOARD_CONFIG_A5XELTE)
+ #define SWEET_FB_DOT_PITCH              424     /* 1080 pixels across 5.2 inches */
+ #else
+@@ -222,6 +224,12 @@
+ 		fLogicalW=1125;fLogicalH=2436;fOffX=fOffY=0;
+ 	}
+ #endif
++#if defined(DREAMLTE)
++	int owned=0; PE_parse_boot_argn("s8fb_owned",&owned,sizeof(owned)); sweet_fb_owned=owned!=0;
++	uint32_t uihz=60; PE_parse_boot_argn("s8uihz",&uihz,sizeof(uihz));
++	if(uihz>=15 && uihz<=60) sweet_fb_vsync_us=1000000/uihz;
++	IOLog("DREAM UI pacing: hz=%u owned_swap=%u\n",1000000/sweet_fb_vsync_us,sweet_fb_owned);
++#endif
+ 	fLock = IOLockAlloc();
+ 	fClients = OSArray::withCapacity(4);
+ 	fScanoutSurface = sweet_surface_create_physical(fPhys, fWidth, fHeight, fRowBytes, SWEET_FB_FORMAT_BGRA);
+@@ -405,8 +413,8 @@
+ 	}
+ 	volatile uint32_t *pend = (volatile uint32_t *)(sweet_fb_decon + 0x4c);
+ 	*pend = 1u << 13;
+-	for (int i = 0; i < 200 && !(*pend & (1u << 13)); i++) {
+-		IODelay(100);
++	for (int i = 0; i < 20 && !(*pend & (1u << 13)); i++) {
++		IOSleep(1);
+ 	}
+ }
+ #endif
+@@ -434,6 +442,16 @@
+ 		}
+ 		fTraceLastSwap=t;
+ 	}
++#if defined(DREAMLTE)
++	// Consume the submitted surface before returning to its producer. No timer
++	// may retain a record referring to a subsequently reused render buffer.
++	if(sweet_fb_owned) {
++		fDirty=false; bool show=!fPowerOff;
++		IOLockUnlock(fLock);
++		if(show) present(rec);
++		return;
++	}
++#endif
+ 	memcpy(fPending, rec, SWEET_FB_SWAP_REC_SIZE);
+ 	fDirty = true;
+ 	uint64_t now = mach_absolute_time();
+@@ -516,12 +534,9 @@
+ 			w = (int32_t)s->width;
+ 			h = (int32_t)s->height;
+ 		}
+-		if (sx < 0 || sy < 0) {
+-			sx = sy = 0;
+-		}
+-		if (dx < 0 || dy < 0) {
+-			dx = dy = 0;
+-		}
++		// Preserve the source/destination translation when clipping a layer.
++		if (sx < 0) { dx -= sx; w += sx; sx=0; }
++		if (sy < 0) { dy -= sy; h += sy; sy=0; }
+ 		/* Logical (presented) display coordinates -> panel coordinates. */
+ 		dx -= fOffX;
+ 		dy -= fOffY;
+@@ -541,12 +556,9 @@
+ 		if (h > (int32_t)s->height - sy) {
+ 			h = (int32_t)s->height - sy;
+ 		}
+-		if (w > (int32_t)fWidth - dx) {
+-			w = (int32_t)fWidth - dx;
+-		}
+-		if (h > (int32_t)fHeight - dy) {
+-			h = (int32_t)fHeight - dy;
+-		}
++		int32_t boundW=fRenderX?fLogicalW:fWidth, boundH=fRenderX?fLogicalH:fHeight;
++		if (w > boundW - dx) w=boundW-dx;
++		if (h > boundH - dy) h=boundH-dy;
+ 		uint64_t last = (uint64_t)s->offset + (uint64_t)(sy + h - 1) * s->bytesPerRow +
+ 		    (uint64_t)(sx + w) * 4;
+ 		if (w <= 0 || h <= 0 || s->elementWidth != 1 || s->elementHeight != 1 ||
