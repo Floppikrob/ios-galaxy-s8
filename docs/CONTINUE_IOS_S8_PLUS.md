@@ -1,5 +1,21 @@
 # Продолжение iOS на Galaxy S8+ — читать первым
 
+## Текущий тест — напряжения CPU и температуры, 2026-11-13
+
+По просьбе поднять частоты сначала установлен диагностический патч 0167. Частоты и напряжения пока НЕ повышены. GPU включён, 2048 MiB RAM, страницы 4 KiB, 8 CPU, 8 GPU-контекстов и pipelined private-buffer scanout сохранены. Образ записан только в BOOT, проверен чтением и отправлен на загрузку; аппаратная работа новой диагностики ещё НЕ подтверждена.
+
+Новый образ: outputs/dream2lte-2g-gpu-cpu-power-probe.img, 16185360 байт, SHA256 ba09dd2c65d73372b9125bc06733c686748061abb9065e3bbd5cd5f707592ee6. Ядро SHA256 490481e4d0c2d59420487845f24deb30015652401e82fa5484f1c6ae8073cce2. Проверены 0 undefined, 0 исполняемых LSE, обратное применение патча, checksum заголовка, RAM/ADT/payload и bootargs. Строка аргументов 606 из 608 байт: НЕ добавлять новые флаги без сокращения/проверки длины!
+
+Свежая полная резервная BOOT outputs/boot-before-cpu-power-probe.img, 41943040 байт, SHA256 7abd82bbdd5a590a211c9cd570361f6882b5467739cfacd9135560edcc8fff87 совпала с устройством перед записью. Это тот же подтверждённый pipeline checkpoint boot-working-2g-gpu8-pipelined.img. После записи префикс 16185360 байт совпал с новым SHA256. Root/recovery/EFS/GPT не менялись.
+
+Следующий шаг: пользователь работает в интерфейсе 1–2 минуты и возвращает TWRP. Снять свежий persistent log и проверить DREAM CPU POWER / DREAM CPU THERMAL, действительные BUCK2/3 selectors, valid sensor mask и температуры под нагрузкой, CLOCK snapshot и отсутствие panic/GPU/DMA ошибок. Контрольные значения старого iOS: M2 1066 MHz, A53 1053 MHz. Только затем выбирать первый небольшой шаг из штатных OPP с подходящим напряжением ASV, безопасным переключением mux/PLL и контролем перегрева. Наличие диагностического логирования само по себе НЕ является thermal throttling или разрешением на повышение PLL.
+
+В TWRP после монтирования debugfs прочитаны штатные диапазоны: A53 до 1690 MHz, M2 до 2314 MHz; текущие температуры CPU 36/38 °C, GPU 36 °C. Регуляторы в TWRP показывали CPUCL0 637500 µV и CPUCL1 1050000 µV, но это НЕ напряжения iOS. ASV groups big=6 / LITTLE=8; таблицы содержат версии 1..8, активная версия ещё неизвестна. Локальные дампы outputs/device-asv-table.txt, device-dvfs-table.txt, device-asv-summary.txt не коммитить. Не выбирать случайную ASV-версию и не использовать верхние частоты ECT сверх штатного максимума.
+
+Патч 0167 читает S2MPS17 BUCK2_CTRL/OUT 0x1b/1c (CPUCL0/M2), BUCK3 0x1d/1e (CPUCL1/A53) через SPEEDY 0x15b50000; перевод selector → 300000+raw*6250 µV. Это программная настройка регулятора, НЕ аналоговое измерение напряжения. SPEEDY выполняет только PMIC read, не задаёт SP_WRITE и не пишет TX voltage; изменяет служебные FIFO/command/status/interrupt registers с восстановлением interrupt enable. Однократное чтение при старте scanout. Совместимость с доступом MMIO в iOS ещё требует аппаратного теста.
+
+CPU TMU 0x10080000: только чтение control/status/trim/current, без включения или перенастройки датчиков. Калибровка 25/85 °C из Samsung driver, M2 mask 0x3d, A53 sensor 1. Sample раз в UI report (~2 с), максимум 300; disabled/нулевая trim/невалидные raw дают valid=0 и -999000, НЕ подставную температуру. Если датчик выключен или чтения не работают, сначала реализовать и подтвердить мониторинг; частоты не повышать вслепую. Источник регистров: Samsung https://github.com/jesec/android_kernel_samsung_universal8895/tree/tw-7.0 (drivers/thermal/samsung/exynos-tmu.c, include/linux/mfd/samsung/s2mps17-private.h); протокол SPEEDY сопоставлен с рабочим shim/dreamlte/pmic.c. Копии reference под work/ref-*.
+
 ## Последний подтверждённый режим — 2026-11-13 (pipeline)
 
 2ГБ/4КБ/8CPU/GPU8AS/private2DPU1buffers+pipelinedscanoutработают. 0held/0capacityreject/noGPU-DMAerrors,204050pixelsmismatch0. Producerpresentmean7.925мсvs18.425мсsync;этоНЕполнаяdisplaylatency/FPSgain,ожиданиеперекрываетсясCPUработой. backboarddheavy~3–4coresсохраняется. ReadonlyPLLsnapshotприfirstframe:CPUCL0M2~1066MHz,CPUCL1A53~1053MHz;частотынеповышались,напряжения/температурыещёнеисследованы. Preferredpipelinebackup boot-working-2g-gpu8-pipelined.img SHA256 7abd82bbdd5a590a211c9cd570361f6882b5467739cfacd9135560edcc8fff87; образ4de96547a12ddf2b47f6cc68dfa4fa0c0d3806cf2af6ec44798c4773bf652593. PhoneTWRP. Предыдущийsyncbackup1a53ee38...сохранён. Следующиеблокиисторические.

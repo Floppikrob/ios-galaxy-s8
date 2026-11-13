@@ -1,0 +1,100 @@
+--- /dev/null
++++ b/iokit/Kernel/arm/DreamCpuPower.inc
+@@ -0,0 +1,59 @@
++/* S2MPS17 CPU BUCK readback + Exynos8895 calibrated TMU sampling.
++ * Diagnostic only: never writes PMIC voltage, PLL, divider or TMU control.
++ */
++static uintptr_t dcp_speedy,dcp_tmu;
++static bool dcp_ready;
++static unsigned dcp_samples;
++static inline uint32_t dcp_rd(uintptr_t base,unsigned off) {return *(volatile uint32_t *)(base+off);}
++static inline void dcp_wr(uintptr_t base,unsigned off,uint32_t v) {
++    *(volatile uint32_t *)(base+off)=v;__asm__ volatile("dsb sy" ::: "memory");
++}
++static int dcp_pmic_read(unsigned reg) {
++    if(!dcp_speedy) return -1;
++    uint32_t saved=dcp_rd(dcp_speedy,0xc);
++    dcp_wr(dcp_speedy,4,1u<<31);IODelay(10);
++    dcp_wr(dcp_speedy,4,0x101);dcp_wr(dcp_speedy,0xc,0x80070301);
++    dcp_wr(dcp_speedy,0x10,0xffffffff);
++    // RANDOM READ, PMIC slave1. No SP_WRITE bit or TX voltage byte.
++    dcp_wr(dcp_speedy,8,(1u<<19)|(1u<<15)|((reg&255)<<7));
++    int value=-1;
++    for(unsigned n=0;n<1000;n++) {
++        if(dcp_rd(dcp_speedy,0x10)&1) {value=dcp_rd(dcp_speedy,0x38)&255;break;}
++        IODelay(10);
++    }
++    dcp_wr(dcp_speedy,0x10,0xffffffff);dcp_wr(dcp_speedy,0xc,saved);
++    return value;
++}
++static void dream_cpu_power_start() {
++    int enable=0;PE_parse_boot_argn("s8power",&enable,sizeof(enable));if(!enable) return;
++    dcp_speedy=ml_io_map(0x15b50000,0x1000);
++    dcp_tmu=ml_io_map(0x10080000,0x1000);
++    int b2c=dcp_pmic_read(0x1b),b2v=dcp_pmic_read(0x1c);
++    int b3c=dcp_pmic_read(0x1d),b3v=dcp_pmic_read(0x1e);
++    IOLog("DREAM CPU POWER: BUCK2_ctrl=%d raw=%d uv=%d BUCK3_ctrl=%d raw=%d uv=%d (300000+raw*6250, readback only)\n",
++        b2c,b2v,b2v<0?-1:300000+b2v*6250,b3c,b3v,b3v<0?-1:300000+b3v*6250);
++    if(dcp_tmu) IOLog("DREAM CPU THERMAL: control=%x status=%x trim0=%x current40=%x current44=%x current48=%x (no sensor writes)\n",
++        dcp_rd(dcp_tmu,0x20),dcp_rd(dcp_tmu,0x28),dcp_rd(dcp_tmu,0),dcp_rd(dcp_tmu,0x40),dcp_rd(dcp_tmu,0x44),dcp_rd(dcp_tmu,0x48));
++    __atomic_store_n(&dcp_ready,true,__ATOMIC_RELEASE);
++}
++static void dream_cpu_power_sample() {
++    if(!__atomic_load_n(&dcp_ready,__ATOMIC_ACQUIRE)||!dcp_tmu||dcp_samples>=300) return;
++    unsigned valid=0;int t[6];unsigned cal=(dcp_rd(dcp_tmu,0)>>23)&1;
++    uint32_t control=dcp_rd(dcp_tmu,0x20),status=dcp_rd(dcp_tmu,0x28);
++    for(unsigned sensor=0;sensor<6;sensor++) {
++        uint32_t trim=dcp_rd(dcp_tmu,sensor*4);
++        int e1=trim&511,e2=(trim>>9)&511;
++        unsigned off=sensor<2?0x40:0x44+((sensor-2)/3)*4;
++        unsigned shift=9*(sensor<2?sensor:(sensor-2)%3);
++        int raw=(dcp_rd(dcp_tmu,off)>>shift)&511;
++        t[sensor]=-999000;
++        if(!(control&1)||!e1||raw==0||raw==511||(cal&&e2<=e1)) continue;
++        int mc=cal?((raw-e1)*60000/(e2-e1)+25000):(raw-e1+25)*1000;
++        if(mc< -40000||mc>150000) continue;
++        t[sensor]=mc;valid|=1u<<sensor;
++    }
++    int big=-999000;
++    for(unsigned i=0;i<6;i++) if(i!=1&&(valid&(1u<<i))&&t[i]>big) big=t[i];
++    IOLog("DREAM CPU THERMAL: sample=%u cal=%u valid=%x M2_max_mc=%d A53_mc=%d ctrl=%x status=%x sensors_mc=%d,%d,%d,%d,%d,%d\n",
++        ++dcp_samples,cal,valid,big,t[1],control,status,t[0],t[1],t[2],t[3],t[4],t[5]);
++}
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -82,6 +82,7 @@
+ static bool sweet_fb_owned;
+ #if defined(DREAMLTE)
+ static bool dream_display_is_active();
++static void dream_cpu_power_sample();
+ static bool dream_display_to_boot();
+ #endif
+ #if defined(ARM64_BOARD_CONFIG_A5XELTE)
+@@ -365,6 +366,9 @@
+ 			absolutetime_to_nanoseconds(trace_now, &uptime_ns);
+ 			IOLog("DREAM UI: uptime_ms=%llu window_ms=%llu swap_in=%llu present_calls=%llu vsync=%llu active_gap_us=%llu gap_max_ms=%llu notify_avg_us=%llu\n",
+ 			    uptime_ns/1000000,window_ns/1000000,incoming,presented,vsyncs,gap_us,gap_max_ms,notify_us);
++#if defined(DREAMLTE)
++            dream_cpu_power_sample();
++#endif
+ 		}
+ 	}
+ 	uint64_t used_ns;
+--- a/iokit/Kernel/arm/DreamDisplayIommu.inc
++++ b/iokit/Kernel/arm/DreamDisplayIommu.inc
+@@ -7,6 +7,7 @@
+ static IOBufferMemoryDescriptor *df_tables;
+ static void dream_display_flip_trial(uint64_t);
+ static void df_start_cont(uint64_t);
++#include "DreamCpuPower.inc"
+ static bool df_active, df_failed;
+ static unsigned df_front, df_flip_count;
+ static SweetSurface *df_private2;
+@@ -180,6 +181,7 @@
+     if(!df_wait(df_m,8,1,1,20)) {df_write(df_m,0,4);return;}
+     df_write(df_m,0xc,(uint32_t)(root_pa>>12));df_write(df_m,0x10,1);df_write(df_m,0,5);
+     int pipe=0;PE_parse_boot_argn("s8flippipe",&pipe,sizeof(pipe));df_pipe=pipe!=0;
++    dream_cpu_power_start();
+     // Read-only CMU probe, Samsung cal-if/exynos8895/cmucal-sfr.c offsets.
+     for(unsigned cluster=0;cluster<2;cluster++) {
+         uintptr_t va=ml_io_map(cluster?0x16900000:0x16800000,0x2000);if(!va) continue;
