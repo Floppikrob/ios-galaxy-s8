@@ -1,0 +1,86 @@
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -5568,6 +5568,10 @@
+  * Note:	The argument and environment vectors are user space pointers
+  *		to arrays of user space pointers.
+  */
++#if defined(DREAMLTE)
++#include "DreamGlesExecEnv.inc"
++#endif
++
+ __attribute__((noinline))
+ static int
+ exec_extract_strings(struct image_params *imgp)
+@@ -5740,6 +5744,11 @@
+ 		imgp->ip_argspace -= new_ptr_size; /* to hold envv[] entry */
+ 		imgp->ip_envc++;
+ 	}
++
++#if defined(DREAMLTE)
++	error = dream_gles_exec_env(imgp, new_ptr_size);
++	if (error) goto bad;
++#endif
+ 
+ 	/* Save space for envv[] NULL terminator */
+ 	if (imgp->ip_argspace < new_ptr_size) {
+--- /dev/null
++++ b/bsd/kern/DreamGlesExecEnv.inc
+@@ -0,0 +1,58 @@
++/* Local S8 GLES integration, after env copyin and before NULL/padding accounting.
++ * Preserve every supplied value. Supply missing launch settings only for the
++ * exact executable path, opt-in with the existing s8gl boot argument.
++ */
++static int
++dream_gles_exec_env(struct image_params *imgp, int pointer_size)
++{
++    if (strcmp(imgp->ip_strings, EXECUTABLE_KEY "/usr/libexec/backboardd") != 0)
++        return 0;
++    int enabled = 0;
++    PE_parse_boot_argn("s8gl", &enabled, sizeof(enabled));
++    if (!enabled) return 0;
++    const char *required[] = {
++        "DYLD_INSERT_LIBRARIES=/redwood/lib/libdream.gles.dylib",
++        "PAN_MESA_DEBUG=noafbc",
++        "DYLD_PRINT_SEARCHING=1"
++    };
++    bool found[3] = {false, false, false};
++    bool insert_expected = false, searching_enabled = false;
++    char *cursor = imgp->ip_endargv;
++    for (int i = 0; i < imgp->ip_envc; i++) {
++        if (cursor >= imgp->ip_strendp) return EINVAL;
++        size_t remaining = (size_t)(imgp->ip_strendp - cursor);
++        size_t length = strnlen(cursor, remaining);
++        if (length == remaining) return EINVAL;
++        /* Same-size substitution avoids adding a second verbose dyld trace. */
++        _Static_assert(sizeof("DYLD_PRINT_LIBRARIES=") == sizeof("DYLD_PRINT_SEARCHING="), "dyld key length");
++        if (!strcmp(cursor, "DYLD_PRINT_LIBRARIES=1")) {
++            memcpy(cursor, "DYLD_PRINT_SEARCHING=1", sizeof("DYLD_PRINT_SEARCHING=1"));
++        }
++        for (unsigned n = 0; n < 3; n++) {
++            size_t key_size = (size_t)(strchr(required[n], '=') - required[n]) + 1;
++            if (!strncmp(cursor, required[n], key_size)) found[n] = true;
++        }
++        if (!strcmp(cursor, required[0])) insert_expected = true;
++        if (!strcmp(cursor, required[2])) searching_enabled = true;
++        cursor += length + 1;
++    }
++    unsigned supplied = 0;
++    for (unsigned n = 0; n < 3; n++) {
++        if (found[n]) continue;
++        size_t length = strlen(required[n]) + 1;
++        if (pointer_size != 4 && pointer_size != 8) return EINVAL;
++        if (imgp->ip_argspace < pointer_size ||
++            length > (size_t)(imgp->ip_argspace - pointer_size) ||
++            length > (size_t)imgp->ip_strspace) return E2BIG;
++        int error = exec_add_user_string(imgp, CAST_USER_ADDR_T(required[n]), UIO_SYSSPACE, TRUE);
++        if (error) return error;
++        imgp->ip_argspace -= pointer_size;
++        imgp->ip_envc++;
++        if (!n) insert_expected = true;
++        if (n == 2) searching_enabled = true;
++        supplied++;
++    }
++    printf("DREAM GLES EXEC: backboardd insertion_present=%u expected_path=%u supplied=%u searching_trace=%u envc=%d\n",
++        found[0], insert_expected, supplied, searching_enabled, imgp->ip_envc);
++    return 0;
++}

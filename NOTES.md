@@ -1,3 +1,7 @@
+## Dream2lte newest installed trial — 2026-11-13 patch0169
+
+New GLES exec-environment kernel flashed to BOOT only with exact readback, adb reboot issued. GPU/2GiB/4KiB/8CPU/8blitAS/pipeline preserved; root dylibs unchanged. Imageff1e7fc98fbb73314717ab2b2463c4fb1a0579e4b39fd4fd12ee35e2e5c37407, kernel6bcc98b481584f2c99e5235c7dd490ec804adcb7b2d166df09dd2f64aecc829e. Runtime/environment/GLES/interface fixes still pending fresh TWRP log. Exact-path helper supplies missing launch settings and redirects dyld print to searching; possible xpcproxy loss remains a hypothesis. Read docs/CONTINUE_IOS_S8_PLUS.md first. Local only, no push.
+
 ## Dream2lte latest runtime result — 2026-11-13
 
 Fresh hardware trial boots with2GiB/4KiB/8CPU/8blitAS and working GPU copies/pipeline. G71 transport service starts, but the Mesa/EAGL libraries are absent from backboardd dyld mapping trace; zero GLES clients/chains/probe. GLES rendering is NOT working/verified and no acceleration is established (present7.958ms vs historical pipeline7.925ms).537950 sampled pixels match, no GPU/DMA/panic/held errors. User asked only to verify; no new flash/reboot/root changes. Phone remains TWRP. Read docs/CONTINUE_IOS_S8_PLUS.md latest result first. Next blocker is userland dylib loading, not proven GPU job failure.

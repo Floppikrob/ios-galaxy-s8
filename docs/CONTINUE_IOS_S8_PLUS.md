@@ -2,7 +2,7 @@
 
 ## Актуальное продолжение GLES / Mesa / Panfrost — 2026-11-13
 
-Статус: Проверен свежий аппаратный запуск: ядро/transport G71/HakiosMali стартовали, но Mesa и EAGL-адаптер НЕ загрузились в backboardd; GLES-клиентов/цепочек/triangle probe нет. GPU-копирование, 2GiB/4KiB/8CPU/8AS и pipeline работают. GLES-отрисовка и ускорение НЕ подтверждены. Телефон оставлен в TWRP, новых прошивок/перезагрузок в ходе проверки нет.
+Статус: Патч0169 прошит только в BOOT после явного разрешения пользователя; readback SHA совпал, adb reboot выполнен. GPU/2048MiB/4KiB/8CPU/8GPU-AS/flip pipeline сохранены. Новый GLES exec environment + dyld searching trace ещё НЕ проверены на устройстве. Нужен короткий UI test и возврат TWRP. Загрузку Mesa и исправление интерфейса не объявлять подтверждёнными.
 
 Пользователь попросил продолжить предыдущий чат «Продолжить портирование iOS»; последняя задача — попробовать OpenGL ES и Mesa/Panfrost для отрисовки интерфейса. GPU не отключать, сохранить 2048 MiB, 4 KiB страницы, 8 CPU и 8 GPU-контекстов. Частоты/напряжения не повышались. Предыдущий ход завершился прерыванием до записи системы/нового BOOT; файлы передачи тогда не были обновлены.
 
@@ -21,6 +21,19 @@ Mesa 25.0.7 (softpipe,panfrost), arm64 iOS16.5 SDK. libOSMesa.8.dylib SHA256 a9c
 Следующий аппаратный анализ: fresh ring из sda27 skip13487482 count1025 bs4096 -> sweet-log.py. Искать DREAM GLES transport ready, HakiosMali client/BO, real chain PASS restore_AS0=1, DREAM GLES PROBE renderer/triangle PASS, установленные EAGL методы и реальные UI frames. Проверить RAM/page size, контексты, DMA/GPU/MMU fault, panic/backboardd crashes. Triangle PASS сам по себе ещё не доказывает UI acceleration; сравнить UI/load с gles-baseline.txt и получить visual report пользователя. Никаких обещаний FPS.
 
 Текущие deliverables/скрипты: Windows C:/Users/rybce/Documents/Codex/2026-11-13/new-chat/outputs и work. Исторические данные предыдущего чата C:/Users/rybce/Documents/Codex/2026-11-12/new-chat/outputs. Репо WSL /home/rybce/S8Port/ios-galaxy-s8 branch dream2lte-port; сборка /home/rybce/S8Port/linux-xnu/s8-buildtree. Userland исходники/build.sh/PROVENANCE сохранены tools/dreamlte/gles. Не коммитить дампы, бинарные библиотеки, SDK/Apple binaries или серийный номер. Локальные выбранные коммиты, без push.
+
+
+## 2026-11-13: GLES exec environment trial0169 flashed
+
+User explicitly authorized new BOOT flash, preserving GPU, 2GiB RAM and eight GPU contexts. Previous turn's interruption did not flash anything. Recovered completed validation: kernel15431496B SHA2566bcc98b481584f2c99e5235c7dd490ec804adcb7b2d166df09dd2f64aecc829e, zero undefined/executable LSE; reverse patch dry-run pass. Host tests of production helper passed exact-path/opt-in, existing values, repeated call/no duplicate, diagnostic redirect,32/64bit pointer/NCARGS accounting, capacity and invalid buffer bounds.
+
+0169 invokes DreamGlesExecEnv.inc inside exec_extract_strings after env copyin and before final env NULL/padding. Exact executable_path=/usr/libexec/backboardd, existing s8gl=1 only. Missing DYLD_INSERT_LIBRARIES/PAN_MESA_DEBUG/searching settings supplied; existing values preserved. DYLD_PRINT_LIBRARIES=1 becomes the same-length DYLD_PRINT_SEARCHING=1 to expose Loader failures rather than another mapping dump. Logs insertion_present/expected_path/supplied, no unrelated environment values. This addresses possible launch-chain environment loss and exposes remaining insertion failures; that cause is a hypothesis, NOT established from prior plist alone. No further AMFI grants/signature bypass, no GPU reset/power/AS changes. Installed dylibs unchanged; targeted device SHA and every code page signature hash matched for both. No full system comparison.
+
+Image outputs/dream2lte-2g-gpu8-gles-exec-fix.img16211984B SHA256ff1e7fc98fbb73314717ab2b2463c4fb1a0579e4b39fd4fd12ee35e2e5c37407. Android headerSHA1/payload+ADT2GiB base880000000/end900000000/8MPIDRs/GPUcopy1/ASlimit8/touch/pipeline checked. Bootargs byte-for-byte same600B as previous GLES trial, s8gl1 remains. RAM/4K compressor behavior unchanged. GPU8AS source still DMB_CONTEXT_LIMIT=8. No new CPU frequencies/voltage changes.
+
+TWRP dream2lte BOOTsda7 size41943040 verified. Fresh full backup outputs/boot-before-gles-exec-fix.img41943040B SHA256f50789ee4eba8dedc9805217918754db6e0f160a2a3617daca8b25b94df6dbdd matched device and previous transport-only checkpoint. Uploaded new image SHA matched; wrote only BOOT then exact16211984B prefix readback matchedff1e7fc9... adb reboot succeeded. Root/recovery/EFS/GPT not written. New installed trial is NOT yet hardware-verified. Earlier transport-only backup retained.
+
+Next: UI~30–60s, open Control Center and lock/unlock, return TWRP. Save fresh ring first, inspect DREAM GLES EXEC actual environment flags and dyld searching lines for redwood/lib, precise Loader error if any; then triangle PROBE/G71 chains/real EAGL UI frames. Check GPU/MMU/DMA errors,2GiB4K/8AS/pipeline and pixel checks. The interface photo showed malformed control shapes; prior117 nil-layer messages were suggestive, not a causal proof. No targeted visual bug repair has been established yet; loading Mesa does not guarantee every UI effect is fixed. If GPU job fault, retain memory/no reset and use TWRP diagnostic; do not disable GPU. Local selected commit only, no push.
 
 ## Результат аппаратного теста GLES — 2026-11-13
 
