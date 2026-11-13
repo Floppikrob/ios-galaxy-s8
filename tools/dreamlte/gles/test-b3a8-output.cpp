@@ -42,8 +42,10 @@ static void glReadPixels(int,int,int w,int h,unsigned f,unsigned t,void*buf){
  }
 }
 static void say(const char *f,...){if(strstr(f,"failed"))++errors;}
-struct eagl{unsigned reader,writer,framebuffer;};
-struct image{IOSurfaceRef surface;bool drawn,shared,b3a8,invert;unsigned mirror,texture;int width,height;};
+static uint64_t now_us(){static uint64_t n;return n+=100;}
+struct eagl{unsigned reader,writer,framebuffer;int b3a8_probe=0;};
+struct image{IOSurfaceRef surface;bool drawn,shared,b3a8,invert;unsigned mirror,texture;int width,height;IOSurfaceRef mirror_surface=nullptr;};
+static bool b3a8_mirror_output(eagl*,image*){return false;}
 #include "B3a8Planes.production.inc"
 #define malloc(n) ((uint8_t*)std::malloc(n))
 #include "B3a8Target.production.inc"

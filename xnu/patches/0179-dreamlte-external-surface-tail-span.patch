@@ -1,0 +1,33 @@
+--- a/iokit/Kernel/arm/DreamSurfaceAddress.inc
++++ b/iokit/Kernel/arm/DreamSurfaceAddress.inc
+@@ -21,16 +21,27 @@
+     uint64_t start = address->unsigned64BitValue();
+     if (!start || !s->width || !s->height || !s->elementHeight || !s->elementWidth)
+         return kIOReturnBadArgument;
+-    uint64_t needed = (uint64_t)s->offset + (uint64_t)s->bytesPerRow *
+-        (((uint64_t)s->height + s->elementHeight - 1) / s->elementHeight);
++    uint64_t rows = ((uint64_t)s->height + s->elementHeight - 1) / s->elementHeight;
++    uint64_t rowPixels = (((uint64_t)s->width + s->elementWidth - 1) / s->elementWidth) * s->bytesPerElement;
++    if (!rowPixels || rowPixels > s->bytesPerRow) return kIOReturnBadArgument;
++    uint64_t natural = (uint64_t)s->offset + (uint64_t)s->bytesPerRow * rows;
++    // The final row need only contain its pixels, not unused stride padding.
++    uint64_t needed = (uint64_t)s->offset + (uint64_t)s->bytesPerRow * (rows - 1) + rowPixels;
+     for (unsigned i = 0; i < s->planeCount; ++i) {
+         uint64_t end = (uint64_t)s->planes[i].offset + s->planes[i].size;
+         if (end > needed) needed = end;
++        if (end > natural) natural = end;
+     }
+     OSObject *sizeObject = props->getObject("IOSurfaceAllocSize");
+     OSNumber *size = OSDynamicCast(OSNumber, sizeObject);
+     if (sizeObject && !size) return kIOReturnBadArgument;
+-    uint64_t length = size ? size->unsigned64BitValue() : needed;
++    uint64_t length = size ? size->unsigned64BitValue() : natural;
++#if defined(DREAMLTE)
++    static unsigned spanReports;
++    if (s->width == 256 && s->height == 1 && spanReports++ < 12)
++        IOLog("DREAM SURF TABLE: row=%u bpe=%u requested=%llu minimum=%llu padded=%llu tail_ok=%u\n",
++            s->bytesPerRow,s->bytesPerElement,length,needed,natural,length>=needed);
++#endif
+     if (!needed || length < needed || length > SWEET_SURFACE_MAX_ALLOC || start + length < start)
+         return kIOReturnBadArgument;
+     IOMemoryDescriptor *memory = IOMemoryDescriptor::withAddressRange(start, length, kIODirectionInOut, owner);

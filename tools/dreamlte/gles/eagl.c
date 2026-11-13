@@ -239,6 +239,7 @@ struct image {
 	bool target;                    /* drawn into (attachImage) rather than shown (texImageIOSurface) */
 	bool invert, drawn;
 	bool shared;                    /* the texture is the surface's memory: nothing to copy */
+	IOSurfaceRef mirror_surface;   /* BGRA staging for b3a8, owned with mirror */
 	GLuint mirror;                  /* a texture that is the surface's memory, which the GPU copies the frame into (blit_targets) */
 	bool wrapped;                   /* the surface is memory of somebody's with a surface made around it */
 	bool alpha_first;               /* its pixels are opacity, blue, green, red in memory: see my_attachImage() */
@@ -257,6 +258,7 @@ struct eagl {
 	void *table[SLOTS];             /* [0] is the context itself: what every entry gets as its first argument */
 	id object;                      /* the EAGLContext */
 	struct hakios_gl *gl;
+	int b3a8_probe;
 	unsigned long api;
 	struct image *images;           /* the textures that stand for IOSurfaces (image_new()), image_room of them made room for */
 	unsigned image_count, image_room, image_most;
@@ -664,6 +666,7 @@ image_remove(struct eagl *e, struct image *image)
 	if (image->mirror != 0) {
 		glDeleteTextures(1, &image->mirror);
 	}
+	if (image->mirror_surface) CFRelease(image->mirror_surface);
 	e->image_bytes -= image->bytes;
 	CFRelease(image->surface);
 	at = image_slot(e, image->texture, &found);
@@ -892,6 +895,8 @@ bytes_a_pixel(GLenum format, GLenum type)
 	}
 }
 
+#include "b3a8-shared.inc"
+
 /*
  * For a surface drawn into (blit_targets): a second texture that is the surface's memory, for the
  * frame to be copied into by the GPU; the texture CoreAnimation draws into stays the library's own.
@@ -903,7 +908,8 @@ surface_mirrored(struct eagl *e, struct image *image)
 	IOSurfaceRef surface = image->surface;
 	GLint bound = 0;
 
-	if (image->b3a8 || !blit_targets || !share_surfaces || !image->target || image->alpha_first ||
+	if (image->b3a8) return b3a8_make_mirror(e, image);
+	if (!blit_targets || !share_surfaces || !image->target || image->alpha_first ||
 	    image->format != GL_BGRA || image->type != GL_UNSIGNED_BYTE || image->plane != 0 ||
 	    (size_t)image->width != IOSurfaceGetWidth(surface) || (size_t)image->height != IOSurfaceGetHeight(surface)) {
 		return false;
@@ -1135,6 +1141,31 @@ surface_to_texture(struct eagl *e, struct image *image)
 	e->upload_bytes += row * (size_t)image->height;
 }
 
+/* Encode only after GPU completion; clients still receive the original b3a8 pixels. */
+static bool
+b3a8_mirror_output(struct eagl *e, struct image *image)
+{
+    uint64_t began = now_us();
+    if (e->b3a8_probe < 0 || !b3a8_blit(image->texture, image->mirror,
+        image->width, image->height, image->invert)) return false;
+    uint64_t copied = now_us();
+    IOSurfaceRef bgra = image->mirror_surface, original = image->surface;
+    if (IOSurfaceLock(bgra, kIOSurfaceLockReadOnly, NULL)) return false;
+    if (IOSurfaceLock(original, 0, NULL)) { IOSurfaceUnlock(bgra, kIOSurfaceLockReadOnly, NULL); return false; }
+    uint8_t *rgb = NULL, *alpha = NULL;
+    size_t nr = 0, na = 0, rr = 0, ra = 0;
+    bool ok = b3a8_planes(original, &rgb, &nr, &rr, &alpha, &na, &ra, image->width, image->height) &&
+        dream_b3a8_pack(rgb, nr, rr, alpha, na, ra, (const uint8_t *)IOSurfaceGetBaseAddress(bgra),
+            IOSurfaceGetAllocSize(bgra), IOSurfaceGetBytesPerRow(bgra), image->width, image->height, 0);
+    IOSurfaceUnlock(original, ok ? 0 : kIOSurfaceLockReadOnly, NULL);
+    IOSurfaceUnlock(bgra, kIOSurfaceLockReadOnly, NULL);
+    static unsigned reports;
+    unsigned number = ++reports;
+    if (number <= 30 || !(number % 120)) say("DREAM GLES SHARED: frame=%u ok=%u blit_wait_us=%llu encode_us=%llu readpixels=0\n",
+        number, ok, (unsigned long long)(copied - began), (unsigned long long)(now_us() - copied));
+    return ok;
+}
+
 /* What has been drawn into a texture, into its IOSurface, unless it is there (frame_end() waits for it). */
 static void
 target_to_surface(struct eagl *e, struct image *image)
@@ -1144,7 +1175,13 @@ target_to_surface(struct eagl *e, struct image *image)
 	uint8_t *base;
 
 	image->drawn = false;
-	if (image->mirror != 0) {
+	if (image->mirror_surface) {
+        if (b3a8_mirror_output(e, image)) return;
+        e->b3a8_probe = -1;
+        static unsigned failures;
+        if (failures++ < 4) say("DREAM GLES SHARED: output failed; using RGBA readback\n");
+    }
+	if (image->mirror != 0 && !image->mirror_surface) {
 		GLint read = 0, draw = 0;
 
 		/* the frame into the surface's memory, by the GPU (blit_targets); upside down if it is drawn so */
@@ -1177,6 +1214,7 @@ target_to_surface(struct eagl *e, struct image *image)
 		return;
 	}
     if (image->b3a8) {
+        uint64_t began = now_us(), read_begin = 0, read_end = 0, shuffled = 0;
         uint8_t *rgb = NULL, *alpha = NULL;
         size_t nr = 0, na = 0, rr = 0, ra = 0, packed = (size_t)image->width * 4;
         uint8_t *pixels = malloc(packed * (size_t)image->height);
@@ -1196,7 +1234,9 @@ target_to_surface(struct eagl *e, struct image *image)
         GLenum error = 0;
         if (status == 0x8cd5) { /* GL_FRAMEBUFFER_COMPLETE */
             /* GLES3 guarantees RGBA/UNSIGNED_BYTE readback. */
+            read_begin = now_us();
             glReadPixels(0, 0, image->width, image->height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+            read_end = now_us();
             error = glGetError();
         }
         if (status != 0x8cd5 || error) {
@@ -1208,11 +1248,17 @@ target_to_surface(struct eagl *e, struct image *image)
         for (size_t at = 0; at < packed * (size_t)image->height; at += 4) {
             uint8_t red = pixels[at]; pixels[at] = pixels[at + 2]; pixels[at + 2] = red;
         }
+        shuffled = now_us();
         dream_b3a8_pack(rgb, nr, rr, alpha, na, ra, pixels, packed * (size_t)image->height, packed,
             image->width, image->height, image->invert);
         glPixelStorei(GL_PACK_ROW_LENGTH, old_row); glPixelStorei(GL_PACK_ALIGNMENT, old_align);
         IOSurfaceUnlock(surface, 0, NULL); free(pixels);
         glBindFramebuffer(GL_FRAMEBUFFER, e->framebuffer);
+        static unsigned profiles;
+        unsigned number = ++profiles;
+        if (number <= 30 || !(number % 120)) say("DREAM GLES READBACK: frame=%u setup_us=%llu read_us=%llu shuffle_us=%llu encode_us=%llu\n",
+            number, (unsigned long long)(read_begin-began), (unsigned long long)(read_end-read_begin),
+            (unsigned long long)(shuffled-read_end), (unsigned long long)(now_us()-shuffled));
         static unsigned reports;
         if (reports++ < 8) say("DREAM GLES OUTPUT: b3a8 surface=%u copied RGB10+A8 from GPU texture=%u\n",
             IOSurfaceGetID(surface), image->texture);
@@ -1618,7 +1664,7 @@ frame_end(struct eagl *e, bool finished)
 	clear_now(e);
 	before = now_us();
 	for (unsigned i = 0; i < e->image_count; i++) {
-		if (e->images[i].target && e->images[i].drawn && e->images[i].mirror != 0) {
+		if (e->images[i].target && e->images[i].drawn && e->images[i].mirror != 0 && !e->images[i].mirror_surface) {
 			target_to_surface(e, &e->images[i]);    /* (the GPU's copy: before what follows sends it out) */
 			in_place++;
 			/* the display's surface, shown by the host itself: no copy back (hakios_gl_present) */
@@ -4687,6 +4733,7 @@ my_dealloc(id self, SEL selector)
 		}
 		hakios_gl_destroy(e->gl);
 		for (unsigned i = 0; i < e->image_count; i++) {
+			if (e->images[i].mirror_surface) CFRelease(e->images[i].mirror_surface);
 			CFRelease(e->images[i].surface);        /* (the textures, the mirrors among them, went with the library's context) */
 		}
 		free(e->images);

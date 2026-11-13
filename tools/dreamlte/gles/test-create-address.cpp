@@ -116,5 +116,24 @@ int main(int argc,char**){
  short_read=true;n=completes;assert(client.create(&args)==kIOReturnNoMemory&&!returned&&sweet_surface_wired==0&&completes==n+1);short_read=false;
  fail_copy=true;n=completes;assert(client.create(&args)==kIOReturnNoMemory&&!returned&&sweet_surface_wired==0&&completes==n+1);fail_copy=false;
  readonly_source=false;assert(client.create(&args)==0&&returned&&returned->userMemoryPrepared);returned->release();returned=nullptr;assert(sweet_surface_wired==0);
+ // External last-row padding is not pixel data. Test exact 256-entry tables,
+ // multiple rows, genuinely truncated pixels, implicit allocation, and planes.
+ for(unsigned rows: {1u,2u}) {
+  SweetSurface *table=sweet_surface_alloc();table->width=256;table->height=rows;
+  table->bytesPerElement=2;table->bytesPerRow=672;
+  OSNumber exact(672*(rows-1)+512),shorter(exact.value-1);
+  props.values={{"IOSurfaceAddress",&address},{"IOSurfaceAllocSize",&shorter}};
+  bool handled=false;assert(dream_surface_create_address(table,0x55,&props,&handled)==kIOReturnBadArgument&&handled&&!table->memory);
+  props.values["IOSurfaceAllocSize"]=&exact;
+  assert(dream_surface_create_address(table,0x55,&props,&handled)==0&&table->allocSize==exact.value&&actual_length==exact.value);
+  table->release();assert(sweet_surface_wired==0);
+ }
+ SweetSurface *implicit=sweet_surface_alloc();implicit->width=256;implicit->height=1;implicit->bytesPerElement=2;implicit->bytesPerRow=672;
+ props.values={{"IOSurfaceAddress",&address}};bool handled=false;
+ assert(dream_surface_create_address(implicit,0x55,&props,&handled)==0&&implicit->allocSize==672);implicit->release();
+ SweetSurface *plane=sweet_surface_alloc();plane->width=256;plane->height=1;plane->bytesPerElement=2;plane->bytesPerRow=672;
+ plane->planeCount=1;plane->planes[0].offset=0;plane->planes[0].size=600;
+ OSNumber small(512);props.values={{"IOSurfaceAddress",&address},{"IOSurfaceAllocSize",&small}};
+ assert(dream_surface_create_address(plane,0x55,&props,&handled)==kIOReturnBadArgument&&!plane->memory);plane->release();assert(sweet_surface_wired==0);
  puts("PASS: production create/address/free; actual icon bytes shared and never zeroed; caller task; exact external span; fresh allocation preserved; publication and mapping/prepare/quota/type/range failures");
 }
