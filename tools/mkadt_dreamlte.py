@@ -70,7 +70,7 @@ def cpu_node(logical):
 
 
 def build(canvas=(FB_W, FB_H), device='dreamlte', ram_mib=512):
-    if ram_mib not in (512, 1024, 2048):
+    if ram_mib not in (512, 1024, 1536, 2048):
         raise ValueError('RAM trial must stay within the verified 2 GiB high bank')
     if device not in ('dreamlte', 'dream2lte'):
         raise ValueError('unsupported device: ' + device)
@@ -142,7 +142,7 @@ if __name__ == '__main__':
                         help='display size presented to iOS, WxH')
     parser.add_argument('--device', choices=['dreamlte', 'dream2lte'],
                         default='dreamlte', help='Samsung device profile')
-    parser.add_argument('--ram-mib', type=int, choices=[512, 1024, 2048], default=512,
+    parser.add_argument('--ram-mib', type=int, choices=[512, 1024, 1536, 2048], default=512,
                         help='XNU high-bank RAM size; larger sizes are hardware trials')
     args = parser.parse_args()
     blob = adt.serialize(build(tuple(int(v) for v in args.canvas.split('x')), device=args.device, ram_mib=args.ram_mib))
