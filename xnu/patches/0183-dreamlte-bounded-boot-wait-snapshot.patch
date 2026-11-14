@@ -1,0 +1,125 @@
+--- /dev/null
++++ b/osfmk/kern/DreamBootWait.inc
+@@ -0,0 +1,68 @@
++#if defined(DREAMLTE)
++#include <vm/pmap.h>
++#include <machine/machine_routines.h>
++#include <arm/misc_protos.h>
++#include "DreamBootWaitWalk.h"
++/* Read only an already translated RAM frame; no copyin/VM fault or pmap lock.
++ * Caller has switched its map to the referenced target, outside all locks.
++ */
++static int dream_boot_wait_frame(uint64_t fp,uint64_t frame[2],void *arg) {
++    pmap_t pmap=arg;
++    _Alignas(16) uint64_t words[2];
++    pmap_paddr_t src=pmap_find_pa_nofault(pmap,fp);
++    pmap_paddr_t dst=pmap_find_pa_nofault(kernel_pmap,(vm_offset_t)words);
++    if(!src||!dst||(src&PAGE_MASK)>PAGE_SIZE-sizeof(words)||
++        (dst&PAGE_MASK)>PAGE_SIZE-sizeof(words)||
++        !pmap_valid_address(src)||!pmap_valid_address(dst))return 0;
++    bcopy_phys(src,dst,sizeof(words));
++    if(pmap_find_pa_nofault(pmap,fp)!=src)return 0;
++    frame[0]=words[0];frame[1]=words[1];return 1;
++}
++void dream_boot_wait_task(const char *,int,task_t);
++void dream_boot_wait_task(const char *name,int pid,task_t task) {
++    thread_t refs[64],thread;unsigned count=0,seen=0;
++    if(!task_lock_try(task)){printf("DREAM BOOT WAIT: %s[%d] task_busy=1\n",name,pid);return;}
++    if(!task->active){task_unlock(task);return;}
++    vm_map_t map=get_task_map(task);vm_map_reference(map);
++    uint64_t mh=task->mach_header_vm_address;
++    queue_iterate(&task->threads,thread,thread_t,task_threads) {
++        if(count==64)break;
++        thread_reference(thread);refs[count++]=thread;
++    }
++    unsigned total=task->thread_count;
++    task_unlock(task);
++    vm_shared_region_t sr=vm_shared_region_get(task);uint64_t slide=0;
++    if(sr){slide=sr->sr_slide;vm_shared_region_deallocate(sr);}
++    printf("DREAM BOOT WAIT: %s[%d] slide=0x%llx mh=0x%llx threads=%u captured=%u\n",name,pid,slide,mh,total,count);
++    for(unsigned i=0;i<count;i++) {
++        uint64_t pc=0,lr=0,sp=0,fp=0,trap=0,tid=0,event=0,continuation=0;
++        unsigned state=0;int captured=0;thread=refs[i];
++        spl_t s=splsched();
++        if(simple_lock_try(&thread->sched_lock,&thread_lck_grp)) {
++            state=thread->state;tid=thread->thread_id;
++            /* Do not race a running CPU's register save/restore. */
++            if((state&TH_WAIT)&&!(state&TH_RUN)) {
++                arm_saved_state_t *ss=find_user_regs(thread);
++                if(ss&&is_saved_state64(ss)) {
++                    pc=get_saved_state_pc(ss);lr=get_saved_state_lr(ss);
++                    sp=get_saved_state_sp(ss);fp=get_saved_state_fp(ss);trap=get_saved_state_reg(ss,16);
++                    event=thread->wait_event;continuation=(uintptr_t)thread->continuation;captured=1;
++                }
++            }
++            thread_unlock(thread);
++        }
++        splx(s);
++        if(captured) {
++            uint64_t bt[12];vm_map_t old=vm_map_switch(map);
++            unsigned n=dream_boot_wait_walk(fp,bt,12,dream_boot_wait_frame,vm_map_pmap(map));
++            vm_map_switch(old);
++            char line[640];int len=snprintf(line,sizeof(line),"DREAM BOOT WAIT: %s[%d] tid=%llu state=%x event=0x%llx cont=0x%llx pc=0x%llx lr=0x%llx sp=0x%llx trap=0x%llx bt",name,pid,tid,state,event,continuation,pc,lr,sp,trap);
++            for(unsigned k=0;k<n&&len<(int)sizeof(line)-24;k++)len+=snprintf(line+len,sizeof(line)-len," 0x%llx",bt[k]);
++            printf("%s\n",line);seen++;
++        }
++        thread_deallocate(thread);
++    }
++    vm_map_deallocate(map);
++    printf("DREAM BOOT WAIT: %s[%d] waiting_captured=%u no_fault_reads=1\n",name,pid,seen);
++}
++#endif
+--- /dev/null
++++ b/osfmk/kern/DreamBootWaitWalk.h
+@@ -0,0 +1,21 @@
++#ifndef DREAM_BOOT_WAIT_WALK_H
++#define DREAM_BOOT_WAIT_WALK_H
++/* Best-effort diagnostic only. The reader must never fault or wait for paging. */
++static unsigned dream_boot_wait_walk(uint64_t fp, uint64_t *out, unsigned capacity,
++    int (*read_frame)(uint64_t, uint64_t[2], void *), void *arg)
++{
++    const uint64_t user_limit=1ULL<<39, max_span=8ULL<<20;
++    uint64_t first=fp;
++    unsigned count=0;
++    if(capacity>12)capacity=12;
++    while(count<capacity && fp && !(fp&15) && fp<user_limit-16 && fp>=first && fp-first<=max_span) {
++        uint64_t frame[2];
++        if(!read_frame(fp,frame,arg))break;
++        if(!frame[1] || frame[1]>=user_limit)break;
++        out[count++]=frame[1];
++        if(frame[0]<=fp)break;
++        fp=frame[0];
++    }
++    return count;
++}
++#endif
+--- a/osfmk/kern/exception.c
++++ b/osfmk/kern/exception.c
+@@ -1005,0 +1006,2 @@
++#include "DreamBootWait.inc"
++
+--- a/bsd/dev/DreamLoad.inc
++++ b/bsd/dev/DreamLoad.inc
+@@ -104,0 +105,20 @@
++extern void dream_boot_wait_task(const char *,int,task_t);
++static int dream_boot_wait_proc(proc_t p, __unused void *arg) {
++    char name[32];int pid=proc_pid(p);proc_name(pid,name,sizeof(name));
++    if(strcmp(name,"SpringBoard")&&strcmp(name,"runningboardd")&&strcmp(name,"lsd")&&strcmp(name,"backboardd"))return PROC_RETURNED;
++    task_t task=proc_task(p);if(task==TASK_NULL)return PROC_RETURNED;
++    task_reference(task);dream_boot_wait_task(name,pid,task);task_deallocate(task);
++    return PROC_RETURNED;
++}
++/* Three bounded waiting-thread snapshots, only while the shell is still tiny.
++ * Rendering, wakeups and service requests are never changed by this observer.
++ */
++static void dream_boot_wait_report(unsigned sample) {
++    for(unsigned i=0;i<256;i++) {
++        struct dream_load_row *r=&dream_load_rows[i];
++        if(r->seen==dream_load_epoch&&!strcmp(r->name,"SpringBoard")&&r->rss<(16ULL<<20)) {
++            printf("DREAM BOOT WAIT: sample=%u shell_rss_mib=%llu\n",sample,r->rss>>20);
++            proc_iterate(PROC_ALLPROCLIST,dream_boot_wait_proc,NULL,NULL,NULL);return;
++        }
++    }
++}
+@@ -112,0 +133 @@
++        if(i==44||i==74||i==104)dream_boot_wait_report(i);
