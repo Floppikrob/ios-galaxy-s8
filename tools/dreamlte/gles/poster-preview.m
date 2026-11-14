@@ -69,6 +69,54 @@ __attribute__((minsize)) static id preview_image(id self,SEL sel,id view) {
     return result;
 }
 
+/* Only restore the two stock image/color providers, using the native registry.
+ * Missing LaunchServices records are checked first; no database rebuild/wipe.
+ * PKManager's result block takes one NSError object (nil means success).
+ */
+__attribute__((minsize)) static void provider_diagnostic(void *unused);
+__attribute__((minsize)) static void register_providers(void) {
+    dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices",RTLD_NOW|RTLD_LOCAL);
+    dlopen("/System/Library/PrivateFrameworks/PlugInKit.framework/PlugInKit",RTLD_NOW|RTLD_LOCAL);
+    Class proxy=objc_getClass("LSPlugInKitProxy"),cls=objc_getClass("PKManager");
+    SEL lookup=sel_registerName("pluginKitProxyForURL:"),reg=sel_registerName("registerPlugInAtURL:result:");
+    Method lm=proxy?class_getClassMethod(proxy,lookup):NULL;
+    Method rm=cls?class_getInstanceMethod(cls,reg):NULL;
+    if(!lm||strcmp(method_getTypeEncoding(lm),"@24@0:8@16")||!rm||strcmp(method_getTypeEncoding(rm),"v32@0:8@16@?24")) {
+        fprintf(stderr,"DREAM WALLPAPER REGISTER: unavailable\n");return;
+    }
+    id manager=call((id)cls,"defaultManager");
+    if(!manager){fprintf(stderr,"DREAM WALLPAPER REGISTER: unavailable\n");return;}
+    const char *paths[]={
+        "/System/Library/PrivateFrameworks/WallpaperKit.framework/PlugIns/CollectionsPoster.appex",
+        "/System/Library/PrivateFrameworks/GradientPoster.framework/PlugIns/GradientPosterExtension.appex"
+    };
+    const char *ids[]={"com.apple.WallpaperKit.CollectionsPoster","com.apple.GradientPoster.GradientPosterExtension"};
+    for(unsigned i=0;i<2;i++) {
+        CFURLRef url=CFURLCreateFromFileSystemRepresentation(NULL,(const UInt8*)paths[i],strlen(paths[i]),true);
+        if(!url)continue;
+        id existing=((id(*)(id,SEL,id))objc_msgSend)((id)proxy,lookup,(id)url);
+        if(existing) {
+            fprintf(stderr,"DREAM WALLPAPER REGISTER: index=%u existing=1\n",i);
+        } else {
+            CFBundleRef bundle=CFBundleCreate(NULL,url);
+            CFStringRef identity=bundle?CFBundleGetIdentifier(bundle):NULL;
+            CFStringRef expected=CFStringCreateWithCString(NULL,ids[i],kCFStringEncodingUTF8);
+            /* Exact paths and identities are fixed above; each provider's
+             * extension point was independently checked in its stock Info. */
+            int valid=identity&&expected&&CFEqual(identity,expected);
+            if(valid) {
+                ((void(*)(id,SEL,id,id))objc_msgSend)(manager,reg,(id)url,(id)^(id error){
+                    fprintf(stderr,"DREAM WALLPAPER REGISTER: index=%u success=%u error=%.220s\n",i,error==nil,text(error));
+                    dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC),dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW,0),NULL,provider_diagnostic);
+                });
+            } else fprintf(stderr,"DREAM WALLPAPER REGISTER: index=%u invalid=1\n",i);
+            if(expected)CFRelease(expected);
+            if(bundle)CFRelease(bundle);
+        }
+        CFRelease(url);
+    }
+}
+
 __attribute__((minsize)) static void provider_diagnostic(void *unused) {
     (void)unused;
     @autoreleasepool { @try {
@@ -76,7 +124,7 @@ __attribute__((minsize)) static void provider_diagnostic(void *unused) {
         SEL sel=sel_registerName("extensionsWithMatchingAttributes:error:");
         Method method=cls?class_getClassMethod(cls,sel):NULL;
         if(!method || strcmp(method_getTypeEncoding(method),"@32@0:8@16^@24")) {
-            fprintf(stderr,"DREAM WALLPAPER PROVIDERS: query-supported=0 type=%.64s\n",method?method_getTypeEncoding(method):"nil");
+            fprintf(stderr,"DREAM WALLPAPER PROVIDERS: query-supported=0\n");
             return;
         }
         const void *key=CFSTR("NSExtensionPointName"),*value=CFSTR("com.apple.posterkit.provider");
@@ -85,35 +133,12 @@ __attribute__((minsize)) static void provider_diagnostic(void *unused) {
         id extensions=((id(*)(id,SEL,id,id*))objc_msgSend)((id)cls,sel,(id)attributes,&error);
         CFRelease(attributes);
         unsigned long long count=responds(extensions,"count")?((unsigned long long(*)(id,SEL))objc_msgSend)(extensions,sel_registerName("count")):0;
-        fprintf(stderr,"DREAM WALLPAPER PROVIDERS: query-supported=1 result=%u count=%llu error=%.180s\n",extensions!=nil,count,text(error));
-        for(unsigned long long i=0;i<count && i<8;i++) {
-            id extension=((id(*)(id,SEL,unsigned long long))objc_msgSend)(extensions,sel_registerName("objectAtIndex:"),i);
-            fprintf(stderr,"DREAM WALLPAPER PROVIDER: index=%llu id=%.120s\n",i,text(call(extension,"identifier")));
-        }
+        fprintf(stderr,"DREAM WALLPAPER PROVIDERS: result=%u count=%llu error=%.180s\n",extensions!=nil,count,text(error));
+        /* One attempt per process; failed queries never trigger registration. */
+        static int attempted;
+        if(extensions && !count && !error && !attempted) {attempted=1;register_providers();}
     } @catch(id e) {fprintf(stderr,"DREAM WALLPAPER PROVIDERS: exception %.180s\n",text(e));} }
 }
-
-__attribute__((minsize)) static void catalog_diagnostic(void *unused) {
-    (void)unused;
-    @try {
-        int class_before=objc_getClass("WKWallpaperRepresentingCollectionsManager")!=Nil;
-        dlerror();
-        void *wallpaper=dlopen("/System/Library/PrivateFrameworks/WallpaperKit.framework/WallpaperKit",RTLD_NOW|RTLD_LOCAL);
-        const char *load_error=wallpaper?NULL:dlerror();
-        Class cls=objc_getClass("WKWallpaperRepresentingCollectionsManager");
-        fprintf(stderr,"DREAM WALLPAPER FRAMEWORK: loaded=%u class-before=%u class-after=%u default-selector=%u error=%.200s\n",wallpaper!=NULL,class_before,cls!=Nil,responds((id)cls,"defaultManager"),load_error?load_error:"none");
-        id manager=call((id)cls,"defaultManager");
-        unsigned long long count=responds(manager,"numberOfWallpaperCollections")?((unsigned long long(*)(id,SEL))objc_msgSend)(manager,sel_registerName("numberOfWallpaperCollections")):0;
-        fprintf(stderr,"DREAM WALLPAPER CATALOG: manager=%u collections=%llu\n",manager!=nil,count);
-        id defaults=call((id)objc_getClass("WKDefaultWallpaperManager"),"defaultWallpaperManager");
-        id bundle=call(defaults,"defaultWallpaperBundle");
-        fprintf(stderr,"DREAM WALLPAPER DEFAULT: manager=%u bundle=%u class=%s\n",defaults!=nil,bundle!=nil,bundle?object_getClassName(bundle):"nil");
-    } @catch(id e) {
-        fprintf(stderr,"DREAM WALLPAPER CATALOG: exception %.200s\n",text(e));
-    }
-    dispatch_async_f(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW,0),NULL,provider_diagnostic);
-}
-
 
 __attribute__((minsize)) int dream_poster_init(void) {
     char path[1024];uint32_t length=sizeof(path);
@@ -142,6 +167,6 @@ __attribute__((minsize)) int dream_poster_init(void) {
         break;
     }
     fprintf(stderr,"DREAM POSTER HOOK: preview=%u guarded=1 compositor-GPU-kept=1\n",installed);
-    dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW,5*NSEC_PER_SEC),dispatch_get_main_queue(),NULL,catalog_diagnostic);
+    dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW,5*NSEC_PER_SEC),dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW,0),NULL,provider_diagnostic);
     return 1; /* This process does not replace the compositor's EAGL methods. */
 }
