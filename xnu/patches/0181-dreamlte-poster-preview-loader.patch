@@ -1,0 +1,28 @@
+--- a/bsd/kern/DreamGlesExecEnv.inc
++++ b/bsd/kern/DreamGlesExecEnv.inc
+@@ -5,0 +6 @@
++static uint32_t dream_poster_exec_attempts;
+@@ -9 +10,2 @@
+-    if (strcmp(imgp->ip_strings, EXECUTABLE_KEY "/usr/libexec/backboardd") != 0)
++    bool poster = strcmp(imgp->ip_strings, EXECUTABLE_KEY "/Applications/PosterBoard.app/PosterBoard") == 0;
++    if (!poster && strcmp(imgp->ip_strings, EXECUTABLE_KEY "/usr/libexec/backboardd") != 0)
+@@ -18 +20 @@
+-    uint32_t attempt=__atomic_add_fetch(&dream_gles_exec_attempts,1,__ATOMIC_RELAXED);
++    uint32_t attempt=__atomic_add_fetch(poster ? &dream_poster_exec_attempts : &dream_gles_exec_attempts,1,__ATOMIC_RELAXED);
+@@ -24,0 +27 @@
++    unsigned required_count = poster ? 1 : 3;
+@@ -35 +38 @@
+-        if (!strcmp(cursor, "DYLD_PRINT_LIBRARIES=1")) {
++        if (!poster && !strcmp(cursor, "DYLD_PRINT_LIBRARIES=1")) {
+@@ -41 +44 @@
+-        for (unsigned n = 0; n < 3; n++) {
++        for (unsigned n = 0; n < required_count; n++) {
+@@ -50 +53 @@
+-    for (unsigned n = 0; n < 3; n++) {
++    for (unsigned n = 0; n < required_count; n++) {
+@@ -65 +68,4 @@
+-    printf("DREAM GLES EXEC: backboardd insertion_present=%u expected_path=%u supplied=%u searching_trace=%u envc=%d attempt=%u adapter_allowed=%u GPU_copy_kept=1\n",
++    if (poster) {
++        printf("DREAM POSTER EXEC: insertion_present=%u expected_path=%u supplied=%u envc=%d attempt=%u adapter_allowed=%u GPU_copy_kept=1\n",
++            found[0],insert_expected,supplied,imgp->ip_envc,attempt,allow_insert);
++    } else printf("DREAM GLES EXEC: backboardd insertion_present=%u expected_path=%u supplied=%u searching_trace=%u envc=%d attempt=%u adapter_allowed=%u GPU_copy_kept=1\n",

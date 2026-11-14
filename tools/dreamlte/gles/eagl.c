@@ -4841,6 +4841,8 @@ install(void)
 		{ "attachImage:toCoreSurface:invertedRender:", (IMP)my_attachImage },
 		{ "dealloc", (IMP)my_dealloc },
 	};
+    extern int dream_poster_init(void);
+    if(dream_poster_init())return;
 	extern int dream_gles_probe(void);
     dlopen("/System/Library/Frameworks/OpenGLES.framework/OpenGLES",RTLD_NOW|RTLD_LOCAL);
     Class class = objc_getClass("EAGLContext");
