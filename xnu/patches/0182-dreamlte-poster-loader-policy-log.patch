@@ -1,0 +1,32 @@
+--- a/bsd/kern/sweet_amfi.c
++++ b/bsd/kern/sweet_amfi.c
+@@ -389,2 +389,2 @@
+-/* Local GLES bridge only: let backboardd's explicitly configured DYLD insertion
+- * reach our EAGL library. All other AMFI syscall cases retain ENOPOLICY.
++/* Local GLES bridge and signed PosterBoard preview insertion only.
++ * Other AMFI syscall cases retain ENOPOLICY.
+@@ -399 +399,5 @@
+-    if(strcmp(name,"backboardd"))return ENOPOLICY;
++    bool poster=!strcmp(name,"PosterBoard");
++    if(poster) {
++        const char *identity=csproc_get_identity(p);
++        if(!identity||strcmp(identity,"com.apple.PosterBoard"))return ENOPOLICY;
++    } else if(strcmp(name,"backboardd"))return ENOPOLICY;
+@@ -401 +405,4 @@
+-    int error=copyin(arg,&a,sizeof(a));uint64_t flags=0xff;
++    int error=copyin(arg,&a,sizeof(a));
++    /* dyld allow-path-vars + allow-print-vars only for this signed process.
++     * Preserve the compositor's already established policy unchanged. */
++    uint64_t flags=poster ? ((1ULL<<1)|(1ULL<<4)) : 0xff;
+@@ -403 +410,2 @@
+-    printf("DREAM GLES: backboardd dyld bridge policy result=%d\n",error);
++    if(poster)printf("DREAM POSTER: dyld bridge policy result=%d flags=%llx signed-identity=1\n",error,flags);
++    else printf("DREAM GLES: backboardd dyld bridge policy result=%d\n",error);
+--- a/bsd/dev/mem.c
++++ b/bsd/dev/mem.c
+@@ -172,0 +173,3 @@
++#if defined(DREAMLTE)
++			strlcpy(sweet_null_names, "backboardd,SpringBoard,PosterBoard", sizeof(sweet_null_names));
++#else
+@@ -173,0 +177 @@
++#endif
