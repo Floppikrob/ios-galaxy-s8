@@ -1,0 +1,5 @@
+--- a/bsd/dev/DreamLoad.inc
++++ b/bsd/dev/DreamLoad.inc
+@@ -119 +119 @@
+-        if(r->seen==dream_load_epoch&&!strcmp(r->name,"SpringBoard")&&r->rss<(16ULL<<20)) {
++        if(r->seen==dream_load_epoch&&!strcmp(r->name,"SpringBoard")&&r->rss<(32ULL<<20)) {

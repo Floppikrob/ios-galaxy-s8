@@ -14,6 +14,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <notify.h>
+#include <signal.h>
+#include <errno.h>
 #include "poster-preview-bounds.h"
 
 static id (*original_image)(id,SEL,id);
@@ -74,6 +77,36 @@ __attribute__((minsize)) static id preview_image(id self,SEL sel,id view) {
  * PKManager's result block takes one NSError object (nil means success).
  */
 __attribute__((minsize)) static void provider_diagnostic(void *unused);
+/* SpringBoard sets this notify state to its PID immediately before posting
+ * finishedstartup. Do not query/mutate its registries during shell bootstrap.
+ */
+static unsigned startup_phase,startup_checks;
+static int startup_token=-1;
+__attribute__((minsize)) static void poster_startup_settled(void *unused) {
+    (void)unused;startup_phase=2;provider_diagnostic(NULL);
+}
+__attribute__((minsize)) static int poster_startup_ready(void) {
+    if(startup_phase==2)return 1;
+    if(startup_phase)return 0;
+    uint32_t error=0;uint64_t pid=0;
+    if(startup_token<0)error=notify_register_check("com.apple.springboard.finishedstartup",&startup_token);
+    if(!error)error=notify_get_state(startup_token,&pid);
+    if(error||startup_checks++>=119) {
+        if(startup_token>=0)notify_cancel(startup_token);
+        startup_token=-1;startup_phase=3;
+        fprintf(stderr,"DREAM WALLPAPER START: stopped=%u polls=%u\n",error,startup_checks);return 0;
+    }
+    if(pid&&pid<=0x7fffffff&&(kill((pid_t)pid,0)==0||errno==EPERM)) {
+        notify_cancel(startup_token);startup_token=-1;startup_phase=1;
+        fprintf(stderr,"DREAM WALLPAPER START: ready_pid=%llu settle=5\n",pid);
+        dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW,5*NSEC_PER_SEC),dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW,0),NULL,poster_startup_settled);
+    } else {
+        if(startup_checks==1)fprintf(stderr,"DREAM WALLPAPER START: wait=finishedstartup\n");
+        dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC),dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW,0),NULL,provider_diagnostic);
+    }
+    return 0;
+}
+
 /* Frameworks are not applications (-10811). The stock MI Framework path
  * registers its NSExtensionSDK entries separately. Use that same client entry
  * for ONLY PosterKit's fixed point, retaining the native server checks.
@@ -208,6 +241,7 @@ __attribute__((minsize)) static void register_providers(void) {
 
 __attribute__((minsize)) static void provider_diagnostic(void *unused) {
     (void)unused;
+    if(!poster_startup_ready())return;
     @autoreleasepool { @try {
         Class cls=objc_getClass("NSExtension");
         SEL sel=sel_registerName("extensionsWithMatchingAttributes:error:");
