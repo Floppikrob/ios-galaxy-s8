@@ -1,0 +1,17 @@
+--- a/bsd/kern/kern_mib.c
++++ b/bsd/kern/kern_mib.c
+@@ -529,0 +530,12 @@
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++		/* This board runs native iOS on the DT iPhone identity, not an
++		 * iOS-on-Mac compatibility process. Keep hw.machine consistent
++		 * with hw.product; UIKit/CFBundle select device resources here. */
++		if (!PEGetMachineName(dummy, 64)) {
++			return EINVAL;
++		}
++		static int dream_machine_reported;
++		if (__atomic_exchange_n(&dream_machine_reported, 1, __ATOMIC_RELAXED) == 0) {
++			printf("DREAM IDENTITY: hw.machine=%s source=device-tree native-ios=1\n", dummy);
++		}
++#else
+@@ -545,0 +558 @@
++#endif /* ARM64_BOARD_CONFIG_A5XELTE */
