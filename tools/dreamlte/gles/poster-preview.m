@@ -74,7 +74,7 @@ __attribute__((minsize)) static id preview_image(id self,SEL sel,id view) {
 
 /* Only restore the two stock image/color providers, using the native registry.
  * Missing LaunchServices records are checked first; no database rebuild/wipe.
- * PKManager's result block takes one NSError object (nil means success).
+ * Direct native registerPlugin: reports a BOOL, followed by record readback.
  */
 __attribute__((minsize)) static void provider_diagnostic(void *unused);
 /* SpringBoard sets this notify state to its PID immediately before posting
@@ -192,18 +192,17 @@ __attribute__((minsize)) static void register_providers(void) {
     if(!register_poster_sdk())return;
     registration_step(0);
     dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices",RTLD_NOW|RTLD_LOCAL);
-    dlopen("/System/Library/PrivateFrameworks/PlugInKit.framework/PlugInKit",RTLD_NOW|RTLD_LOCAL);
-    Class proxy=objc_getClass("LSPlugInKitProxy"),cls=objc_getClass("PKManager");
-    SEL lookup=sel_registerName("pluginKitProxyForURL:"),reg=sel_registerName("registerPlugInAtURL:result:");
+    Class proxy=objc_getClass("LSPlugInKitProxy"),cls=objc_getClass("LSApplicationWorkspace");
+    SEL lookup=sel_registerName("pluginKitProxyForURL:"),reg=sel_registerName("registerPlugin:");
     Method lm=proxy?class_getClassMethod(proxy,lookup):NULL;
     Method rm=cls?class_getInstanceMethod(cls,reg):NULL;
-    if(!lm||strcmp(method_getTypeEncoding(lm),"@24@0:8@16")||!rm||strcmp(method_getTypeEncoding(rm),"v32@0:8@16@?24")) {
+    if(!lm||strcmp(method_getTypeEncoding(lm),"@24@0:8@16")||!rm||strcmp(method_getTypeEncoding(rm),"B24@0:8@16")) {
         registration_step(99);return;
     }
     registration_step(1);
-    id manager=call((id)cls,"defaultManager");
+    id workspace=call((id)cls,"defaultWorkspace");
     registration_step(2);
-    if(!manager){registration_step(99);return;}
+    if(!workspace){registration_step(99);return;}
     const char *paths[]={
         "/System/Library/PrivateFrameworks/WallpaperKit.framework/PlugIns/CollectionsPoster.appex",
         "/System/Library/PrivateFrameworks/GradientPoster.framework/PlugIns/GradientPosterExtension.appex"
@@ -226,11 +225,15 @@ __attribute__((minsize)) static void register_providers(void) {
             int valid=identity&&expected&&CFEqual(identity,expected);
             if(valid) {
                 registration_step(30+i);
-                ((void(*)(id,SEL,id,id))objc_msgSend)(manager,reg,(id)url,(id)^(id error){
-                    fprintf(stderr,"DREAM WALLPAPER REGISTER: index=%u success=%u error=%.220s\n",i,error==nil,text(error));
-                    dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC),dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW,0),NULL,provider_diagnostic);
-                });
+                /* This is the same terminal call used by native pkd's
+                 * database registrar. Keep normal LaunchServices checks. */
+                BOOL ok=((BOOL(*)(id,SEL,id))objc_msgSend)(workspace,reg,(id)url);
                 registration_step(40+i);
+                id record=((id(*)(id,SEL,id))objc_msgSend)((id)proxy,lookup,(id)url);
+                id identifier=record?call(record,"bundleIdentifier"):nil;
+                int matches=identifier&&CFEqual((CFTypeRef)identifier,expected);
+                fprintf(stderr,"DREAM WALLPAPER LSREGISTER: index=%u success=%u record=%u identifier=%u\n",i,ok,record!=nil,matches);
+                dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC),dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW,0),NULL,provider_diagnostic);
             } else registration_step(60+i);
             if(expected)CFRelease(expected);
             if(bundle)CFRelease(bundle);
