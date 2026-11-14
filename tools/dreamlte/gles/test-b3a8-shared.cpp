@@ -6,7 +6,8 @@
 #include <map>
 #include <vector>
 #include <algorithm>
-#include "dream_b3a8.h"
+#define DREAM_B3A8_VECTOR_TEST 1
+#include "dream_b3a8_vector.h"
 using GLint=int;using GLuint=unsigned;using GLenum=unsigned;using GLsizei=int;using GLboolean=bool;
 constexpr unsigned GL_TEXTURE_BINDING_2D=1,GL_TEXTURE_2D=2,GL_READ_FRAMEBUFFER_BINDING=3,
  GL_DRAW_FRAMEBUFFER_BINDING=4,GL_READ_FRAMEBUFFER=5,GL_DRAW_FRAMEBUFFER=6,GL_COLOR_ATTACHMENT0=7,

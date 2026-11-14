@@ -41,6 +41,19 @@ static void dm_write(unsigned,unsigned off,uint32_t val){
 }
 static bool dmb_wait(unsigned off,uint32_t mask,uint32_t want){return (regs[off]&mask)==want;}
 #define IOLog(...) std::printf(__VA_ARGS__)
+#define DREAM_PANFROST_WAIT_TEST 1
+using IOLock=int;
+static uint64_t fakeTime;
+static IOLock waitLock;
+static IOLock *IOLockAlloc(){return &waitLock;}
+static void IOLockLock(IOLock*){}static void IOLockUnlock(IOLock*){}
+static uint64_t mach_absolute_time(){return ++fakeTime;}
+static constexpr uint64_t NSEC_PER_MSEC=1000000,NSEC_PER_USEC=1000;
+static constexpr unsigned THREAD_UNINT=0;
+static void clock_interval_to_deadline(unsigned n,uint64_t unit,uint64_t*out){*out=fakeTime+n*unit;}
+static void absolutetime_to_nanoseconds(uint64_t n,uint64_t*out){*out=n;}
+static void IODelay(unsigned n){fakeTime+=n*1000;}
+static int IOLockSleepDeadline(IOLock*,void*,uint64_t until,unsigned){fakeTime=until;return 0;}
 #include "DreamPanfrostBackend.inc"
 static void dream_panfrost_start(){}
 int main(){

@@ -1,0 +1,64 @@
+--- /dev/null
++++ b/iokit/Kernel/arm/DreamPanfrostWait.inc
+@@ -0,0 +1,34 @@
++/* HakiOS wait_job policy adapted to the synchronous G71 transport:
++ * at most 200us short polling, then 50us deadline sleeps, one-second bound.
++ * The separate wait mutex is the ONLY lock released while sleeping. The
++ * existing AS0/display exclusion lock stays held until completion/restoration.
++ */
++#ifndef DREAM_PANFROST_WAIT_TEST
++#include <kern/sched_prim.h>
++#endif
++static IOLock *dpf_wait_lock;
++static int dpf_wait_event;
++static bool dpf_wait_job(unsigned slot, uint32_t *irq, uint32_t *mmu,
++    unsigned *checks, unsigned *naps)
++{
++    uint64_t deadline;
++    clock_interval_to_deadline(1000,NSEC_PER_MSEC,&deadline);
++    *checks=*naps=0;
++    for (;;) {
++        *irq=dm_read(dmb_gpu,0x1000); *mmu=dm_read(dmb_gpu,0x2000);
++        ++*checks;
++        if (*mmu || (*irq & ((1u<<slot)|(1u<<(slot+16)))))
++            return !*mmu && (*irq & ((1u<<slot)|(1u<<(slot+16))))==(1u<<slot);
++        if (mach_absolute_time()>=deadline) return false;
++        if (*checks<=20) IODelay(10);
++        else if (dpf_wait_lock) {
++            uint64_t nap;
++            clock_interval_to_deadline(50,NSEC_PER_USEC,&nap);
++            if (nap>deadline) nap=deadline;
++            IOLockLock(dpf_wait_lock);
++            (void)IOLockSleepDeadline(dpf_wait_lock,&dpf_wait_event,nap,THREAD_UNINT);
++            IOLockUnlock(dpf_wait_lock);
++            ++*naps;
++        } else { IOSleep(1); ++*naps; } // Allocation failure retains the old conservative wait.
++    }
++}
+--- a/iokit/Kernel/arm/DreamPanfrostBackend.inc
++++ b/iokit/Kernel/arm/DreamPanfrostBackend.inc
+@@ -108,0 +109 @@
++#include "DreamPanfrostWait.inc"
+@@ -114,0 +116 @@
++    unsigned waitChecks=0,waitNaps=0;uint64_t waitUsed=0;
+@@ -130,8 +132,3 @@
+-        ok=false;
+-        for(unsigned n=0;n<1000;n++) {
+-            irq=dm_read(dmb_gpu,0x1000);mmu=dm_read(dmb_gpu,0x2000);
+-            if(mmu||(irq&((1u<<slot)|(1u<<(slot+16))))) {
+-                ok=!mmu&&(irq&((1u<<slot)|(1u<<(slot+16))))==(1u<<slot);break;
+-            }
+-            IOSleep(1);
+-        }
++        uint64_t waitBegin=mach_absolute_time();
++        ok=dpf_wait_job(slot,&irq,&mmu,&waitChecks,&waitNaps);
++        absolutetime_to_nanoseconds(mach_absolute_time()-waitBegin,&waitUsed);
+@@ -146 +143,4 @@
+-    if(ok){seq=++dpf_seq;dpf_done=seq;if(++dpf_jobs<=12||dpf_jobs%300==0)IOLog("DREAM GLES: chain=%llu slot=%u PASS restore_AS0=1 blit_contexts=%u\n",seq,slot,DMB_CONTEXT_LIMIT);}
++    if(ok){seq=++dpf_seq;dpf_done=seq;if(++dpf_jobs<=12||dpf_jobs%300==0) {
++        IOLog("DREAM GLES: chain=%llu slot=%u PASS restore_AS0=1 blit_contexts=%u\n",seq,slot,DMB_CONTEXT_LIMIT);
++        IOLog("DREAM GLES WAIT: chain=%llu checks=%u naps=%u wait_us=%llu\n",seq,waitChecks,waitNaps,waitUsed/1000);
++    }}
+@@ -161,0 +162,2 @@
++    dpf_wait_lock=IOLockAlloc();
++    IOLog("DREAM GLES WAIT: policy=200us-spin/50us-nap timed=%u\n",dpf_wait_lock!=NULL);

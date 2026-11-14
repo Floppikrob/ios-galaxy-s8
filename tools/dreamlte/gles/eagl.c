@@ -231,6 +231,7 @@ static int group_vibrant_on = 1;        /* boot-arg glgroup=0 */
 static unsigned group_covered, group_laid, group_flattened;    /* (glframes=1) this frame's */
 
 #include "dream_b3a8.h"
+#include "dream_b3a8_vector.h"
 
 /* A texture that stands for an IOSurface. */
 struct image {
@@ -1161,14 +1162,14 @@ b3a8_mirror_output(struct eagl *e, struct image *image)
     uint8_t *rgb = NULL, *alpha = NULL;
     size_t nr = 0, na = 0, rr = 0, ra = 0;
     bool ok = b3a8_planes(original, &rgb, &nr, &rr, &alpha, &na, &ra, image->width, image->height) &&
-        dream_b3a8_pack(rgb, nr, rr, alpha, na, ra, (const uint8_t *)IOSurfaceGetBaseAddress(bgra),
+        dream_b3a8_pack_vector(rgb, nr, rr, alpha, na, ra, (const uint8_t *)IOSurfaceGetBaseAddress(bgra),
             IOSurfaceGetAllocSize(bgra), IOSurfaceGetBytesPerRow(bgra), image->width, image->height, 0);
     IOSurfaceUnlock(original, ok ? 0 : kIOSurfaceLockReadOnly, NULL);
     IOSurfaceUnlock(bgra, kIOSurfaceLockReadOnly, NULL);
     static unsigned reports;
     unsigned number = ++reports;
-    if (number <= 30 || !(number % 120)) say("DREAM GLES SHARED: frame=%u ok=%u blit_wait_us=%llu encode_us=%llu readpixels=0\n",
-        number, ok, (unsigned long long)(copied - began), (unsigned long long)(now_us() - copied));
+    if (number <= 30 || !(number % 120)) say("DREAM GLES SHARED: frame=%u ok=%u blit_wait_us=%llu encode_us=%llu readpixels=0 pack=%s\n",
+        number, ok, (unsigned long long)(copied - began), (unsigned long long)(now_us() - copied), DREAM_B3A8_PACK_NAME);
     return ok;
 }
 
@@ -1255,7 +1256,7 @@ target_to_surface(struct eagl *e, struct image *image)
             uint8_t red = pixels[at]; pixels[at] = pixels[at + 2]; pixels[at + 2] = red;
         }
         shuffled = now_us();
-        dream_b3a8_pack(rgb, nr, rr, alpha, na, ra, pixels, packed * (size_t)image->height, packed,
+        dream_b3a8_pack_vector(rgb, nr, rr, alpha, na, ra, pixels, packed * (size_t)image->height, packed,
             image->width, image->height, image->invert);
         glPixelStorei(GL_PACK_ROW_LENGTH, old_row); glPixelStorei(GL_PACK_ALIGNMENT, old_align);
         IOSurfaceUnlock(surface, 0, NULL); free(pixels);

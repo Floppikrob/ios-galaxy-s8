@@ -3,7 +3,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
-#include "dream_b3a8.h"
+#define DREAM_B3A8_VECTOR_TEST 1
+#include "dream_b3a8_vector.h"
 using GLint=int;using GLuint=unsigned;using GLenum=unsigned;using GLsizei=int;using GLbitfield=unsigned;
 constexpr unsigned GL_PACK_ROW_LENGTH=1, GL_PACK_ALIGNMENT=2, GL_READ_FRAMEBUFFER_BINDING=3,
  GL_DRAW_FRAMEBUFFER_BINDING=4, GL_READ_FRAMEBUFFER=5, GL_DRAW_FRAMEBUFFER=6,
