@@ -78,6 +78,29 @@ __attribute__((minsize)) static void provider_diagnostic(void *unused);
  * The registration dictionary is the stock Info plus native framework fields;
  * this is not the workspace whole-database rebuild or content-refresh API.
  */
+/* The public BOOL wrapper discards the OSStatus needed to diagnose failure.
+ * Use its exact C entry only when both method offsets and all 800 entry bytes
+ * match the pinned CoreServices image. No authorization check is bypassed.
+ */
+__attribute__((minsize)) static int32_t register_dictionary_status(id cls,id workspace,SEL selector,id dict,BOOL *ok,int *guarded) {
+    Method basic=class_getInstanceMethod((Class)cls,selector);
+    Method observer=class_getInstanceMethod((Class)cls,sel_registerName("registerApplicationDictionary:withObserverNotification:"));
+    Dl_info image={0};*guarded=0;
+    if(basic&&observer&&!strcmp(method_getTypeEncoding(observer),"B28@0:8@16i24")&&dladdr((const void*)method_getImplementation(basic),&image)&&image.dli_fbase&&image.dli_fname&&!strcmp(image.dli_fname,"/System/Library/Frameworks/CoreServices.framework/CoreServices")) {
+        uintptr_t base=(uintptr_t)image.dli_fbase;
+        if((uintptr_t)method_getImplementation(basic)==base+0x783ac && (uintptr_t)method_getImplementation(observer)==base+0x77ee8) {
+            const unsigned char *code=(const void*)(base+0x7808c);uint64_t hash=14695981039346656037ULL;
+            for(unsigned i=0;i<0x320;i++)hash=(hash^code[i])*1099511628211ULL;
+            if(hash==0xf18549854359cff1ULL) {
+                *guarded=1;int32_t result=((int32_t(*)(id,unsigned))code)(dict,1);
+                *ok=result==0;return result;
+            }
+        }
+    }
+    *ok=((BOOL(*)(id,SEL,id))objc_msgSend)(workspace,selector,dict);
+    return INT32_MIN;
+}
+
 __attribute__((minsize)) static int register_framework_parents(void) {
     dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices",RTLD_NOW|RTLD_LOCAL);
     Class cls=objc_getClass("LSApplicationWorkspace");
@@ -107,7 +130,8 @@ __attribute__((minsize)) static int register_framework_parents(void) {
                 CFDictionarySetValue(dict,CFSTR("ApplicationType"),CFSTR("Framework"));
                 CFDictionarySetValue(dict,CFSTR("IsContainerized"),kCFBooleanFalse);
                 fprintf(stderr,"DREAM WALLPAPER PARENT: index=%u request=1\n",i);
-                ok=((BOOL(*)(id,SEL,id))objc_msgSend)(workspace,sel,(id)dict);
+                int guarded=0;int32_t status=register_dictionary_status((id)cls,workspace,sel,(id)dict,&ok,&guarded);
+                fprintf(stderr,"DREAM WALLPAPER STATUS: index=%u code=%d guarded=%u\n",i,status,guarded);
             }
             if(name)CFRelease(name);
             if(dict)CFRelease(dict);
