@@ -103,7 +103,12 @@ __attribute__((minsize)) static int poster_point_lookup(unsigned phase,int *miss
     if(!init||strcmp(method_getTypeEncoding(init),"@36@0:8@16I24^@28"))return 0;
     id error=nil,obj=((id(*)(id,SEL))objc_msgSend)((id)cls,sel_registerName("alloc"));
     obj=((id(*)(id,SEL,id,uint32_t,id*))objc_msgSend)(obj,sel,(id)CFSTR("com.apple.posterkit.provider"),2,&error);
-    id sdk=obj?call(obj,"SDKDictionary"):nil;
+    /* SDKDictionary is an _LSLazyPropertyList, not NSDictionary. Match the
+     * native LSExtensionPoint.sdkEntry conversion before validating its keys. */
+    id lazy=obj?call(obj,"SDKDictionary"):nil;
+    SEL unpack=sel_registerName("_expensiveDictionaryRepresentation");
+    Method method=lazy?class_getInstanceMethod(object_getClass(lazy),unpack):NULL;
+    id sdk=method&&!strcmp(method_getTypeEncoding(method),"@16@0:8")?((id(*)(id,SEL))objc_msgSend)(lazy,unpack):nil;
     int valid=sdk&&CFGetTypeID((CFTypeRef)sdk)==CFDictionaryGetTypeID();
     if(valid) {
         CFTypeRef ext=CFDictionaryGetValue((CFDictionaryRef)sdk,CFSTR("NSExtension"));
@@ -113,7 +118,7 @@ __attribute__((minsize)) static int poster_point_lookup(unsigned phase,int *miss
     id domain=error?call(error,"domain"):nil;
     if(!obj&&domain&&CFEqual((CFTypeRef)domain,CFSTR("NSOSStatusErrorDomain"))&&responds(error,"code"))
         *missing=((long long(*)(id,SEL))objc_msgSend)(error,sel_registerName("code"))==-10814;
-    fprintf(stderr,"DREAM WALLPAPER POINT: phase=%u record=%u sdk=%u missing=%u error=%.180s\n",phase,obj!=nil,valid,*missing,text(error));
+    fprintf(stderr,"DREAM WALLPAPER POINT: phase=%u record=%u lazy=%u dictionary=%u sdk=%u missing=%u error=%.180s\n",phase,obj!=nil,lazy!=nil,sdk!=nil,valid,*missing,text(error));
     if(obj)((void(*)(id,SEL))objc_msgSend)(obj,sel_registerName("release"));
     return valid;
 }
