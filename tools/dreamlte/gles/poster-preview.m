@@ -69,35 +69,51 @@ __attribute__((minsize)) static id preview_image(id self,SEL sel,id view) {
     return result;
 }
 
+__attribute__((minsize)) static void provider_diagnostic(void *unused) {
+    (void)unused;
+    @autoreleasepool { @try {
+        Class cls=objc_getClass("NSExtension");
+        SEL sel=sel_registerName("extensionsWithMatchingAttributes:error:");
+        Method method=cls?class_getClassMethod(cls,sel):NULL;
+        if(!method || strcmp(method_getTypeEncoding(method),"@32@0:8@16^@24")) {
+            fprintf(stderr,"DREAM WALLPAPER PROVIDERS: query-supported=0 type=%.64s\n",method?method_getTypeEncoding(method):"nil");
+            return;
+        }
+        const void *key=CFSTR("NSExtensionPointName"),*value=CFSTR("com.apple.posterkit.provider");
+        CFDictionaryRef attributes=CFDictionaryCreate(NULL,&key,&value,1,&kCFTypeDictionaryKeyCallBacks,&kCFTypeDictionaryValueCallBacks);
+        id error=nil;
+        id extensions=((id(*)(id,SEL,id,id*))objc_msgSend)((id)cls,sel,(id)attributes,&error);
+        CFRelease(attributes);
+        unsigned long long count=responds(extensions,"count")?((unsigned long long(*)(id,SEL))objc_msgSend)(extensions,sel_registerName("count")):0;
+        fprintf(stderr,"DREAM WALLPAPER PROVIDERS: query-supported=1 result=%u count=%llu error=%.180s\n",extensions!=nil,count,text(error));
+        for(unsigned long long i=0;i<count && i<8;i++) {
+            id extension=((id(*)(id,SEL,unsigned long long))objc_msgSend)(extensions,sel_registerName("objectAtIndex:"),i);
+            fprintf(stderr,"DREAM WALLPAPER PROVIDER: index=%llu id=%.120s\n",i,text(call(extension,"identifier")));
+        }
+    } @catch(id e) {fprintf(stderr,"DREAM WALLPAPER PROVIDERS: exception %.180s\n",text(e));} }
+}
+
 __attribute__((minsize)) static void catalog_diagnostic(void *unused) {
     (void)unused;
     @try {
-        void *mg=dlopen("/usr/lib/libMobileGestalt.dylib",RTLD_NOW|RTLD_LOCAL);
-        CFTypeRef (*answer)(CFStringRef)=mg?dlsym(mg,"MGCopyAnswer"):NULL;
-        const char *keys[]={"GSDeviceName","DeviceClass","ProductType"};
-        for(unsigned i=0;i<3;i++) {
-            CFStringRef key=CFStringCreateWithCString(NULL,keys[i],kCFStringEncodingUTF8);
-            CFTypeRef value=answer?answer(key):NULL;
-            fprintf(stderr,"DREAM WALLPAPER ID: %s=%.96s\n",keys[i],text((id)value));
-            if(value)CFRelease(value);CFRelease(key);
-        }
-        const char *paths[]={"/Library/Wallpaper/DefaultWallpapers~iphone.plist","/Library/Wallpaper/Collections/Collections~iphone.plist","/Library/Wallpaper/Collections/iOS_16~iphone.wallpaperCollection/WallpaperCollection.plist"};
-        for(unsigned i=0;i<3;i++)fprintf(stderr,"DREAM WALLPAPER FILE: item=%u readable=%u\n",i,access(paths[i],R_OK)==0);
+        int class_before=objc_getClass("WKWallpaperRepresentingCollectionsManager")!=Nil;
+        dlerror();
+        void *wallpaper=dlopen("/System/Library/PrivateFrameworks/WallpaperKit.framework/WallpaperKit",RTLD_NOW|RTLD_LOCAL);
+        const char *load_error=wallpaper?NULL:dlerror();
         Class cls=objc_getClass("WKWallpaperRepresentingCollectionsManager");
+        fprintf(stderr,"DREAM WALLPAPER FRAMEWORK: loaded=%u class-before=%u class-after=%u default-selector=%u error=%.200s\n",wallpaper!=NULL,class_before,cls!=Nil,responds((id)cls,"defaultManager"),load_error?load_error:"none");
         id manager=call((id)cls,"defaultManager");
         unsigned long long count=responds(manager,"numberOfWallpaperCollections")?((unsigned long long(*)(id,SEL))objc_msgSend)(manager,sel_registerName("numberOfWallpaperCollections")):0;
         fprintf(stderr,"DREAM WALLPAPER CATALOG: manager=%u collections=%llu\n",manager!=nil,count);
-        for(unsigned long long i=0;i<count && i<8;i++) {
-            id collection=responds(manager,"wallpaperCollectionAtIndex:")?((id(*)(id,SEL,unsigned long long))objc_msgSend)(manager,sel_registerName("wallpaperCollectionAtIndex:"),i):nil;
-            fprintf(stderr,"DREAM WALLPAPER COLLECTION: index=%llu class=%s id=%.96s\n",i,collection?object_getClassName(collection):"nil",text(call(collection,"identifier")));
-        }
         id defaults=call((id)objc_getClass("WKDefaultWallpaperManager"),"defaultWallpaperManager");
         id bundle=call(defaults,"defaultWallpaperBundle");
         fprintf(stderr,"DREAM WALLPAPER DEFAULT: manager=%u bundle=%u class=%s\n",defaults!=nil,bundle!=nil,bundle?object_getClassName(bundle):"nil");
     } @catch(id e) {
         fprintf(stderr,"DREAM WALLPAPER CATALOG: exception %.200s\n",text(e));
     }
+    dispatch_async_f(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW,0),NULL,provider_diagnostic);
 }
+
 
 __attribute__((minsize)) int dream_poster_init(void) {
     char path[1024];uint32_t length=sizeof(path);
