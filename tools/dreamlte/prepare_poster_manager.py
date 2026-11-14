@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare one explicit PosterBoard registration entitlement on a private copy.
+"""Prepare one explicit PosterBoard registration or framework-refresh entitlement on a private copy.
 
 No device writes. Requires a caller-supplied original SHA256, preserves every
 original entitlement and all code bytes, then checks signature code/special
@@ -14,12 +14,14 @@ parser.add_argument('original',type=Path)
 parser.add_argument('output',type=Path)
 parser.add_argument('--ldid',required=True)
 parser.add_argument('--expected-sha256',required=True)
+parser.add_argument('--framework-refresh',action='store_true',help='Add the measured workspace refresh right to an already prepared PosterBoard')
 args=parser.parse_args()
 assert args.original.resolve()!=args.output.resolve()
 old=args.original.read_bytes()
 assert hashlib.sha256(old).hexdigest()==args.expected_sha256
 oldent=plistlib.loads(subprocess.check_output([args.ldid,'-e',str(args.original)]))
-key='com.apple.private.pluginkit.manager'
+key='com.apple.lsapplicationworkspace.rebuildappdatabases' if args.framework_refresh else 'com.apple.private.pluginkit.manager'
+if args.framework_refresh:assert oldent.get('com.apple.private.pluginkit.manager') is True
 assert key not in oldent
 newent=dict(oldent);newent[key]=True
 with tempfile.TemporaryDirectory(prefix='.poster-manager-',dir=args.output.parent) as tmp:

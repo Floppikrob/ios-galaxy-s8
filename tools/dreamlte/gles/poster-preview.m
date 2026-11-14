@@ -69,62 +69,44 @@ __attribute__((minsize)) static id preview_image(id self,SEL sel,id view) {
     return result;
 }
 
-/* Only restore the two stock image/color providers, using the native registry.
- * Missing LaunchServices records are checked first; no database rebuild/wipe.
- * PKManager's result block takes one NSError object (nil means success).
+/* Refresh only the stock wallpaper frameworks. PosterKit owns the provider
+ * extension point; its SDK record must exist before registering providers.
+ * The native workspace completion has (BOOL success, NSError *error) ABI.
  */
 __attribute__((minsize)) static void provider_diagnostic(void *unused);
-__attribute__((minsize)) static void registration_step(unsigned step) {
-    fprintf(stderr,"DREAM WALLPAPER STEP: %u\n",step);
-}
-__attribute__((minsize)) static void register_providers(void) {
-    registration_step(0);
-    dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices",RTLD_NOW|RTLD_LOCAL);
-    dlopen("/System/Library/PrivateFrameworks/PlugInKit.framework/PlugInKit",RTLD_NOW|RTLD_LOCAL);
-    Class proxy=objc_getClass("LSPlugInKitProxy"),cls=objc_getClass("PKManager");
-    SEL lookup=sel_registerName("pluginKitProxyForURL:"),reg=sel_registerName("registerPlugInAtURL:result:");
-    Method lm=proxy?class_getClassMethod(proxy,lookup):NULL;
-    Method rm=cls?class_getInstanceMethod(cls,reg):NULL;
-    if(!lm||strcmp(method_getTypeEncoding(lm),"@24@0:8@16")||!rm||strcmp(method_getTypeEncoding(rm),"v32@0:8@16@?24")) {
-        registration_step(99);return;
-    }
-    registration_step(1);
-    id manager=call((id)cls,"defaultManager");
-    registration_step(2);
-    if(!manager){registration_step(99);return;}
-    const char *paths[]={
-        "/System/Library/PrivateFrameworks/WallpaperKit.framework/PlugIns/CollectionsPoster.appex",
-        "/System/Library/PrivateFrameworks/GradientPoster.framework/PlugIns/GradientPosterExtension.appex"
-    };
-    const char *ids[]={"com.apple.WallpaperKit.CollectionsPoster","com.apple.GradientPoster.GradientPosterExtension"};
-    for(unsigned i=0;i<2;i++) {
-        CFURLRef url=CFURLCreateFromFileSystemRepresentation(NULL,(const UInt8*)paths[i],strlen(paths[i]),true);
-        if(!url)continue;
-        registration_step(10+i);
-        id existing=((id(*)(id,SEL,id))objc_msgSend)((id)proxy,lookup,(id)url);
-        registration_step(20+i);
-        if(existing) {
-            registration_step(50+i);
-        } else {
-            CFBundleRef bundle=CFBundleCreate(NULL,url);
-            CFStringRef identity=bundle?CFBundleGetIdentifier(bundle):NULL;
-            CFStringRef expected=CFStringCreateWithCString(NULL,ids[i],kCFStringEncodingUTF8);
-            /* Exact paths and identities are fixed above; each provider's
-             * extension point was independently checked in its stock Info. */
-            int valid=identity&&expected&&CFEqual(identity,expected);
-            if(valid) {
-                registration_step(30+i);
-                ((void(*)(id,SEL,id,id))objc_msgSend)(manager,reg,(id)url,(id)^(id error){
-                    fprintf(stderr,"DREAM WALLPAPER REGISTER: index=%u success=%u error=%.220s\n",i,error==nil,text(error));
-                    dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC),dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW,0),NULL,provider_diagnostic);
-                });
-                registration_step(40+i);
-            } else registration_step(60+i);
-            if(expected)CFRelease(expected);
-            if(bundle)CFRelease(bundle);
+__attribute__((minsize)) static void refresh_framework(void *context) {
+    unsigned index=(unsigned)(uintptr_t)context;
+    if(index==3){provider_diagnostic(NULL);return;}
+    @autoreleasepool { @try {
+        dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices",RTLD_NOW|RTLD_LOCAL);
+        Class cls=objc_getClass("LSApplicationWorkspace");
+        SEL sel=sel_registerName("rebuildDatabaseContentForFrameworkAtURL:completionHandler:");
+        Method method=cls?class_getInstanceMethod(cls,sel):NULL;
+        if(!method||strcmp(method_getTypeEncoding(method),"v32@0:8@16@?24"))return;
+        id workspace=call((id)cls,"defaultWorkspace");
+        if(!workspace)return;
+        const char *paths[]={
+            "/System/Library/PrivateFrameworks/PosterKit.framework",
+            "/System/Library/PrivateFrameworks/WallpaperKit.framework",
+            "/System/Library/PrivateFrameworks/GradientPoster.framework"
+        };
+        const char *ids[]={"com.apple.PosterKit","com.apple.WallpaperKit","com.apple.GradientPoster"};
+        CFURLRef url=CFURLCreateFromFileSystemRepresentation(NULL,(const UInt8*)paths[index],strlen(paths[index]),true);
+        CFBundleRef bundle=url?CFBundleCreate(NULL,url):NULL;
+        CFStringRef identity=bundle?CFBundleGetIdentifier(bundle):NULL;
+        CFStringRef expected=CFStringCreateWithCString(NULL,ids[index],kCFStringEncodingUTF8);
+        int valid=identity&&expected&&CFEqual(identity,expected);
+        fprintf(stderr,"DREAM WALLPAPER PREP: %u %u\n",index,valid);
+        if(valid) {
+            ((void(*)(id,SEL,id,id))objc_msgSend)(workspace,sel,(id)url,(id)^(BOOL success,id error){
+                fprintf(stderr,"DREAM WALLPAPER REFRESH: index=%u success=%u error=%.200s\n",index,success,text(error));
+                if(success&&!error)dispatch_async_f(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW,0),(void*)(uintptr_t)(index+1),refresh_framework);
+            });
         }
-        CFRelease(url);
-    }
+        if(expected)CFRelease(expected);
+        if(bundle)CFRelease(bundle);
+        if(url)CFRelease(url);
+    } @catch(id e){fprintf(stderr,"DREAM WALLPAPER REFRESH: exception %.160s\n",text(e));} }
 }
 
 __attribute__((minsize)) static void provider_diagnostic(void *unused) {
@@ -146,7 +128,7 @@ __attribute__((minsize)) static void provider_diagnostic(void *unused) {
         fprintf(stderr,"DREAM WALLPAPER PROVIDERS: result=%u count=%llu error=%.180s\n",extensions!=nil,count,text(error));
         /* One attempt per process; failed queries never trigger registration. */
         static int attempted;
-        if(extensions && !count && !error && !attempted) {attempted=1;register_providers();}
+        if(extensions && !count && !error && !attempted) {attempted=1;refresh_framework(NULL);}
     } @catch(id e) {fprintf(stderr,"DREAM WALLPAPER PROVIDERS: exception %.180s\n",text(e));} }
 }
 
