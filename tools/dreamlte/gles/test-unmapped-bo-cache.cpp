@@ -6,11 +6,13 @@ struct Memory{virtual~Memory(){};uint64_t length;uint64_t getLength(){return len
 struct IOBufferMemoryDescriptor:Memory{void*bytes;void*getBytesNoCopy(){return bytes;}};
 #define OSDynamicCast(type,p) dynamic_cast<type*>(p)
 struct Surface{uintptr_t address;uint64_t allocSize;uintptr_t kernelAddress(){return address;}};
-struct mali_buffer{Memory*memory;Surface*surface;uint64_t size;bool gpuOnlyHeap=false,cachePrimed=false,cpuMapped=false,writeCombined=false;};
+struct mali_buffer{Memory*memory;Surface*surface;uint64_t size;bool gpuOnlyHeap=false,cachePrimed=false,cpuMapped=false,writeCombined=false;uint64_t last_seq=0;};
 struct Event{void*address;uint64_t length;bool clean;};static std::vector<Event>events;
 static bool ready=true;static bool hakios_mali_ready(){return ready;}
 static void dm_clean(void*p,uint64_t n){events.push_back({p,n,true});}
 static void dm_invalidate(void*p,uint64_t n){events.push_back({p,n,false});}
+static constexpr uint64_t NSEC_PER_SEC=1000000000;
+static bool hakios_mali_wait(uint64_t,uint64_t){return true;}
 #include "DreamPanfrostCache.inc"
 int main(){
  IOBufferMemoryDescriptor mem;mem.length=32ull<<20;mem.bytes=(void*)0xfffffff100001000ULL;

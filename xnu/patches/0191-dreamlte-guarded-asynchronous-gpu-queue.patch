@@ -1,0 +1,318 @@
+--- /dev/null
++++ b/iokit/Kernel/arm/DreamPanfrostQueue.inc
+@@ -0,0 +1,96 @@
++/* HakiOS FIFO policy; worker never takes gMaliLock. Client last_seq pins
++ * every listed BO. Cached surfaces are waited/invalidate-completed by caller. */
++#ifndef DREAM_PANFROST_QUEUE_TEST
++#include <kern/thread.h>
++extern "C" void dream_bind_gpu_worker_cpu(void);
++#endif
++static const unsigned DPF_QUEUE_CAPACITY=64;
++static IOLock *dpf_queue_lock;
++static bool dpf_queue_started;
++static struct {uint64_t chain,seq;bool fragment;} dpf_queue[DPF_QUEUE_CAPACITY];
++static unsigned dpf_queue_head,dpf_queue_count,dpf_queue_peak;
++static uint64_t dpf_queue_async,dpf_queue_sync;
++static void dpf_completion_barrier() {
++#if defined(__aarch64__)
++        __asm__ volatile("dsb sy" ::: "memory");
++#else
++        __atomic_thread_fence(__ATOMIC_SEQ_CST);
++#endif
++}
++static void dpf_queue_worker(void *,wait_result_t)
++{
++    dream_bind_gpu_worker_cpu();
++    for (;;) {
++        IOLockLock(dpf_queue_lock);
++        while (!dpf_queue_count || !hakios_mali_ready())
++            IOLockSleep(dpf_queue_lock,&dpf_queue_count,THREAD_UNINT);
++        const uint64_t chain=dpf_queue[dpf_queue_head].chain;
++        const uint64_t seq=dpf_queue[dpf_queue_head].seq;
++        const bool fragment=dpf_queue[dpf_queue_head].fragment;
++        IOLockUnlock(dpf_queue_lock);
++        const uint64_t start=mach_absolute_time();
++        const bool ok=dpf_execute_chain(chain,fragment,seq);
++        if(!ok){
++            dpf_poison_queue(); // Never skip failed work and retire a later sequence.
++            IOLog("DREAM GLES QUEUE: FAILED seq=%llu; accepted DMA storage retained\n",seq);
++        }
++dpf_completion_barrier();
++        IOLockLock(dpf_queue_lock);
++        if(ok) dpf_done=seq; // Never retire failed or merely queued work.
++        dpf_queue_head=(dpf_queue_head+1)%DPF_QUEUE_CAPACITY;
++        --dpf_queue_count;
++        if(seq<=8 || seq%300==0) {
++            uint64_t ns;absolutetime_to_nanoseconds(mach_absolute_time()-start,&ns);
++            IOLog("DREAM GLES QUEUE: retired=%llu ok=%u pending=%u peak=%u gpu_us=%llu async=%llu sync=%llu\n",
++                seq,ok,dpf_queue_count,dpf_queue_peak,ns/1000,dpf_queue_async,dpf_queue_sync);
++        }
++        IOLockWakeup(dpf_queue_lock,&dpf_done,false);
++        IOLockWakeup(dpf_queue_lock,&dpf_queue_count,false);
++        IOLockUnlock(dpf_queue_lock);
++    }
++}
++static void dpf_queue_start()
++{
++    dpf_queue_lock=IOLockAlloc();
++    if(!dpf_queue_lock) return;
++    thread_t thread;
++    if(kernel_thread_start(dpf_queue_worker,NULL,&thread)==KERN_SUCCESS) {
++        thread_deallocate(thread);dpf_queue_started=true;
++    }
++    IOLog("DREAM GLES QUEUE: enabled=%u capacity=%u cached_surfaces=sync\n",dpf_queue_started,DPF_QUEUE_CAPACITY);
++}
++static uint64_t dpf_enqueue_chain(uint64_t chain,bool fragment,bool asynchronous)
++{
++    if(!hakios_mali_ready() || !chain || (chain&7)) return 0;
++    if(!dpf_queue_started) {
++        uint64_t seq=dpf_seq+1;
++        if(!dpf_execute_chain(chain,fragment,seq)) return 0;
++        dpf_completion_barrier();dpf_seq=dpf_done=seq;return seq;
++    }
++    uint64_t deadline;clock_interval_to_deadline(2000,NSEC_PER_MSEC,&deadline);
++    IOLockLock(dpf_queue_lock);
++    while(dpf_queue_count==DPF_QUEUE_CAPACITY && hakios_mali_ready() && mach_absolute_time()<deadline)
++        IOLockSleepDeadline(dpf_queue_lock,&dpf_queue_count,deadline,THREAD_UNINT);
++    if(!hakios_mali_ready() || dpf_queue_count==DPF_QUEUE_CAPACITY) {IOLockUnlock(dpf_queue_lock);return 0;}
++    const uint64_t seq=++dpf_seq;
++    unsigned at=(dpf_queue_head+dpf_queue_count)%DPF_QUEUE_CAPACITY;
++    dpf_queue[at].chain=chain;dpf_queue[at].seq=seq;dpf_queue[at].fragment=fragment;
++    ++dpf_queue_count;
++    if(dpf_queue_count>dpf_queue_peak)dpf_queue_peak=dpf_queue_count;
++    if(asynchronous)++dpf_queue_async;else ++dpf_queue_sync;
++    IOLockWakeup(dpf_queue_lock,&dpf_queue_count,false);
++    IOLockUnlock(dpf_queue_lock);
++    return seq;
++}
++extern "C" bool hakios_mali_wait(uint64_t seq,uint64_t timeout_ns)
++{
++    if(!dpf_queue_started)return hakios_mali_ready()&&seq<=dpf_done;
++    if(timeout_ns>10ull*NSEC_PER_SEC)timeout_ns=10ull*NSEC_PER_SEC;
++    uint64_t delta,deadline;nanoseconds_to_absolutetime(timeout_ns,&delta);
++    deadline=mach_absolute_time()+delta;
++    IOLockLock(dpf_queue_lock);
++    while(hakios_mali_ready() && dpf_done<seq && timeout_ns && mach_absolute_time()<deadline)
++        IOLockSleepDeadline(dpf_queue_lock,&dpf_done,deadline,THREAD_UNINT);
++    bool done=hakios_mali_ready()&&dpf_done>=seq;
++    IOLockUnlock(dpf_queue_lock);return done;
++}
+--- /dev/null
++++ b/iokit/Kernel/arm/DreamPanfrostSnapshot.inc
+@@ -0,0 +1,17 @@
++/* One immutable bounded user-handle snapshot per SUBMIT. */
++struct dpf_submit_snapshot {
++    uint32_t *values; unsigned count;
++    dpf_submit_snapshot():values(NULL),count(0) {}
++    ~dpf_submit_snapshot() {if(values)IODelete(values,uint32_t,count);}
++    IOReturn load(uint64_t user,unsigned n) {
++        if(n>4096)return kIOReturnBadArgument;
++        count=n;if(!n)return kIOReturnSuccess;
++        values=IONew(uint32_t,n);if(!values)return kIOReturnNoMemory;
++        return copyin((user_addr_t)user,values,n*sizeof(*values))?kIOReturnBadArgument:kIOReturnSuccess;
++    }
++};
++static bool dpf_async_buffer(const struct mali_buffer *b)
++{
++    return b && b->memory && !b->surface &&
++        (b->writeCombined || (!b->cpuMapped && b->cachePrimed));
++}
+--- a/iokit/Kernel/arm/DreamPanfrostBackend.inc
++++ b/iokit/Kernel/arm/DreamPanfrostBackend.inc
+@@ -55 +55 @@
+-extern "C" bool hakios_mali_ready() {return dpf_ready&&!dpf_failed;}
++extern "C" bool hakios_mali_ready() {return dpf_ready&&!__atomic_load_n(&dpf_failed,__ATOMIC_ACQUIRE);}
+@@ -58 +58,3 @@
+-    uint64_t *e=dpf_pte(va,true);if(!e||(*e&1))return false;
++    IOLockLock(dmb_lock);
++    if(!hakios_mali_ready()){IOLockUnlock(dmb_lock);return false;}
++    uint64_t *e=dpf_pte(va,true);if(!e||(*e&1)){IOLockUnlock(dmb_lock);return false;}
+@@ -60 +62 @@
+-    *e=pa|0x2c1;dm_clean(e,8);return true;
++    *e=pa|0x2c1;dm_clean(e,8);IOLockUnlock(dmb_lock);return true;
+@@ -70,2 +72 @@
+-extern "C" void hakios_mali_unmap(uint64_t va,uint64_t size) {
+-    if(dpf_failed)return; // Retain physical storage too; the user client checks this state.
++extern "C" bool hakios_mali_unmap(uint64_t va,uint64_t size) {
+@@ -72,0 +74 @@
++    if(!hakios_mali_ready()){IOLockUnlock(dmb_lock);return false;}
+@@ -78 +80 @@
+-    IOLockUnlock(dmb_lock);
++    IOLockUnlock(dmb_lock);return true;
+@@ -110 +112 @@
+-extern "C" uint64_t hakios_mali_enqueue(uint64_t chain,bool fragment) {
++static bool dpf_execute_chain(uint64_t chain,bool fragment,uint64_t seq) {
+@@ -112 +113,0 @@
+-    uint64_t *entry=dpf_pte(chain,false);if(!entry||!(*entry&1))return 0;
+@@ -113,0 +115 @@
++    uint64_t *entry=dpf_pte(chain,false);if(!entry||!(*entry&1)){IOLockUnlock(dmb_lock);return false;}
+@@ -142,2 +144 @@
+-    uint64_t seq=0;
+-    if(ok){seq=++dpf_seq;dpf_done=seq;if(++dpf_jobs<=12||dpf_jobs%300==0) {
++    if(ok){if(++dpf_jobs<=12||dpf_jobs%300==0) {
+@@ -148 +149 @@
+-        dpf_failed=true;dmb_poisoned=true;
++        __atomic_store_n(&dpf_failed,true,__ATOMIC_RELEASE);dmb_poisoned=true;
+@@ -153 +154 @@
+-    IOLockUnlock(dmb_lock);return seq;
++    IOLockUnlock(dmb_lock);return ok;
+@@ -155 +156,6 @@
+-extern "C" bool hakios_mali_wait(uint64_t seq,uint64_t) {return !dpf_failed&&seq<=dpf_done;}
++static void dpf_poison_queue() {
++    IOLockLock(dmb_lock);
++    __atomic_store_n(&dpf_failed,true,__ATOMIC_RELEASE);dmb_poisoned=true;
++    IOLockUnlock(dmb_lock);
++}
++#include "DreamPanfrostQueue.inc"
+@@ -165 +171,2 @@
+-    IOLog("DREAM GLES: G71 transport ready, root=%llx, synchronous chains, AS0 shared with 8 retained blit contexts, tiler=%x\n",dpf_root,tiler);
++    dpf_queue_start();
++    IOLog("DREAM GLES: G71 transport ready, root=%llx, serial GPU chains with guarded CPU overlap, AS0 shared with 8 retained blit contexts, tiler=%x\n",dpf_root,tiler);
+--- a/iokit/Kernel/arm/DreamPanfrostCache.inc
++++ b/iokit/Kernel/arm/DreamPanfrostCache.inc
+@@ -55,0 +56 @@
++    if(b->last_seq && !hakios_mali_wait(b->last_seq,2ull*NSEC_PER_SEC)) return false;
+--- a/iokit/Kernel/arm/DreamPanfrostClient.inc
++++ b/iokit/Kernel/arm/DreamPanfrostClient.inc
+@@ -62 +62 @@
+-void hakios_mali_unmap(uint64_t gpu, uint64_t size);
++bool hakios_mali_unmap(uint64_t gpu, uint64_t size);
+@@ -66 +65,0 @@
+-uint64_t hakios_mali_enqueue(uint64_t chain, bool fragment);
+@@ -187,0 +187 @@
++#include "DreamPanfrostSnapshot.inc"
+@@ -328,5 +328,6 @@
+-	if(dpf_failed) { IOLog("DREAM GLES: retain buffer after GPU failure\n"); bzero(b,sizeof(*b)); return; }
+-	if (b->last_seq != 0) {
+-		(void)hakios_mali_wait(b->last_seq, 2ull * NSEC_PER_SEC);
+-	}
+-	hakios_mali_unmap(b->address, b->size);
++    if(!hakios_mali_ready() || (b->last_seq && !hakios_mali_wait(b->last_seq,2ull*NSEC_PER_SEC)) ||
++        !hakios_mali_unmap(b->address,b->size)) {
++        IOLog("DREAM GLES: retain buffer after GPU failure or unfinished sequence\n");
++        bzero(b,sizeof(*b));return; // Keep descriptor/preparation/surface alive for DMA.
++    }
++
+@@ -574,0 +576 @@
++    dpf_submit_snapshot submitHandles;
+@@ -606 +608,2 @@
+-        uint32_t handles[64];
++        IOReturn copied=submitHandles.load(r.submit.bo_handles,r.submit.bo_handle_count);
++        if(copied!=kIOReturnSuccess)return copied;
+@@ -609,5 +612 @@
+-        for(unsigned i=0;i<r.submit.bo_handle_count && valid;i+=64) {
+-            unsigned n=r.submit.bo_handle_count-i<64?r.submit.bo_handle_count-i:64;
+-            if(copyin((user_addr_t)(r.submit.bo_handles+i*4ULL),handles,n*4)!=0){valid=false;break;}
+-            for(unsigned k=0;k<n;k++)if(!buffer(handles[k]))valid=false;
+-        }
++        for(unsigned i=0;i<submitHandles.count;i++)if(!buffer(submitHandles.values[i]))valid=false;
+@@ -674,9 +673,9 @@
+-		/* queued, not run here: the job's number goes back in `jc`, and every buffer it names
+-		 * remembers it (kPanfrostWaitBO, and no buffer is freed under a job that uses it) */
+-		uint64_t seq = 0;
+-
+-		fSubmits++;
+-		gMaliSubmits++;
+-        uint64_t cacheBegin = mach_absolute_time();
+-        uint64_t cleanBefore = dpf_clean_bytes, invalidBefore = dpf_invalidate_bytes, skipBefore = dpf_heap_skips;
+-        uint64_t unmappedBefore = dpf_unmapped_skips, unmappedBytesBefore = dpf_unmapped_skip_bytes;
++        uint64_t seq=0;
++        bool asynchronous=gMaliFlush && r.submit.jc && submitHandles.count;
++        bool containsChain=false,valid=true;
++        for(unsigned i=0;i<submitHandles.count;i++)if(!buffer(submitHandles.values[i]))valid=false;
++        if(!valid){ret=kIOReturnBadArgument;break;}
++        ++fSubmits;++gMaliSubmits;
++        uint64_t cacheBegin=mach_absolute_time();
++        uint64_t cleanBefore=dpf_clean_bytes,invalidBefore=dpf_invalidate_bytes,skipBefore=dpf_heap_skips;
++        uint64_t unmappedBefore=dpf_unmapped_skips,unmappedBytesBefore=dpf_unmapped_skip_bytes;
+@@ -684,41 +683,23 @@
+-		/* first what the processors wrote into the surfaces it names, out to memory (flushSurface) */
+-		for (uint32_t i = 0; gMaliFlush && r.submit.jc != 0 && i < r.submit.bo_handle_count && i < 4096; i += 64) {
+-			uint32_t handles[64];
+-			uint32_t n = r.submit.bo_handle_count - i < 64 ? r.submit.bo_handle_count - i : 64;
+-
+-			if (copyin((user_addr_t) (r.submit.bo_handles + i * sizeof(uint32_t)), handles, n * sizeof(uint32_t)) != 0) {
+-				break;
+-			}
+-			for (uint32_t k = 0; k < n; k++) {
+-				b = buffer(handles[k]);
+-				if (b != NULL) {
+-					flushSubmit(b);
+-				}
+-			}
+-		}
+-        uint64_t cacheSubmitted = mach_absolute_time();
+-		if (r.submit.jc != 0) {
+-			seq = hakios_mali_enqueue(r.submit.jc, r.submit.requirements & PANFROST_JD_REQ_FS);
+-		}
+-        uint64_t cacheCompleted = mach_absolute_time();
+-		for (uint32_t i = 0; seq != 0 && i < r.submit.bo_handle_count && i < 4096; i += 64) {
+-			uint32_t handles[64];
+-			uint32_t n = r.submit.bo_handle_count - i < 64 ? r.submit.bo_handle_count - i : 64;
+-
+-			if (copyin((user_addr_t) (r.submit.bo_handles + i * sizeof(uint32_t)), handles, n * sizeof(uint32_t)) != 0) {
+-				break;
+-			}
+-			for (uint32_t k = 0; k < n; k++) {
+-				b = buffer(handles[k]);
+-				if (b != NULL) {
+-					flushComplete(b); /* synchronous chain retired: safe for CPU readback */
+-					b->last_seq = seq;
+-					if (b->surface != NULL) {
+-						__atomic_store_n(&b->surface->maliSeq,seq,__ATOMIC_RELEASE);      /* (HakiosMaliDrawn) */
+-					}
+-				}
+-			}
+-		}
+-        uint64_t cacheDone = mach_absolute_time();
+-        if (r.submit.jc && (fSubmits <= 8 || fSubmits % 120 == 0)) {
+-            uint64_t cleanNs, jobNs, invalidateNs;
++        for(unsigned i=0;r.submit.jc && i<submitHandles.count;i++) {
++            b=buffer(submitHandles.values[i]);
++            if(gMaliFlush)flushSubmit(b);
++            if(!dpf_async_buffer(b))asynchronous=false;
++            if(r.submit.jc>=b->address && r.submit.jc-b->address<b->size)containsChain=true;
++        }
++        asynchronous=asynchronous&&containsChain&&dpf_queue_started;
++        uint64_t cacheSubmitted=mach_absolute_time();
++        if(r.submit.jc)seq=dpf_enqueue_chain(r.submit.jc,r.submit.requirements&PANFROST_JD_REQ_FS,asynchronous);
++        // Install fences before gMaliLock lets close/map/reuse touch these BOs.
++        for(unsigned i=0;seq && i<submitHandles.count;i++) {
++            b=buffer(submitHandles.values[i]);b->last_seq=seq;
++        }
++        bool completed=seq && (!asynchronous ? hakios_mali_wait(seq,10ull*NSEC_PER_SEC) : false);
++        uint64_t cacheCompleted=mach_absolute_time();
++        for(unsigned i=0;seq && i<submitHandles.count;i++) {
++            b=buffer(submitHandles.values[i]);
++            if(completed)flushComplete(b);
++            if(b->surface)__atomic_store_n(&b->surface->maliSeq,seq,__ATOMIC_RELEASE);
++        }
++        uint64_t cacheDone=mach_absolute_time();
++        if(r.submit.jc && (fSubmits<=8 || fSubmits%120==0)) {
++            uint64_t cleanNs,jobNs,invalidateNs;
+@@ -730,2 +711 @@
+-                cleanNs/1000,jobNs/1000,invalidateNs/1000,
+-                dpf_unmapped_skips-unmappedBefore,dpf_unmapped_skip_bytes-unmappedBytesBefore);
++                cleanNs/1000,jobNs/1000,invalidateNs/1000,dpf_unmapped_skips-unmappedBefore,dpf_unmapped_skip_bytes-unmappedBytesBefore);
+@@ -732,0 +713 @@
++            IOLog("DREAM GLES SUBMIT: seq=%llu mode=%s completed=%u job_us_is=%s\n",seq,asynchronous?"async":"sync",completed,asynchronous?"enqueue":"wait");
+@@ -734,2 +715,2 @@
+-		if(r.submit.jc && !seq)ret=kIOReturnIOError;
+-		r.submit.jc = seq;
++        if(r.submit.jc && (!seq || (!asynchronous&&!completed))){ret=kIOReturnIOError;++fFailed;}
++        r.submit.jc=seq;
+--- a/osfmk/kern/dream_render_cpu.inc
++++ b/osfmk/kern/dream_render_cpu.inc
+@@ -24,0 +25,12 @@
++
++/* Another verified Mongoose leaves compositor core6 available for preparation. */
++void dream_bind_gpu_worker_cpu(void);
++void dream_bind_gpu_worker_cpu(void)
++{
++    if(real_ncpus!=8)return;
++    processor_t p=cpu_to_processor(5);
++    if(!p || p->state<PROCESSOR_IDLE)return;
++    (void)thread_bind(p);
++    if(cpu_number()!=5)(void)thread_block(NULL);
++    printf("DREAM GLES CPU: worker bound=5 mpidr=1 role=Mongoose now=%u\n",cpu_number());
++}

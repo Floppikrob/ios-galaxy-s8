@@ -21,9 +21,11 @@ struct IOBufferMemoryDescriptor:IOMemoryDescriptor{
 };
 #define OSDynamicCast(type,p) dynamic_cast<type*>(p)
 struct Surface{uintptr_t address;uint64_t allocSize;unsigned mapCache;uintptr_t kernelAddress(){return address;}};
-struct mali_buffer{IOMemoryDescriptor*memory=nullptr;Surface*surface=nullptr;uint64_t address=0,size=0;bool gpuOnlyHeap=false,cachePrimed=false,cpuMapped=false,writeCombined=false;};
+struct mali_buffer{IOMemoryDescriptor*memory=nullptr;Surface*surface=nullptr;uint64_t address=0,size=0;bool gpuOnlyHeap=false,cachePrimed=false,cpuMapped=false,writeCombined=false;uint64_t last_seq=0;};
 static unsigned cleans,invalidates;
 static void dm_clean(void*,uint64_t){++cleans;}static void dm_invalidate(void*,uint64_t){++invalidates;}
+static constexpr uint64_t NSEC_PER_SEC=1000000000;
+static bool hakios_mali_wait(uint64_t,uint64_t){return true;}
 #include "DreamPanfrostCache.inc"
 struct drm_panfrost_create_bo{uint32_t size,flags,handle,pad;uint64_t offset;};
 static void hakios_mali_tag(uint64_t,unsigned,unsigned,unsigned,unsigned,unsigned,unsigned){}
