@@ -35,3 +35,5 @@ g++ -std=c++17 -Wall -Wextra -Werror -Wno-format -I/path/to/xnu/iokit/Kernel/arm
 2026-11-14:0187 adapts reference bounded hybrid waiting to synchronous G71, retaining exclusion/failure behavior. Userland vector4 packing preserves scalar/kernel byte contract; old Clang source also auto-vectorized. Host equality/state tests and native wait/pack markers passed, but heavy UI frames still158-385ms; stable30FPS not achieved. All effects must remain enabled.
 
 2026-11-14: Large-image shared staging/GPU blit replaces CPU upload into persistent texture when eligible. Names/parameters/effects preserved, CPU fallback retained. Host model/state/failure tests pass and hardware staged1 is observed. User reports slight gain, but sampled heavy frames~104ms: stable30FPS not achieved.
+
+2026-11-14:188 fixes a 32bit ppnum shift before cache-sync address widening, reproducing old high-PA panic arithmetic.189 uses consistent ordinary BO write-combine kernel/user mappings with DSB ordering, retaining full cached-surface/fallback rules. Actual-function/state tests and native64bitshift/build passed; hardwareWC/FPS pending. No effect simplification.

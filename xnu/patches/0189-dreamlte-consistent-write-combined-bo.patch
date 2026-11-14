@@ -1,0 +1,53 @@
+--- a/iokit/Kernel/arm/DreamPanfrostClient.inc
++++ b/iokit/Kernel/arm/DreamPanfrostClient.inc
+@@ -183 +183 @@
+-    bool gpuOnlyHeap, cachePrimed, cpuMapped; // Any CPU mapping permanently restores full cache sync.
++    bool gpuOnlyHeap, cachePrimed, cpuMapped, writeCombined; // Any CPU mapping permanently restores full cache sync.
+@@ -395 +395 @@
+-    b->cachePrimed = false; b->cpuMapped = false;
++    b->cachePrimed = false; b->cpuMapped = false; b->writeCombined = false;
+@@ -410,3 +410,13 @@
+-	if(gMaliBuffers<8)IOLog("DREAM GLES BO: allocate size=%llu flags=%x cache=default\n",size,request->flags);
+-	memory = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
+-	    kIODirectionInOut | kIOMemoryKernelUserShared, (vm_size_t) size, PAGE_SIZE);
++    // Match the reference's ordinary BO mapping, now that high-PA attribute
++    // synchronization widens ppnum BEFORE shifting (0188). Keep the never-CPU-
++    // mapped tiler heap cached: its established ownership path needs no remap.
++    bool wc=(request->flags&PANFROST_BO_HEAP)==0;
++    if(gMaliBuffers<8)IOLog("DREAM GLES BO: allocate size=%llu flags=%x cache=%s\n",size,request->flags,wc?"write-combined":"default-heap");
++    memory=IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
++        kIODirectionInOut|kIOMemoryKernelUserShared|(wc?kIOMapWriteCombineCache:0),(vm_size_t)size,PAGE_SIZE);
++    if (!memory&&wc) {
++        wc=false;
++        memory=IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
++            kIODirectionInOut|kIOMemoryKernelUserShared,(vm_size_t)size,PAGE_SIZE);
++        IOLog("DREAM GLES WC: allocation fallback=cached bytes=%llu\n",size);
++    }
+@@ -423,0 +434 @@
++    b->writeCombined=wc;
+@@ -538 +549 @@
+-		*options = b->surface ? b->surface->mapCache : kIOMapDefaultCache;
++		*options = b->surface ? b->surface->mapCache : (b->writeCombined?kIOMapWriteCombineCache:kIOMapDefaultCache);
+@@ -669,0 +681 @@
++        uint64_t wcBefore=dpf_wc_skips,wcBytesBefore=dpf_wc_skip_bytes;
+@@ -717,0 +730 @@
++            IOLog("DREAM GLES WC: submit=%u sync_barriers=%llu bytes=%llu\n",fSubmits,dpf_wc_skips-wcBefore,dpf_wc_skip_bytes-wcBytesBefore);
+--- a/iokit/Kernel/arm/DreamPanfrostCache.inc
++++ b/iokit/Kernel/arm/DreamPanfrostCache.inc
+@@ -6,0 +7,8 @@
++static uint64_t dpf_wc_skips,dpf_wc_skip_bytes;
++static void dpf_wc_barrier() {
++#if defined(__aarch64__)
++    __asm__ volatile("dsb sy" ::: "memory");
++#else
++    __atomic_thread_fence(__ATOMIC_SEQ_CST);
++#endif
++}
+@@ -8,0 +17,7 @@
++    // Only descriptors ACTUALLY allocated and kernel/user-mapped WC qualify.
++    // Imported surfaces and allocation fallbacks keep their full cache rules.
++    // WC writes still require publication before the doorbell and read ordering
++    // after retirement. No early completion, DMA reset or fault-state bypass.
++    if (b->writeCombined&&!b->surface) {
++        dpf_wc_barrier();++dpf_wc_skips;dpf_wc_skip_bytes+=b->size;return;
++    }
