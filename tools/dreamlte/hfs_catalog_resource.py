@@ -1,9 +1,10 @@
-"""Bounded offline rename of an existing ASCII HFS+ resource, without allocation.
+"""Bounded offline edits of existing HFS+ resources, without allocation.
 
-Only a non-first file leaf record and its existing file-thread payload change.
+Renames alter a non-first file record and its thread; logical-size edits alter
+only one fixed field in an existing regular-file record.
 The caller must back up both nodes, guard device ranges, and read them back.
-This module never opens or writes a device. It refuses moves, growth, index-key
-changes, non-ASCII neighbors, incomplete threads, and unexpected record types.
+This module never opens or writes a device. Renames refuse moves, key growth,
+index changes and incomplete threads. Logical lengths stay inside allocation.
 """
 import struct
 
@@ -77,3 +78,34 @@ def rename_resource(file_node, file_index, thread_node, thread_index, parent,
     assert parse_leaf(new_file)[0][0] == parse_leaf(file_node)[0][0]
     assert parse_leaf(new_thread)[0][0] == parse_leaf(thread_node)[0][0]
     return new_file, new_thread
+
+
+def set_file_logical_size(node, index, parent, name, file_id, old_size,
+                          new_size, block_size):
+    """Change only data-fork logical length inside its existing allocation.
+
+    No block allocation, extent, key, thread, record length or ancestor edit.
+    The caller must verify journal replay and guard the complete device node.
+    """
+    records = parse_leaf(node)
+    assert 0 <= index < len(records) and block_size in (4096, 8192)
+    key, data = records[index]
+    assert key == (parent, name) and len(data) == 248 and u16(data) == 2
+    assert struct.unpack_from('>I', data, 8)[0] == file_id
+    assert u16(data, 42) & 0xf000 == 0x8000
+    allocated = struct.unpack_from('>I', data, 100)[0] * block_size
+    assert struct.unpack_from('>Q', data, 88)[0] == old_size
+    assert 0 < old_size <= allocated and 0 < new_size <= allocated
+    assert new_size != old_size
+    at = u16(node, len(node) - 2 * (index + 1))
+    payload = at + 2 + u16(node, at)
+    result = bytearray(node)
+    struct.pack_into('>Q', result, payload + 88, new_size)
+    expected = bytearray(data)
+    struct.pack_into('>Q', expected, 88, new_size)
+    changed = parse_leaf(result)
+    assert changed[index] == (key, bytes(expected))
+    assert changed[:index] + changed[index + 1:] == records[:index] + records[index + 1:]
+    assert result[:payload + 88] == node[:payload + 88]
+    assert result[payload + 96:] == node[payload + 96:]
+    return bytes(result)

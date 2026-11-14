@@ -1,5 +1,5 @@
 import struct,unittest
-from hfs_catalog_resource import parse_leaf,pack_leaf,rename_resource
+from hfs_catalog_resource import parse_leaf,pack_leaf,rename_resource,set_file_logical_size
 
 class ResourceRename(unittest.TestCase):
     def setUp(self):
@@ -32,5 +32,35 @@ class ResourceRename(unittest.TestCase):
         self.assertNotIn(self.old.encode('utf-16-be'),f)
         self.assertEqual(parse_leaf(f)[1][1],parse_leaf(self.files)[1][1])
         self.assertEqual(parse_leaf(t)[1][0],(90,''))
+
+class FileLogicalSize(unittest.TestCase):
+    def setUp(self):
+        header=bytearray(4096);header[8]=255;header[9]=1
+        struct.pack_into('>H',header,10,2)
+        data=bytearray(248);struct.pack_into('>H',data,0,2)
+        struct.pack_into('>I',data,8,90);struct.pack_into('>H',data,42,0o100755)
+        struct.pack_into('>Q',data,88,547008);struct.pack_into('>I',data,100,134)
+        data[104:168]=bytes(range(64));data[168:248]=bytes(range(80))
+        self.node=pack_leaf(header,[((80,'lib.dylib'),bytes(data)),((80,'other'),bytes(data))])
+        # Nonzero unused node bytes must also survive this fixed-field edit.
+        b=bytearray(self.node);b[2000:2100]=bytes(range(100));self.node=bytes(b)
+    def call(self,**kw):
+        args=dict(node=self.node,index=0,parent=80,name='lib.dylib',file_id=90,
+                  old_size=547008,new_size=548864,block_size=4096)
+        args.update(kw);return set_file_logical_size(**args)
+    def test_grow_and_reverse_preserve_all_nonlength_bytes(self):
+        changed=self.call()
+        self.assertEqual(parse_leaf(changed)[0][1][96:],parse_leaf(self.node)[0][1][96:])
+        self.assertEqual(changed[2000:2100],self.node[2000:2100])
+        back=self.call(node=changed,old_size=548864,new_size=547008)
+        self.assertEqual(back,self.node)
+    def test_refuses_allocation_growth_stale_size_wrong_identity(self):
+        for kw in [dict(new_size=548865),dict(new_size=0),dict(old_size=547007),dict(file_id=91),dict(name='other'),dict(index=-1),dict(block_size=512)]:
+            with self.subTest(kw=kw),self.assertRaises(AssertionError):self.call(**kw)
+    def test_refuses_symlink_and_noop(self):
+        data=bytearray(parse_leaf(self.node)[0][1]);struct.pack_into('>H',data,42,0o120777)
+        node=pack_leaf(self.node,[((80,'lib.dylib'),bytes(data)),parse_leaf(self.node)[1]])
+        with self.assertRaises(AssertionError):self.call(node=node)
+        with self.assertRaises(AssertionError):self.call(new_size=547008)
 
 if __name__=='__main__':unittest.main()

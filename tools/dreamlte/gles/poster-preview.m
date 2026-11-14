@@ -74,10 +74,58 @@ __attribute__((minsize)) static id preview_image(id self,SEL sel,id view) {
  * PKManager's result block takes one NSError object (nil means success).
  */
 __attribute__((minsize)) static void provider_diagnostic(void *unused);
+/* Create the declaring framework records before submitting their extensions.
+ * The registration dictionary is the stock Info plus native framework fields;
+ * this is not the workspace whole-database rebuild or content-refresh API.
+ */
+__attribute__((minsize)) static int register_framework_parents(void) {
+    dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices",RTLD_NOW|RTLD_LOCAL);
+    Class cls=objc_getClass("LSApplicationWorkspace");
+    SEL sel=sel_registerName("registerApplicationDictionary:");
+    Method method=cls?class_getInstanceMethod(cls,sel):NULL;
+    if(!method||strcmp(method_getTypeEncoding(method),"B24@0:8@16")){fprintf(stderr,"DREAM WALLPAPER PARENT: index=%u valid=%u registered=%u\n",3u,0u,0u);return 0;}
+    id workspace=call((id)cls,"defaultWorkspace");
+    if(!workspace){fprintf(stderr,"DREAM WALLPAPER PARENT: index=%u valid=%u registered=%u\n",4u,0u,0u);return 0;}
+    const char *names[]={"PosterKit","WallpaperKit","GradientPoster"};
+    for(unsigned i=0;i<3;i++) {
+        char path[128],identifier[80];
+        snprintf(path,sizeof(path),"/System/Library/PrivateFrameworks/%s.framework",names[i]);
+        snprintf(identifier,sizeof(identifier),"com.apple.%s",names[i]);
+        CFURLRef url=CFURLCreateFromFileSystemRepresentation(NULL,(const UInt8*)path,strlen(path),true);
+        CFBundleRef bundle=url?CFBundleCreate(NULL,url):NULL;
+        CFStringRef expected=CFStringCreateWithCString(NULL,identifier,kCFStringEncodingUTF8);
+        CFStringRef identity=bundle?CFBundleGetIdentifier(bundle):NULL;
+        CFDictionaryRef info=bundle?CFBundleGetInfoDictionary(bundle):NULL;
+        CFTypeRef kind=info?CFDictionaryGetValue(info,CFSTR("CFBundlePackageType")):NULL;
+        int valid=identity&&expected&&CFEqual(identity,expected)&&kind&&CFEqual(kind,CFSTR("FMWK"));
+        BOOL ok=NO;
+        if(valid) {
+            CFMutableDictionaryRef dict=CFDictionaryCreateMutableCopy(NULL,0,info);
+            CFStringRef name=CFURLCopyFileSystemPath(url,kCFURLPOSIXPathStyle);
+            if(dict&&name) {
+                CFDictionarySetValue(dict,CFSTR("Path"),name);
+                CFDictionarySetValue(dict,CFSTR("ApplicationType"),CFSTR("Framework"));
+                CFDictionarySetValue(dict,CFSTR("IsContainerized"),kCFBooleanFalse);
+                fprintf(stderr,"DREAM WALLPAPER PARENT: index=%u request=1\n",i);
+                ok=((BOOL(*)(id,SEL,id))objc_msgSend)(workspace,sel,(id)dict);
+            }
+            if(name)CFRelease(name);
+            if(dict)CFRelease(dict);
+        }
+        fprintf(stderr,"DREAM WALLPAPER PARENT: index=%u valid=%u registered=%u\n",i,valid,ok);
+        if(expected)CFRelease(expected);
+        if(bundle)CFRelease(bundle);
+        if(url)CFRelease(url);
+        if(!ok)return 0;
+    }
+    return 1;
+}
+
 __attribute__((minsize)) static void registration_step(unsigned step) {
     fprintf(stderr,"DREAM WALLPAPER STEP: %u\n",step);
 }
 __attribute__((minsize)) static void register_providers(void) {
+    if(!register_framework_parents())return;
     registration_step(0);
     dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices",RTLD_NOW|RTLD_LOCAL);
     dlopen("/System/Library/PrivateFrameworks/PlugInKit.framework/PlugInKit",RTLD_NOW|RTLD_LOCAL);
@@ -146,7 +194,7 @@ __attribute__((minsize)) static void provider_diagnostic(void *unused) {
         fprintf(stderr,"DREAM WALLPAPER PROVIDERS: result=%u count=%llu error=%.180s\n",extensions!=nil,count,text(error));
         /* One attempt per process; failed queries never trigger registration. */
         static int attempted;
-        if(extensions && !count && !error && !attempted) {attempted=1;register_providers();}
+        if(extensions && !count && !error && !attempted) {attempted=1;register_providers();dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC),dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW,0),NULL,provider_diagnostic);}
     } @catch(id e) {fprintf(stderr,"DREAM WALLPAPER PROVIDERS: exception %.180s\n",text(e));} }
 }
 
