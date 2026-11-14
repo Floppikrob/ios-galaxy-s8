@@ -74,82 +74,84 @@ __attribute__((minsize)) static id preview_image(id self,SEL sel,id view) {
  * PKManager's result block takes one NSError object (nil means success).
  */
 __attribute__((minsize)) static void provider_diagnostic(void *unused);
-/* Create the declaring framework records before submitting their extensions.
- * The registration dictionary is the stock Info plus native framework fields;
- * this is not the workspace whole-database rebuild or content-refresh API.
+/* Frameworks are not applications (-10811). The stock MI Framework path
+ * registers its NSExtensionSDK entries separately. Use that same client entry
+ * for ONLY PosterKit's fixed point, retaining the native server checks.
  */
-/* The public BOOL wrapper discards the OSStatus needed to diagnose failure.
- * Use its exact C entry only when both method offsets and all 800 entry bytes
- * match the pinned CoreServices image. No authorization check is bypassed.
- */
-__attribute__((minsize)) static int32_t register_dictionary_status(id cls,id workspace,SEL selector,id dict,BOOL *ok,int *guarded) {
-    Method basic=class_getInstanceMethod((Class)cls,selector);
-    Method observer=class_getInstanceMethod((Class)cls,sel_registerName("registerApplicationDictionary:withObserverNotification:"));
-    Dl_info image={0};*guarded=0;
-    if(basic&&observer&&!strcmp(method_getTypeEncoding(observer),"B28@0:8@16i24")&&dladdr((const void*)method_getImplementation(basic),&image)&&image.dli_fbase&&image.dli_fname&&!strcmp(image.dli_fname,"/System/Library/Frameworks/CoreServices.framework/CoreServices")) {
-        uintptr_t base=(uintptr_t)image.dli_fbase;
-        if((uintptr_t)method_getImplementation(basic)==base+0x783ac && (uintptr_t)method_getImplementation(observer)==base+0x77ee8) {
-            const unsigned char *code=(const void*)(base+0x7808c);uint64_t hash=14695981039346656037ULL;
-            for(unsigned i=0;i<0x320;i++)hash=(hash^code[i])*1099511628211ULL;
-            if(hash==0xf18549854359cff1ULL) {
-                *guarded=1;int32_t result=((int32_t(*)(id,unsigned))code)(dict,1);
-                *ok=result==0;return result;
-            }
-        }
-    }
-    *ok=((BOOL(*)(id,SEL,id))objc_msgSend)(workspace,selector,dict);
-    return INT32_MIN;
-}
-
-__attribute__((minsize)) static int register_framework_parents(void) {
-    dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices",RTLD_NOW|RTLD_LOCAL);
+typedef int32_t (*sdk_register_fn)(id,uint32_t,id,id);
+__attribute__((minsize)) static sdk_register_fn sdk_registration_entry(void) {
     Class cls=objc_getClass("LSApplicationWorkspace");
-    SEL sel=sel_registerName("registerApplicationDictionary:");
-    Method method=cls?class_getInstanceMethod(cls,sel):NULL;
-    if(!method||strcmp(method_getTypeEncoding(method),"B24@0:8@16")){fprintf(stderr,"DREAM WALLPAPER PARENT: index=%u valid=%u registered=%u\n",3u,0u,0u);return 0;}
-    id workspace=call((id)cls,"defaultWorkspace");
-    if(!workspace){fprintf(stderr,"DREAM WALLPAPER PARENT: index=%u valid=%u registered=%u\n",4u,0u,0u);return 0;}
-    const char *names[]={"PosterKit","WallpaperKit","GradientPoster"};
-    for(unsigned i=0;i<3;i++) {
-        char path[128],identifier[80];
-        snprintf(path,sizeof(path),"/System/Library/PrivateFrameworks/%s.framework",names[i]);
-        snprintf(identifier,sizeof(identifier),"com.apple.%s",names[i]);
-        CFURLRef url=CFURLCreateFromFileSystemRepresentation(NULL,(const UInt8*)path,strlen(path),true);
-        CFBundleRef bundle=url?CFBundleCreate(NULL,url):NULL;
-        CFStringRef expected=CFStringCreateWithCString(NULL,identifier,kCFStringEncodingUTF8);
-        CFStringRef identity=bundle?CFBundleGetIdentifier(bundle):NULL;
-        CFDictionaryRef info=bundle?CFBundleGetInfoDictionary(bundle):NULL;
-        CFTypeRef kind=info?CFDictionaryGetValue(info,CFSTR("CFBundlePackageType")):NULL;
-        int valid=identity&&expected&&CFEqual(identity,expected)&&kind&&CFEqual(kind,CFSTR("FMWK"));
-        BOOL ok=NO;
-        if(valid) {
-            CFMutableDictionaryRef dict=CFDictionaryCreateMutableCopy(NULL,0,info);
-            CFStringRef name=CFURLCopyFileSystemPath(url,kCFURLPOSIXPathStyle);
-            if(dict&&name) {
-                CFDictionarySetValue(dict,CFSTR("Path"),name);
-                CFDictionarySetValue(dict,CFSTR("ApplicationType"),CFSTR("Framework"));
-                CFDictionarySetValue(dict,CFSTR("IsContainerized"),kCFBooleanFalse);
-                fprintf(stderr,"DREAM WALLPAPER PARENT: index=%u request=1\n",i);
-                int guarded=0;int32_t status=register_dictionary_status((id)cls,workspace,sel,(id)dict,&ok,&guarded);
-                fprintf(stderr,"DREAM WALLPAPER STATUS: index=%u code=%d guarded=%u\n",i,status,guarded);
-            }
-            if(name)CFRelease(name);
-            if(dict)CFRelease(dict);
-        }
-        fprintf(stderr,"DREAM WALLPAPER PARENT: index=%u valid=%u registered=%u\n",i,valid,ok);
-        if(expected)CFRelease(expected);
-        if(bundle)CFRelease(bundle);
-        if(url)CFRelease(url);
-        if(!ok)return 0;
+    Method basic=cls?class_getInstanceMethod(cls,sel_registerName("registerApplicationDictionary:")):NULL;
+    Class server=objc_getClass("_LSDModifyClient");
+    Method remote=server?class_getInstanceMethod(server,sel_registerName("registerExtensionPoint:platform:declaringURL:withInfo:completionHandler:")):NULL;
+    Dl_info image={0};
+    if(!basic||!remote||strcmp(method_getTypeEncoding(basic),"B24@0:8@16")||strcmp(method_getTypeEncoding(remote),"v52@0:8@16I24@28@36@?44")||!dladdr((const void*)method_getImplementation(basic),&image)||!image.dli_fbase||!image.dli_fname||strcmp(image.dli_fname,"/System/Library/Frameworks/CoreServices.framework/CoreServices"))return NULL;
+    uintptr_t base=(uintptr_t)image.dli_fbase;
+    if((uintptr_t)method_getImplementation(basic)!=base+0x783ac||(uintptr_t)method_getImplementation(remote)!=base+0xcb980)return NULL;
+    const unsigned char *code=(const void*)(base+0xdc760);uint64_t hash=14695981039346656037ULL;
+    for(unsigned i=0;i<0x19c;i++)hash=(hash^code[i])*1099511628211ULL;
+    return hash==0xf7a92e4c9343ee33ULL?(sdk_register_fn)code:NULL;
+}
+/* A native record lookup distinguishes a missing point from a failed query.
+ * Native init returns a retained record; no borrowed object escapes this call.
+ */
+__attribute__((minsize)) static int poster_point_lookup(unsigned phase,int *missing) {
+    *missing=0;
+    Class cls=objc_getClass("LSExtensionPointRecord");
+    SEL sel=sel_registerName("initWithIdentifier:platform:error:");
+    Method init=cls?class_getInstanceMethod(cls,sel):NULL;
+    if(!init||strcmp(method_getTypeEncoding(init),"@36@0:8@16I24^@28"))return 0;
+    id error=nil,obj=((id(*)(id,SEL))objc_msgSend)((id)cls,sel_registerName("alloc"));
+    obj=((id(*)(id,SEL,id,uint32_t,id*))objc_msgSend)(obj,sel,(id)CFSTR("com.apple.posterkit.provider"),2,&error);
+    id sdk=obj?call(obj,"SDKDictionary"):nil;
+    int valid=sdk&&CFGetTypeID((CFTypeRef)sdk)==CFDictionaryGetTypeID();
+    if(valid) {
+        CFTypeRef ext=CFDictionaryGetValue((CFDictionaryRef)sdk,CFSTR("NSExtension"));
+        CFTypeRef point=ext&&CFGetTypeID(ext)==CFDictionaryGetTypeID()?CFDictionaryGetValue((CFDictionaryRef)ext,CFSTR("NSExtensionPointIdentifier")):NULL;
+        valid=point&&CFEqual(point,CFSTR("com.apple.posterkit.provider"));
     }
-    return 1;
+    id domain=error?call(error,"domain"):nil;
+    if(!obj&&domain&&CFEqual((CFTypeRef)domain,CFSTR("NSOSStatusErrorDomain"))&&responds(error,"code"))
+        *missing=((long long(*)(id,SEL))objc_msgSend)(error,sel_registerName("code"))==-10814;
+    fprintf(stderr,"DREAM WALLPAPER POINT: phase=%u record=%u sdk=%u missing=%u error=%.180s\n",phase,obj!=nil,valid,*missing,text(error));
+    if(obj)((void(*)(id,SEL))objc_msgSend)(obj,sel_registerName("release"));
+    return valid;
+}
+__attribute__((minsize)) static int register_poster_sdk(void) {
+    dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices",RTLD_NOW|RTLD_LOCAL);
+    int missing=0;
+    if(poster_point_lookup(0,&missing))return 1;
+    if(!missing)return 0;
+    sdk_register_fn reg=sdk_registration_entry();
+    if(!reg){fprintf(stderr,"DREAM WALLPAPER SDK: guarded=0\n");return 0;}
+    const char *path="/System/Library/PrivateFrameworks/PosterKit.framework";
+    CFURLRef url=CFURLCreateFromFileSystemRepresentation(NULL,(const UInt8*)path,strlen(path),true);
+    CFBundleRef bundle=url?CFBundleCreate(NULL,url):NULL;
+    CFStringRef identity=bundle?CFBundleGetIdentifier(bundle):NULL;
+    CFDictionaryRef info=bundle?CFBundleGetInfoDictionary(bundle):NULL;
+    CFTypeRef kind=info?CFDictionaryGetValue(info,CFSTR("CFBundlePackageType")):NULL;
+    CFTypeRef all=info?CFDictionaryGetValue(info,CFSTR("NSExtensionSDK")):NULL;
+    CFTypeRef sdk=all&&CFGetTypeID(all)==CFDictionaryGetTypeID()?CFDictionaryGetValue((CFDictionaryRef)all,CFSTR("com.apple.posterkit.provider")):NULL;
+    int valid=identity&&CFEqual(identity,CFSTR("com.apple.PosterKit"))&&kind&&CFEqual(kind,CFSTR("FMWK"))&&sdk&&CFGetTypeID(sdk)==CFDictionaryGetTypeID();
+    int ok=0;
+    if(valid) {
+        fprintf(stderr,"DREAM WALLPAPER SDK: request=1 guarded=1\n");
+        /* Pinned iOS platform2. Same argument order as the native Framework
+         * enumerator: identifier, platform, unchanged SDK dictionary, URL. */
+        int32_t status=reg((id)CFSTR("com.apple.posterkit.provider"),2,(id)sdk,(id)url);
+        fprintf(stderr,"DREAM WALLPAPER SDK: status=%d guarded=1\n",status);
+        if(!status)ok=poster_point_lookup(1,&missing);
+    } else fprintf(stderr,"DREAM WALLPAPER SDK: stock-valid=0\n");
+    if(bundle)CFRelease(bundle);
+    if(url)CFRelease(url);
+    return ok;
 }
 
 __attribute__((minsize)) static void registration_step(unsigned step) {
     fprintf(stderr,"DREAM WALLPAPER STEP: %u\n",step);
 }
 __attribute__((minsize)) static void register_providers(void) {
-    if(!register_framework_parents())return;
+    if(!register_poster_sdk())return;
     registration_step(0);
     dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices",RTLD_NOW|RTLD_LOCAL);
     dlopen("/System/Library/PrivateFrameworks/PlugInKit.framework/PlugInKit",RTLD_NOW|RTLD_LOCAL);
