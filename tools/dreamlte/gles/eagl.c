@@ -1050,6 +1050,7 @@ b3a8_planes(IOSurfaceRef surface, uint8_t **rgb, size_t *nr, size_t *rr,
 }
 
 /* Fill a texture, which is bound, from its IOSurface, unless it is the surface. */
+#include "dream-staged-upload.inc"
 static void
 surface_to_texture(struct eagl *e, struct image *image)
 {
@@ -1112,8 +1113,10 @@ surface_to_texture(struct eagl *e, struct image *image)
 	glGetIntegerv(GL_UNPACK_ALIGNMENT, &alignment);
 	glPixelStorei(GL_UNPACK_ROW_LENGTH, (GLint)(row / pixel));
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-	glTexImage2D(image->to, 0, (GLint)internal_format(image->internal, image->format), image->width, image->height, 0,
-	    image->format, image->type, base);
+	if (!dream_staged_upload(e,image,base,row)) {
+		glTexImage2D(image->to, 0, (GLint)internal_format(image->internal, image->format), image->width, image->height, 0,
+		    image->format, image->type, base);
+	}
 	glPixelStorei(GL_UNPACK_ROW_LENGTH, row_length);
 	glPixelStorei(GL_UNPACK_ALIGNMENT, alignment);
 	if (trace_placing) {
