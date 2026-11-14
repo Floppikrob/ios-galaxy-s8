@@ -1,0 +1,29 @@
+--- a/bsd/kern/sweet_amfi.c
++++ b/bsd/kern/sweet_amfi.c
+@@ -389 +389 @@
+-/* Local GLES bridge and signed PosterBoard preview insertion only.
++/* Local GLES bridge, signed PosterBoard preview, and registry catalog loading.
+@@ -397 +397 @@
+-    if(!dream_gles_policy||call!=0x5a)return ENOPOLICY;
++    if(!dream_gles_policy||(call!=0x5a&&call!=0x60))return ENOPOLICY;
+@@ -398,0 +399,20 @@
++    if(call==0x60) {
++        /* HakiOS/Scion kern_minimac.c documents this ExtensionKit contract.
++         * Verified against this port's iOS 16.7.16 libamfi: request 0x60
++         * writes one uint64_t directly, and ExtensionFoundation tests 0x86.
++         * The Apple AMFI IOKit manifest-verification service is absent here.
++         * Report the reference port's catalog compatibility state ONLY to
++         * the two signed registry services, under the existing s8gl opt-in.
++         * This does not grant dyld flags, entitlements or skip code hashes.
++         * Do not interpret the individual undocumented bootarg-state bits.
++         */
++        const char *expected=NULL;
++        if(!strcmp(name,"lsd"))expected="com.apple.lsd";
++        else if(!strcmp(name,"pkd"))expected="com.apple.pluginkit.pkd";
++        const char *identity=csproc_get_identity(p);
++        if(!expected||!identity||strcmp(identity,expected))return ENOPOLICY;
++        const uint64_t state=0x86ULL;
++        int error=copyout(&state,arg,sizeof(state));
++        printf("DREAM EXT CATALOG: %s bootarg-state result=%d state=%llx signed-identity=1\n",name,error,state);
++        return error;
++    }
