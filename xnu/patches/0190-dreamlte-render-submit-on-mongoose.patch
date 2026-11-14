@@ -1,0 +1,57 @@
+--- /dev/null
++++ b/osfmk/kern/dream_render_cpu.inc
+@@ -0,0 +1,24 @@
++/* Verified S8 topology: logical0..3/A53 MPIDR100..103;
++ * logical4..7/Mongoose MPIDR0..3. Called with no GPU locks held.
++ * Keep private scheduler structures in the Mach translation unit.
++ */
++#ifndef DREAM_PANFROST_CPU_TEST
++extern unsigned int real_ncpus; /* arm/cpu_common.c */
++#endif
++int dream_render_cpu_binding(boolean_t bind);
++int dream_render_cpu_binding(boolean_t bind)
++{
++    const unsigned target=6;
++    if (real_ncpus!=8) return -1;
++    processor_t processor=cpu_to_processor(target);
++    if (!processor||processor->state<PROCESSOR_IDLE) return -1;
++    if (current_thread()->bound_processor==processor) return 1;
++    if (!bind) return 0;
++    unsigned before=cpu_number();
++    (void)thread_bind(processor);
++    if (before!=target) (void)thread_block(NULL);
++    static unsigned reports;
++    if (reports++<8) printf("DREAM GLES CPU: submitter bound=%u mpidr=2 role=Mongoose before=%u now=%u signed=1\n",
++        target,before,cpu_number());
++    return 1;
++}
+--- /dev/null
++++ b/iokit/Kernel/arm/DreamPanfrostCPU.inc
+@@ -0,0 +1,14 @@
++/* Bind only the verified native compositor submitter, before GPU locks. */
++#ifndef DREAM_PANFROST_CPU_TEST
++#include <sys/codesign.h>
++extern "C" int dream_render_cpu_binding(boolean_t bind);
++#endif
++static void dpf_bind_render_cpu()
++{
++    if (dream_render_cpu_binding(false)!=0) return;
++    char name[32];proc_selfname(name,sizeof(name));
++    if (strcmp(name,"backboardd")) return;
++    const char *identity=csproc_get_identity(current_proc());
++    if (!identity||strcmp(identity,"com.apple.backboardd")) return;
++    (void)dream_render_cpu_binding(true);
++}
+--- a/osfmk/kern/sched_prim.c
++++ b/osfmk/kern/sched_prim.c
+@@ -8938,0 +8939,4 @@
++
++#if defined(__arm64__)
++#include "dream_render_cpu.inc"
++#endif
+--- a/iokit/Kernel/arm/DreamPanfrostClient.inc
++++ b/iokit/Kernel/arm/DreamPanfrostClient.inc
+@@ -186,0 +187 @@
++#include "DreamPanfrostCPU.inc"
+@@ -648,0 +650 @@
++    if(selector==kPanfrostSubmit&&r.submit.jc) dpf_bind_render_cpu();

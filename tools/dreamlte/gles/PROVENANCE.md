@@ -37,3 +37,5 @@ g++ -std=c++17 -Wall -Wextra -Werror -Wno-format -I/path/to/xnu/iokit/Kernel/arm
 2026-11-14: Large-image shared staging/GPU blit replaces CPU upload into persistent texture when eligible. Names/parameters/effects preserved, CPU fallback retained. Host model/state/failure tests pass and hardware staged1 is observed. User reports slight gain, but sampled heavy frames~104ms: stable30FPS not achieved.
 
 2026-11-14:188 fixes a 32bit ppnum shift before cache-sync address widening, reproducing old high-PA panic arithmetic.189 uses consistent ordinary BO write-combine kernel/user mappings with DSB ordering, retaining full cached-surface/fallback rules. Actual-function/state tests and native64bitshift/build passed; hardwareWC/FPS pending. No effect simplification.
+
+2026-11-14: WC allocation/barriers and working native frames observed on hardware; sparse heavy frames~96ms, stable30 not met.0190 applies HakiOS fast-core policy only to signed native compositor submitter; actual S8 DT/MPIDR verifies Mongoose logical6 (A53 logical0..3). Host production-helper migration/gating tests/nativebuild passed;0190 runtime binding/performance pending. All visual effects preserved.
