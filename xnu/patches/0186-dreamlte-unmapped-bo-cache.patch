@@ -1,0 +1,43 @@
+--- a/iokit/Kernel/arm/DreamPanfrostCache.inc
++++ b/iokit/Kernel/arm/DreamPanfrostCache.inc
+@@ -5,0 +6 @@
++static uint64_t dpf_unmapped_skips, dpf_unmapped_skip_bytes;
+@@ -8,4 +9,11 @@
+-    bool heap = b->gpuOnlyHeap && !b->cpuMapped && !b->surface;
+-    // This BO has never been mapped to a CPU client. Publish allocator writes
+-    // once, then leave GPU-owned heap/cache lines alone. Never invalidate live DMA.
+-    if (heap && (b->heapPrimed || !to_gpu)) { ++dpf_heap_skips; return; }
++    // Private ordinary BOs have no external CPU alias until clientMemoryForType.
++    // Mesa uses PAN_BO_DELAY_MMAP for GPU render targets, not only tiler heaps.
++    // Publish allocator writes once; subsequent CPU clean/invalidate passes
++    // cannot add visibility while no CPU can access the payload. Surfaces and
++    // any BO ever offered to a CPU retain full synchronization on every job.
++    bool gpuOnly = !b->cpuMapped && !b->surface;
++    if (gpuOnly && (b->cachePrimed || !to_gpu)) {
++        if (b->gpuOnlyHeap) ++dpf_heap_skips;
++        else { ++dpf_unmapped_skips; dpf_unmapped_skip_bytes += b->size; }
++        return;
++    }
+@@ -24 +32 @@
+-        if (heap) b->heapPrimed = true;
++        if (gpuOnly) b->cachePrimed = true;
+@@ -33 +41 @@
+-    bool used = b->gpuOnlyHeap && !b->cpuMapped && b->heapPrimed;
++    bool used = !b->surface && !b->cpuMapped && b->cachePrimed;
+--- a/iokit/Kernel/arm/DreamPanfrostClient.inc
++++ b/iokit/Kernel/arm/DreamPanfrostClient.inc
+@@ -183 +183 @@
+-    bool gpuOnlyHeap, heapPrimed, cpuMapped; // Any CPU mapping permanently restores full cache sync.
++    bool gpuOnlyHeap, cachePrimed, cpuMapped; // Any CPU mapping permanently restores full cache sync.
+@@ -395 +395 @@
+-    b->heapPrimed = false; b->cpuMapped = false;
++    b->cachePrimed = false; b->cpuMapped = false;
+@@ -668,0 +669 @@
++        uint64_t unmappedBefore = dpf_unmapped_skips, unmappedBytesBefore = dpf_unmapped_skip_bytes;
+@@ -713 +714 @@
+-            IOLog("DREAM GLES CACHE: submit=%u clean=%llu invalidate=%llu heap_skip=%llu clean_us=%llu job_us=%llu invalidate_us=%llu\n",
++            IOLog("DREAM GLES CACHE: submit=%u clean=%llu invalidate=%llu heap_skip=%llu clean_us=%llu job_us=%llu invalidate_us=%llu unmapped_skip=%llu/%lluB\n",
+@@ -715 +716,2 @@
+-                cleanNs/1000,jobNs/1000,invalidateNs/1000);
++                cleanNs/1000,jobNs/1000,invalidateNs/1000,
++                dpf_unmapped_skips-unmappedBefore,dpf_unmapped_skip_bytes-unmappedBytesBefore);
