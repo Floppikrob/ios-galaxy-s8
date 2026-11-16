@@ -19,6 +19,7 @@ static constexpr unsigned SWEET_FB_FORMAT_BGRA=0x42475241;
 static SweetSurface* sweet_surface_create_buffer(unsigned w,unsigned h,unsigned row,unsigned fmt){
  auto*s=new SweetSurface;s->memory=new Memory;s->memory->data.resize(row*h);s->width=w;s->height=h;s->bytesPerRow=row;s->pixelFormat=fmt;return s;
 }
+static SweetSurface *dream_display_mirror_copy(SweetSurface*,unsigned,unsigned){return nullptr;}
 #include "B3a8Display.production.inc"
 int main(){
  Memory m;m.data.resize(128,0xac);SweetSurface s;s.memory=&m;s.pixelFormat=0x62336138;s.width=s.height=2;s.planeCount=2;

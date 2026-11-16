@@ -1151,6 +1151,7 @@ surface_to_texture(struct eagl *e, struct image *image)
 	e->upload_bytes += row * (size_t)image->height;
 }
 
+#include "dream-display-mirror.inc"
 /* Encode only after GPU completion; clients still receive the original b3a8 pixels. */
 static bool
 b3a8_mirror_output(struct eagl *e, struct image *image)
@@ -1169,6 +1170,7 @@ b3a8_mirror_output(struct eagl *e, struct image *image)
             IOSurfaceGetAllocSize(bgra), IOSurfaceGetBytesPerRow(bgra), image->width, image->height, 0);
     IOSurfaceUnlock(original, ok ? 0 : kIOSurfaceLockReadOnly, NULL);
     IOSurfaceUnlock(bgra, kIOSurfaceLockReadOnly, NULL);
+    if(ok) dream_offer_display_mirror(original,bgra,image->width,image->height);
     static unsigned reports;
     unsigned number = ++reports;
     if (number <= 30 || !(number % 120)) say("DREAM GLES SHARED: frame=%u ok=%u blit_wait_us=%llu encode_us=%llu readpixels=0 pack=%s\n",

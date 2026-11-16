@@ -83,6 +83,8 @@ struct eagl{void*gl=nullptr;int b3a8_probe=0;uint64_t image_bytes=0;};
 struct image{Surface*surface;Surface*mirror_surface=nullptr;bool target=true,alpha_first=false;unsigned plane=0;int width,height;unsigned format=GL_BGRA,type=GL_UNSIGNED_BYTE,mirror=0,texture=0;size_t bytes=0;bool invert=false;};
 #include "b3a8-shared.inc"
 #include "B3a8Planes.production.inc"
+static unsigned offers;
+static void dream_offer_display_mirror(IOSurfaceRef s,IOSurfaceRef m,unsigned w,unsigned h){assert(!s->locked&&!m->locked&&finish_seen&&w==s->w&&h==s->h);++offers;}
 #include "B3a8Mirror.production.inc"
 static void state(){assert(bound==21&&read_fbo==22&&draw_fbo==23&&scissor&&row_state==17&&align_state==8&&unpack_buffer==77);assert(fbos.empty());}
 static Surface make_original(){Surface s;s.w=3;s.h=2;s.planes=2;s.fmt='b3a8';s.bytes.resize(96,0x5a);s.offset[0]=8;s.offset[1]=64;s.row[0]=16;s.row[1]=8;return s;}
@@ -103,10 +105,10 @@ int main(){
   assert(b3a8_mirror_output(&e,&i)&&finish_seen&&!orig.locked&&!i.mirror_surface->locked);state();
   uint8_t decoded[24];assert(dream_b3a8_unpack(decoded,24,12,orig.bytes.data()+8,56,16,orig.bytes.data()+64,32,8,3,2,flip));
   for(unsigned p=0;p<6;p++){assert(decoded[p*4]==t.rgba[p*4+2]&&decoded[p*4+1]==t.rgba[p*4+1]&&decoded[p*4+2]==t.rgba[p*4]&&decoded[p*4+3]==t.rgba[p*4+3]);}
-  auto saved=orig.bytes;
+  assert(offers==(unsigned)(flip+1));auto saved=orig.bytes;
   for(int fault=0;fault<4;fault++){
    blit_fail=fault==0;orig.fail_lock=fault==1;i.mirror_surface->fail_lock=fault==2;orig.offset[1]=fault==3?12:64;
-   assert(!b3a8_mirror_output(&e,&i)&&orig.bytes==saved&&!orig.locked&&!i.mirror_surface->locked);state();
+   assert(!b3a8_mirror_output(&e,&i)&&offers==(unsigned)(flip+1)&&orig.bytes==saved&&!orig.locked&&!i.mirror_surface->locked);state();
   }
   blit_fail=false;glDeleteTextures(1,&i.mirror);glDeleteTextures(1,&i.texture);CFRelease(i.mirror_surface);assert(alive==0&&textures.empty());
  }

@@ -1,0 +1,112 @@
+--- /dev/null
++++ b/iokit/Kernel/arm/DreamDisplayMirror.inc
+@@ -0,0 +1,54 @@
++/* Retained display-only mirror. Original b3a8 bytes are still authoritative.
++ * Caller holds gMaliLock; exact seeds+completed GPU sequence reject stale reuse.
++ */
++struct dream_display_mirror_request {
++    uint32_t original,mirror,originalSeed,mirrorSeed,width,height,flags,reserved;
++};
++static bool dream_mirror_signed_compositor() {
++    char name[32];proc_selfname(name,sizeof(name));
++    const char *identity=csproc_get_identity(current_proc());
++    return !strcmp(name,"backboardd") && identity && !strcmp(identity,"com.apple.backboardd");
++}
++static bool dream_mirror_layout(SweetSurface *s,SweetSurface *m,unsigned w,unsigned h) {
++    return s && m && s!=m && s->memory && m->memory &&
++        s->pixelFormat==0x62336138 && s->planeCount==2 &&
++        m->pixelFormat==SWEET_FB_FORMAT_BGRA && !m->planeCount &&
++        !m->offset && m->bytesPerElement==4 && m->elementWidth==1 && m->elementHeight==1 &&
++        w && h && w<=4096 && h<=4096 && s->width==w && s->height==h && m->width==w && m->height==h &&
++        m->bytesPerRow>=(uint64_t)w*4 && (uint64_t)m->bytesPerRow*h<=m->memory->getLength() &&
++        OSDynamicCast(IOBufferMemoryDescriptor,m->memory)!=NULL;
++}
++static IOReturn dream_mirror_register(const dream_display_mirror_request *q) {
++    if(q->flags || q->reserved || !dream_mirror_signed_compositor())return kIOReturnNotPermitted;
++    SweetSurface *s=sweet_surface_copy(q->original),*m=sweet_surface_copy(q->mirror);
++    uint32_t ss=0,ms=0;uint64_t seq=m?__atomic_load_n(&m->maliSeq,__ATOMIC_ACQUIRE):0;
++    bool valid=dream_mirror_layout(s,m,q->width,q->height) &&
++        sweet_surface_read_seed(s,&ss) && sweet_surface_read_seed(m,&ms) &&
++        ss==q->originalSeed && ms==q->mirrorSeed && seq && seq!=~0ULL && hakios_mali_wait(seq,0);
++    static unsigned offers;
++    if(offers++<8)IOLog("DREAM DISPLAY MIRROR: offer source=%u mirror=%u valid=%u seq=%llu seeds=%u/%u requested=%u/%u\n",q->original,q->mirror,valid,seq,ss,ms,q->originalSeed,q->mirrorSeed);
++    if(valid) {
++        SweetSurface *old=s->displayMirror;
++        s->displayMirror=m;m->retain();
++        s->displayMirrorSourceSeed=ss;s->displayMirrorSeed=ms;s->displayMirrorSeq=seq;
++        OSSafeReleaseNULL(old); // BGRA target cannot itself own a mirror: no retain cycle.
++    }
++    OSSafeReleaseNULL(s);OSSafeReleaseNULL(m);
++    return valid?kIOReturnSuccess:kIOReturnBadArgument;
++}
++static SweetSurface *dream_display_mirror_copy(SweetSurface *s,unsigned w,unsigned h) {
++    if(!gMaliLock || !hakios_mali_ready())return NULL;
++    IOLockLock(gMaliLock);
++    SweetSurface *m=s?s->displayMirror:NULL;uint32_t ss=0,ms=0;
++    bool valid=dream_mirror_layout(s,m,w,h) &&
++        sweet_surface_read_seed(s,&ss) && sweet_surface_read_seed(m,&ms) &&
++        ss==s->displayMirrorSourceSeed && ms==s->displayMirrorSeed &&
++        __atomic_load_n(&m->maliSeq,__ATOMIC_ACQUIRE)==s->displayMirrorSeq &&
++        hakios_mali_wait(s->displayMirrorSeq,0);
++    if(valid)m->retain();else m=NULL;
++    IOLockUnlock(gMaliLock);
++    if(m && !dream_gpu_frame_source_room(m)){m->release();m=NULL;}
++    static unsigned hits;
++    if(m && (++hits<=8 || hits%120==0))IOLog("DREAM DISPLAY MIRROR: hit=%u source=%u mirror=%u unpack_skipped=1 original_preserved=1\n",hits,s->id,m->id);
++    return m;
++}
+--- a/iokit/Kernel/arm/SweetSurface.h
++++ b/iokit/Kernel/arm/SweetSurface.h
+@@ -30,0 +31,3 @@
++	SweetSurface *displayMirror; /* retained BGRA, display-only, guarded by gMaliLock */
++	uint32_t displayMirrorSourceSeed,displayMirrorSeed;
++	uint64_t displayMirrorSeq;
+@@ -45 +48 @@
+-	bool init() APPLE_KEXT_OVERRIDE { maliSeq=0; userMemoryPrepared=false; return OSObject::init(); }
++	bool init() APPLE_KEXT_OVERRIDE { maliSeq=0; displayMirror=NULL; displayMirrorSourceSeed=displayMirrorSeed=0; displayMirrorSeq=0; userMemoryPrepared=false; return OSObject::init(); }
+@@ -53,0 +57 @@
++bool sweet_surface_read_seed(SweetSurface *surface,uint32_t *seed);
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -83,0 +84 @@
++	OSSafeReleaseNULL(displayMirror);
+@@ -112,0 +114,5 @@
++}
++
++bool sweet_surface_read_seed(SweetSurface *s,uint32_t *seed) {
++    if(!s || !s->state || !seed || s->state->getLength()<SWEET_SURFACE_STATE_SEED+sizeof(uint32_t))return false;
++    *seed=__atomic_load_n(sweet_surface_seed(s),__ATOMIC_ACQUIRE);return true;
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -40,0 +41 @@
++static bool dream_gpu_frame_source_room(SweetSurface *);
+@@ -449,0 +451 @@
++static SweetSurface *dream_display_mirror_copy(SweetSurface *,unsigned,unsigned);
+@@ -462,0 +465 @@
++    if (SweetSurface *mirror=dream_display_mirror_copy(source,width,height))return mirror;
+--- a/iokit/Kernel/arm/DreamPanfrostClient.inc
++++ b/iokit/Kernel/arm/DreamPanfrostClient.inc
+@@ -92,0 +93 @@
++	kDreamDisplayMirror    = 0x81,
+@@ -187,0 +189 @@
++#include "DreamDisplayMirror.inc"
+@@ -574,0 +577 @@
++        struct dream_display_mirror_request displayMirror;
+@@ -590,0 +594 @@
++    case kDreamDisplayMirror:expected=sizeof(r.displayMirror);break;
+@@ -654,0 +659 @@
++    case kDreamDisplayMirror:ret=dream_mirror_register(&r.displayMirror);break;
+--- a/iokit/Kernel/arm/DreamMaliBlit.inc
++++ b/iokit/Kernel/arm/DreamMaliBlit.inc
+@@ -249,0 +250,11 @@
++/* Do not spend a ninth AS on a new display mirror: caller can keep its
++ * canonical BGRA stage/context. Reserve one AS for that fallback if the stage
++ * has not yet been used; already-mapped mirrors can always reuse their AS. */
++static bool dream_gpu_frame_source_room(SweetSurface *source) {
++    if(!source || !source->memory || !dmb_lock)return false;
++    IOLockLock(dmb_lock);
++    bool room=dmb_ready&&!dmb_poisoned && dmb_count+1<DMB_CONTEXT_LIMIT &&
++        (dm_read(dmb_gpu,0x18)&(1u<<dmb_count));
++    for(unsigned i=0;i<dmb_count;i++)if(dmb_contexts[i].src==source->memory)room=dmb_ready&&!dmb_poisoned;
++    IOLockUnlock(dmb_lock);return room;
++}
