@@ -1,0 +1,71 @@
+--- /dev/null
++++ b/iokit/Kernel/arm/DreamBgraStage.h
+@@ -0,0 +1,20 @@
++/* Bounded bit-identical BGRA row copy for the stable GPU display source.
++ * No format conversion, alpha math, scaling, SIMD or per-frame GPU mappings.
++ */
++#ifndef DREAM_BGRA_STAGE_H
++#define DREAM_BGRA_STAGE_H
++#include "DreamB3a8.h"
++#include <string.h>
++static inline int dream_bgra_stage_rows(uint8_t *out,size_t no,size_t ro,
++    const uint8_t *in,size_t ni,size_t ri,uint32_t width,uint32_t height)
++{
++    if(!out || !in || !dream_b3a8_span(no,ro,width,height,4) ||
++        !dream_b3a8_span(ni,ri,width,height,4))return 0;
++    const size_t used=(size_t)width*4;
++    const size_t os=ro*(height-1)+used,is=ri*(height-1)+used;
++    const uintptr_t oa=(uintptr_t)out,ia=(uintptr_t)in;
++    if(oa>UINTPTR_MAX-os || ia>UINTPTR_MAX-is || (oa<ia+is && ia<oa+os))return 0;
++    for(uint32_t y=0;y<height;y++)memcpy(out+(size_t)y*ro,in+(size_t)y*ri,used);
++    return 1;
++}
++#endif
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -41 +40,0 @@
+-static bool dream_gpu_frame_source_room(SweetSurface *);
+@@ -448,0 +448 @@
++#include "DreamBgraStage.h"
+@@ -465 +464,0 @@
+-    if (SweetSurface *mirror=dream_display_mirror_copy(source,width,height))return mirror;
+@@ -470,0 +470,18 @@
++    // Present always gives the blitter this ONE descriptor. A transient mirror
++    // must not allocate src x (boot/private0/private1) persistent AS mappings.
++    if (SweetSurface *mirror=dream_display_mirror_copy(source,width,height)) {
++        const uint64_t begin=mach_absolute_time();
++        bool copied=stage->memory!=mirror->memory &&
++            dream_bgra_stage_rows((uint8_t *)out,stage->memory->getLength(),stage->bytesPerRow,
++                (const uint8_t *)mirror->kernelAddress(),mirror->memory->getLength(),mirror->bytesPerRow,width,height);
++        unsigned mirrorID=mirror->id;mirror->release();
++        if(copied) {
++            static unsigned copies;unsigned number=++copies;
++            if(number<=8 || number%120==0) {
++                uint64_t ns;absolutetime_to_nanoseconds(mach_absolute_time()-begin,&ns);
++                IOLog("DREAM DISPLAY STAGE: copy=%u source=%u mirror=%u stage=%u row_copy_us=%llu unpack_skipped=1 stable_GPU_source=1\n",
++                    number,source->id,mirrorID,stage->id,ns/1000);
++            }
++            stage->retain();return stage;
++        }
++    }
+--- a/iokit/Kernel/arm/DreamDisplayMirror.inc
++++ b/iokit/Kernel/arm/DreamDisplayMirror.inc
+@@ -50 +49,0 @@
+-    if(m && !dream_gpu_frame_source_room(m)){m->release();m=NULL;}
+@@ -52 +51 @@
+-    if(m && (++hits<=8 || hits%120==0))IOLog("DREAM DISPLAY MIRROR: hit=%u source=%u mirror=%u unpack_skipped=1 original_preserved=1\n",hits,s->id,m->id);
++    if(m && (++hits<=8 || hits%120==0))IOLog("DREAM DISPLAY MIRROR: hit=%u source=%u mirror=%u validated=1 original_preserved=1\n",hits,s->id,m->id);
+--- a/iokit/Kernel/arm/DreamMaliBlit.inc
++++ b/iokit/Kernel/arm/DreamMaliBlit.inc
+@@ -250,11 +249,0 @@
+-/* Do not spend a ninth AS on a new display mirror: caller can keep its
+- * canonical BGRA stage/context. Reserve one AS for that fallback if the stage
+- * has not yet been used; already-mapped mirrors can always reuse their AS. */
+-static bool dream_gpu_frame_source_room(SweetSurface *source) {
+-    if(!source || !source->memory || !dmb_lock)return false;
+-    IOLockLock(dmb_lock);
+-    bool room=dmb_ready&&!dmb_poisoned && dmb_count+1<DMB_CONTEXT_LIMIT &&
+-        (dm_read(dmb_gpu,0x18)&(1u<<dmb_count));
+-    for(unsigned i=0;i<dmb_count;i++)if(dmb_contexts[i].src==source->memory)room=dmb_ready&&!dmb_poisoned;
+-    IOLockUnlock(dmb_lock);return room;
+-}

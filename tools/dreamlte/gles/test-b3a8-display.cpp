@@ -11,6 +11,7 @@ struct SweetSurface{
  Memory *memory=nullptr;sweet_surface_plane planes[2]{};
  uintptr_t kernelAddress(){return memory?(uintptr_t)memory->data.data():0;}
  void retain(){++refs;}
+ void release(){assert(refs);--refs;}
 };
 static int poison;
 static int dream_gpu_frame_copy(SweetSurface*,SweetSurface*,unsigned,unsigned,unsigned,unsigned){return poison?-1:0;}
@@ -20,6 +21,9 @@ static SweetSurface* sweet_surface_create_buffer(unsigned w,unsigned h,unsigned 
  auto*s=new SweetSurface;s->memory=new Memory;s->memory->data.resize(row*h);s->width=w;s->height=h;s->bytesPerRow=row;s->pixelFormat=fmt;return s;
 }
 static SweetSurface *dream_display_mirror_copy(SweetSurface*,unsigned,unsigned){return nullptr;}
+#include "DreamBgraStage.h"
+static uint64_t mach_absolute_time(){static uint64_t t;return ++t;}
+static void absolutetime_to_nanoseconds(uint64_t n,uint64_t*out){*out=n;}
 #include "B3a8Display.production.inc"
 int main(){
  Memory m;m.data.resize(128,0xac);SweetSurface s;s.memory=&m;s.pixelFormat=0x62336138;s.width=s.height=2;s.planeCount=2;

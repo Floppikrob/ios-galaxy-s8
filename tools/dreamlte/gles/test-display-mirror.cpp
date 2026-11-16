@@ -34,13 +34,6 @@ static void proc_selfname(char*dst,size_t n){snprintf(dst,n,"%s",name);}
 static void*current_proc(){return nullptr;}
 static const char*csproc_get_identity(void*){return identity;}
 static void IOLog(const char*,...){}
-static int dmb_lock=2;
-static bool dmb_ready=true,dmb_poisoned;
-static unsigned dmb_count,dmb_gpu,asMask=255;
-static constexpr unsigned DMB_CONTEXT_LIMIT=8;
-static struct {Memory*src;} dmb_contexts[8];
-static unsigned dm_read(unsigned,unsigned off){assert(off==0x18);return asMask;}
-#include "MirrorRoom.production.inc"
 #include "DreamDisplayMirror.inc"
 static int register_mirror(dream_display_mirror_request q){IOLockLock(gMaliLock);int ret=dream_mirror_register(&q);IOLockUnlock(gMaliLock);return ret;}
 static int poison;
@@ -49,6 +42,9 @@ static SweetSurface*sweet_surface_create_buffer(unsigned w,unsigned h,unsigned r
  auto*s=new SweetSurface;s->memory=new IOBufferMemoryDescriptor;s->memory->data.resize(row*h);
  s->width=w;s->height=h;s->bytesPerRow=row;s->pixelFormat=fmt;return s;
 }
+#include "DreamBgraStage.h"
+static uint64_t mach_absolute_time(){static uint64_t t;return ++t;}
+static void absolutetime_to_nanoseconds(uint64_t n,uint64_t*out){*out=n;}
 #include "B3a8Display.production.inc"
 static void pixels_equal(SweetSurface*got,const std::vector<uint8_t>&expected,unsigned w,unsigned h){
  for(unsigned y=0;y<h;y++)assert(!memcmp(got->memory->data.data()+y*got->bytesPerRow,expected.data()+y*w*4,w*4));
@@ -68,14 +64,9 @@ int main(){
  for(unsigned y=0;y<H;y++)memcpy(mirrorMemory.data.data()+y*BR,expected.data()+y*W*4,W*4);
  assert(dream_b3a8_pack(originalMemory.data.data(),RR*H,RR,originalMemory.data.data()+AO,AR*H,AR,expected.data(),expected.size(),W*4,W,H,0));
  const auto authoritative=originalMemory.data;
- assert(dream_gpu_frame_source_room(&mirror));dmb_count=6;assert(dream_gpu_frame_source_room(&mirror));
- dmb_count=7;assert(!dream_gpu_frame_source_room(&mirror));dmb_count=8;assert(!dream_gpu_frame_source_room(&mirror));
- dmb_contexts[0].src=&mirrorMemory;assert(dream_gpu_frame_source_room(&mirror));
- dmb_ready=false;assert(!dream_gpu_frame_source_room(&mirror));dmb_ready=true;dmb_poisoned=true;assert(!dream_gpu_frame_source_room(&mirror));dmb_poisoned=false;
- dmb_contexts[0].src=nullptr;dmb_count=0;asMask=0;assert(!dream_gpu_frame_source_room(&mirror));asMask=255;
  dream_display_mirror_request q{1,2,source.seed,mirror.seed,W,H,0,0};
  assert(register_mirror(q)==0&&source.refs==1&&mirror.refs==2&&!locked);
- auto*got=dream_b3a8_for_display(&source,W,H);assert(got==&mirror&&mirror.refs==3&&!dream_b3a8_stage);
+ auto*got=dream_b3a8_for_display(&source,W,H);assert(got==dream_b3a8_stage&&got!=&mirror&&mirror.refs==2);
  pixels_equal(got,expected,W,H);got->release();assert(originalMemory.data==authoritative);
  for(unsigned reason=0;reason<6;reason++){
   source.seed=q.originalSeed;mirror.seed=q.mirrorSeed;mirror.maliSeq=10;done=10;
@@ -85,7 +76,6 @@ int main(){
   pixels_equal(got,expected,W,H);got->release();mirror.state=true;
  }
  source.seed=q.originalSeed;mirror.seed=q.mirrorSeed;mirror.maliSeq=10;done=10;
- dmb_count=7;got=dream_b3a8_for_display(&source,W,H);assert(got&&got!=&mirror);pixels_equal(got,expected,W,H);got->release();dmb_count=0;
  for(unsigned reason=0;reason<10;reason++){
   auto request=q;name="backboardd";identity="com.apple.backboardd";
   if(reason==0)name="SpringBoard";if(reason==1)identity=nullptr;if(reason==2)identity="forged.backboardd";

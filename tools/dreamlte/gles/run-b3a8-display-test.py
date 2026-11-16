@@ -7,5 +7,5 @@ with tempfile.TemporaryDirectory(prefix='b3a8-display-') as tmp:
     tmp=Path(tmp);a=s.index('static SweetSurface *dream_b3a8_stage;');b=s.index('static void sweet_stage_probe(',a)
     (tmp/'B3a8Display.production.inc').write_text(s[a:b])
     subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
-        '-I'+str(root),'-I'+str(tmp),str(root/'test-b3a8-display.cpp'),'-o',str(tmp/'test')],check=True)
+        '-I'+str(root),'-I'+str(tmp),'-I'+str(xnu/'iokit/Kernel/arm'),str(root/'test-b3a8-display.cpp'),'-o',str(tmp/'test')],check=True)
     subprocess.run([str(tmp/'test')],check=True)
