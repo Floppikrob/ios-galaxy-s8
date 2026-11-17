@@ -5,7 +5,7 @@
 #include <map>
 #include <vector>
 #include "dream_b3a8.h"
-constexpr int kIOReturnSuccess=0,kIOReturnBadArgument=1,kIOReturnNotPermitted=2,kIOReturnNotFound=3;
+constexpr int kIOReturnSuccess=0,kIOReturnBadArgument=1,kIOReturnNotPermitted=2,kIOReturnNotFound=3,kIOReturnNotReady=4;
 constexpr unsigned kIOSurfaceLockReadOnly=1;
 constexpr unsigned SWEET_FB_FORMAT_BGRA=0x42475241;
 using IOReturn=int;
@@ -15,6 +15,7 @@ struct IOBufferMemoryDescriptor:Memory{void*getBytesNoCopy(){return data.data();
 #define OSSafeReleaseNULL(p) do{if(p){(p)->release();(p)=nullptr;}}while(false)
 struct sweet_surface_plane{unsigned width,height,bytesPerRow,offset,size;};
 struct SweetSurface{
+ uint64_t deferredInvalidateSeq=0;
  uint32_t cpuWriteOffered=0,displayMirrorReadOnlySeed=0;bool displayMirrorReadOnly=false,userMemoryPrepared=false;
  uint64_t allocSize=0;
  SweetSurface*displayMirror=nullptr;uint32_t displayMirrorSourceSeed=0,displayMirrorSeed=0;uint64_t displayMirrorSeq=0;
@@ -37,11 +38,12 @@ static void proc_selfname(char*dst,size_t n){snprintf(dst,n,"%s",name);}
 static void*current_proc(){return nullptr;}
 static const char*csproc_get_identity(void*){return identity;}
 static void IOLog(const char*,...){}
+static unsigned cleans,invalidates;
+static void dm_clean(void*,uint64_t){++cleans;}static void dm_invalidate(void*,uint64_t){++invalidates;}
+#include "DreamSurfaceSync.inc"
 #include "DreamDisplayMirror.inc"
 #include "DreamSurfaceCpu.h"
 struct mali_buffer{Memory*memory;SweetSurface*surface;uint64_t size,last_seq=0;bool writeCombined=false,cpuMapped=false,cachePrimed=false,gpuOnlyHeap=false;};
-static unsigned cleans,invalidates;
-static void dm_clean(void*,uint64_t){++cleans;}static void dm_invalidate(void*,uint64_t){++invalidates;}
 static constexpr uint64_t NSEC_PER_SEC=1000000000;
 #include "DreamPanfrostCache.inc"
 static SweetSurface *sweet_surface_held(int,int,uint32_t id){return sweet_surface_copy(id);}
@@ -50,6 +52,7 @@ class IOSurfaceRootUserClient{public:int fLock=0,fRefs=0;
  IOReturn trapLock(void*,void*,void*,void*,void*,void*);
  IOReturn trapUnlock(void*,void*,void*,void*,void*,void*);
 };
+#define DREAMLTE 1
 #include "CPULocks.production.inc"
 
 static int register_mirror(dream_display_mirror_request q){IOLockLock(gMaliLock);int ret=dream_mirror_register(&q);IOLockUnlock(gMaliLock);return ret;}
@@ -91,19 +94,29 @@ int main(){
  mali_buffer bo{&mirrorMemory,&mirror,BR*H};
  auto skipped=dpf_mirror_clean_skips;flushSubmit(&bo);
  assert(cleans==baselineCleans&&dpf_mirror_clean_skips==skipped+1&&dpf_mirror_clean_skip_bytes==BR*H);
- flushComplete(&bo);assert(invalidates==baselineInvalidates+1); // Postinvalidate is still full.
+ bo.last_seq=10;flushComplete(&bo);assert(invalidates==baselineInvalidates&&mirror.deferredInvalidateSeq==10);
  ++mirror.seed;assert(!dream_surface_gpu_readonly(&mirror));flushSubmit(&bo);assert(cleans==baselineCleans+1);--mirror.seed;
  mirror.userMemoryPrepared=true;assert(!dream_surface_gpu_readonly(&mirror));mirror.userMemoryPrepared=false;
  IOSurfaceRootUserClient cpu;
+ bo.last_seq=11;mirror.maliSeq=11;done=11;flushComplete(&bo);
+ assert(mirror.deferredInvalidateSeq==11&&invalidates==baselineInvalidates&&dpf_mirror_post_skips==2);
+ mirror.maliSeq=~0ULL;assert(cpu.trapLock((void*)2,(void*)1,nullptr,nullptr,nullptr,nullptr)==kIOReturnNotReady&&mirror.deferredInvalidateSeq==11);
+ mirror.maliSeq=11;ready=false;assert(!dream_surface_sync_cpu(&mirror)&&mirror.deferredInvalidateSeq==11);ready=true;
+ done=10;assert(!dream_surface_sync_cpu(&mirror)&&mirror.deferredInvalidateSeq==11);done=11;
  assert(cpu.trapLock((void*)2,(void*)1,nullptr,nullptr,nullptr,nullptr)==0&&mirror.cpuWriteOffered==0);
+ assert(mirror.deferredInvalidateSeq==0&&invalidates==baselineInvalidates+1&&dpf_mirror_cpu_syncs==1);
+ mirror.maliSeq=10;done=10;
  assert(cpu.trapUnlock((void*)2,(void*)1,nullptr,nullptr,nullptr,nullptr)==0&&dream_surface_gpu_readonly(&mirror));
+ mirror.deferredInvalidateSeq=10;
  assert(cpu.trapLock((void*)2,nullptr,nullptr,nullptr,nullptr,nullptr)==0&&mirror.cpuWriteOffered==1);
- assert(!dream_surface_gpu_readonly(&mirror));
+ assert(!dream_surface_gpu_readonly(&mirror)&&mirror.deferredInvalidateSeq==0&&dpf_mirror_cpu_syncs==2);
  assert(register_mirror(q)==0&&!mirror.displayMirrorReadOnly); // Write exposure cannot be cleared by re-registration.
  flushSubmit(&bo);assert(cleans==baselineCleans+2);
  assert(cpu.trapUnlock((void*)2,nullptr,nullptr,nullptr,nullptr,nullptr)==0&&mirror.cpuWriteOffered==1);
  q.mirrorSeed=mirror.seed;assert(register_mirror(q)==0&&!dream_surface_gpu_readonly(&mirror));
- auto*got=dream_b3a8_for_display(&source,W,H);assert(got==dream_b3a8_stage&&got!=&mirror&&mirror.refs==2);
+ mirror.deferredInvalidateSeq=10;
+ auto*got=dream_b3a8_for_display(&source,W,H);
+ assert(mirror.deferredInvalidateSeq==0&&dpf_mirror_cpu_syncs==3);assert(got==dream_b3a8_stage&&got!=&mirror&&mirror.refs==2);
  pixels_equal(got,expected,W,H);got->release();assert(originalMemory.data==authoritative);
  for(unsigned reason=0;reason<6;reason++){
   source.seed=q.originalSeed;mirror.seed=q.mirrorSeed;mirror.maliSeq=10;done=10;
@@ -133,5 +146,5 @@ int main(){
  got=dream_display_mirror_copy(&source,W,H);assert(got==&other&&other.refs==3);got->release();
  source.release();assert(other.refs==1);assert(originalMemory.data==authoritative&&!locked);
  delete dream_b3a8_stage->memory;delete dream_b3a8_stage;dream_b3a8_stage=nullptr;
- puts("PASS actual CPU Lock/Unlock + registered mirror PREclean ownership/postinvalidate; mirror registration/display: pixels+alpha unchanged, original bytes preserved, exact seeds/fence, stale/pending/error fallback, signed gate, layout bounds and retained replacement/free");
+ puts("PASS actual CPU Lock/Unlock + registered mirror PREclean ownership + deferred POST coalescing/CPU consumption; mirror registration/display: pixels+alpha unchanged, original bytes preserved, exact seeds/fence, stale/pending/error fallback, signed gate, layout bounds and retained replacement/free");
 }

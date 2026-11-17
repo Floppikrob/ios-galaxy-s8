@@ -1,0 +1,112 @@
+--- /dev/null
++++ b/iokit/Kernel/arm/DreamSurfaceSync.inc
+@@ -0,0 +1,36 @@
++/* Completed GPU writes may be invalidated once at the CPU ownership boundary.
++ * No worker takes gMaliLock. Surface submissions are still synchronous under it.
++ * Root locks hold no root/table mutex while entering this function.
++ */
++static uint64_t dpf_mirror_cpu_syncs,dpf_mirror_cpu_sync_bytes;
++static bool dream_surface_sync_cpu_locked(SweetSurface *surface) {
++    if(!surface)return true;
++    const uint64_t dirty=__atomic_load_n(&surface->deferredInvalidateSeq,__ATOMIC_ACQUIRE);
++    const bool owned=__atomic_load_n(&surface->displayMirrorReadOnly,__ATOMIC_ACQUIRE);
++    if(!dirty && !owned)return true;
++    if(!hakios_mali_ready())return false;
++    uint64_t current=__atomic_load_n(&surface->maliSeq,__ATOMIC_ACQUIRE);
++    if(current==~0ULL || (current && !hakios_mali_wait(current,0)))return false;
++    if(!dirty)return true;
++    if(!hakios_mali_wait(dirty,0) || !surface->memory)return false;
++    void *address=(void*)surface->kernelAddress();
++    const uint64_t bytes=surface->allocSize;
++    if(!address || !bytes || bytes>surface->memory->getLength())return false;
++    dm_invalidate(address,bytes); // BEFORE CPU load or writable mapping is returned.
++    __atomic_store_n(&surface->deferredInvalidateSeq,0ULL,__ATOMIC_RELEASE);
++    ++dpf_mirror_cpu_syncs;dpf_mirror_cpu_sync_bytes+=bytes;
++    if(dpf_mirror_cpu_syncs<=8 || dpf_mirror_cpu_syncs%120==0)
++        IOLog("DREAM MIRROR CPU SYNC: count=%llu surface=%u seq=%llu bytes=%llu completed=1\n",
++            dpf_mirror_cpu_syncs,surface->id,dirty,bytes);
++    return true;
++}
++bool dream_surface_sync_cpu(SweetSurface *surface) {
++    // The owned flag ALSO enters the lock with no dirty seq yet: another client
++    // may currently hold it while GPU output is still running, before publication.
++    if(!surface || (!__atomic_load_n(&surface->deferredInvalidateSeq,__ATOMIC_ACQUIRE) &&
++        !__atomic_load_n(&surface->displayMirrorReadOnly,__ATOMIC_ACQUIRE)))return true;
++    if(!gMaliLock)return false;
++    IOLockLock(gMaliLock);
++    bool ok=dream_surface_sync_cpu_locked(surface);
++    IOLockUnlock(gMaliLock);return ok;
++}
+--- a/iokit/Kernel/arm/SweetSurface.h
++++ b/iokit/Kernel/arm/SweetSurface.h
+@@ -30,0 +31 @@
++	volatile uint64_t deferredInvalidateSeq;
+@@ -51 +52 @@
+-	bool init() APPLE_KEXT_OVERRIDE { maliSeq=0; cpuWriteOffered=0; displayMirrorReadOnly=false; displayMirrorReadOnlySeed=0; displayMirror=NULL; displayMirrorSourceSeed=displayMirrorSeed=0; displayMirrorSeq=0; userMemoryPrepared=false; return OSObject::init(); }
++	bool init() APPLE_KEXT_OVERRIDE { maliSeq=0; deferredInvalidateSeq=0; cpuWriteOffered=0; displayMirrorReadOnly=false; displayMirrorReadOnlySeed=0; displayMirror=NULL; displayMirrorSourceSeed=displayMirrorSeed=0; displayMirrorSeq=0; userMemoryPrepared=false; return OSObject::init(); }
+@@ -60,0 +62 @@
++bool dream_surface_sync_cpu(SweetSurface *surface);
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -907,0 +908,3 @@
++#if defined(DREAMLTE)
++    if(!dream_surface_sync_cpu(s)){s->release();return kIOReturnNotReady;}
++#endif
+--- a/iokit/Kernel/arm/DreamDisplayMirror.inc
++++ b/iokit/Kernel/arm/DreamDisplayMirror.inc
+@@ -34 +34 @@
+-        m->displayMirrorReadOnly=!__atomic_load_n(&m->cpuWriteOffered,__ATOMIC_ACQUIRE);
++        __atomic_store_n(&m->displayMirrorReadOnly,!__atomic_load_n(&m->cpuWriteOffered,__ATOMIC_ACQUIRE),__ATOMIC_RELEASE);
+@@ -49 +49 @@
+-        hakios_mali_wait(s->displayMirrorSeq,0);
++        hakios_mali_wait(s->displayMirrorSeq,0) && dream_surface_sync_cpu_locked(m);
+@@ -60 +60 @@
+- * All post-job invalidation and other imported-surface rules remain intact.
++ * CPU consumers synchronize deferred completed writes; other imports keep full handling.
+--- a/iokit/Kernel/arm/DreamPanfrostCache.inc
++++ b/iokit/Kernel/arm/DreamPanfrostCache.inc
+@@ -8,0 +9 @@
++static uint64_t dpf_mirror_post_skips,dpf_mirror_post_skip_bytes;
+@@ -27 +28,9 @@
+-        return; // CPU only read these completed GPU pixels. POSTinvalidate stays full.
++        return; // CPU only read these completed GPU pixels. CPU consumers still invalidate before reading.
++    }
++    if(!to_gpu && b->surface && b->last_seq && dream_surface_gpu_readonly(b->surface)) {
++        // flushComplete is called only for a successfully retired synchronous
++        // surface chain. CPU accessors consume this latest completed sequence.
++        dpf_wc_barrier();
++        __atomic_store_n(&b->surface->deferredInvalidateSeq,b->last_seq,__ATOMIC_RELEASE);
++        ++dpf_mirror_post_skips;dpf_mirror_post_skip_bytes+=b->surface->allocSize;
++        return;
+@@ -53 +62,3 @@
+-    } else { dm_invalidate(address,length); dpf_invalidate_bytes += length; }
++    } else { dm_invalidate(address,length); dpf_invalidate_bytes += length;
++        if(b->surface)__atomic_store_n(&b->surface->deferredInvalidateSeq,0ULL,__ATOMIC_RELEASE);
++    }
+--- a/iokit/Kernel/arm/DreamPanfrostClient.inc
++++ b/iokit/Kernel/arm/DreamPanfrostClient.inc
+@@ -188,0 +189 @@
++#include "DreamSurfaceSync.inc"
+@@ -225,0 +227,3 @@
++    if(seq && !hakios_mali_wait(seq,0))return false;
++    if(__atomic_load_n(&s->deferredInvalidateSeq,__ATOMIC_ACQUIRE) ||
++        __atomic_load_n(&s->displayMirrorReadOnly,__ATOMIC_ACQUIRE))return dream_surface_sync_cpu(s);
+@@ -227 +230,0 @@
+-    if(!hakios_mali_wait(seq,0))return false;
+@@ -551,0 +555 @@
++        if(b->surface && !dream_surface_sync_cpu_locked(b->surface)) {IOLockUnlock(gMaliLock);return kIOReturnNotReady;}
+@@ -640 +644 @@
+-		if (selector == kPanfrostWaitBO && ret == kIOReturnSuccess && seq != 0) {
++		if (selector == kPanfrostWaitBO && ret == kIOReturnSuccess) {
+@@ -645 +649,4 @@
+-				if(b->surface->kernelAddress())dm_invalidate((void *)b->surface->kernelAddress(),b->surface->allocSize);
++                if(__atomic_load_n(&b->surface->deferredInvalidateSeq,__ATOMIC_ACQUIRE) ||
++                    __atomic_load_n(&b->surface->displayMirrorReadOnly,__ATOMIC_ACQUIRE)) {
++                    if(!dream_surface_sync_cpu_locked(b->surface))ret=kIOReturnNotReady;
++                } else if(seq && b->surface->kernelAddress())dm_invalidate((void *)b->surface->kernelAddress(),b->surface->allocSize);
+@@ -690,0 +698 @@
++        uint64_t mirrorPostBefore=dpf_mirror_post_skips,mirrorPostBytesBefore=dpf_mirror_post_skip_bytes;
+@@ -721 +729,2 @@
+-            IOLog("DREAM GLES MIRROR CACHE: submit=%u preclean_skip=%llu bytes=%llu postinvalidate=full\n",fSubmits,dpf_mirror_clean_skips-mirrorBefore,dpf_mirror_clean_skip_bytes-mirrorBytesBefore);
++            IOLog("DREAM GLES MIRROR CACHE: submit=%u preclean_skip=%llu bytes=%llu postinvalidate=consumer_sync\n",fSubmits,dpf_mirror_clean_skips-mirrorBefore,dpf_mirror_clean_skip_bytes-mirrorBytesBefore);
++            IOLog("DREAM GLES MIRROR DEFER: submit=%u post_skip=%llu bytes=%llu cpu_syncs=%llu\n",fSubmits,dpf_mirror_post_skips-mirrorPostBefore,dpf_mirror_post_skip_bytes-mirrorPostBytesBefore,dpf_mirror_cpu_syncs);

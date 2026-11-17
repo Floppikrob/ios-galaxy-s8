@@ -17,7 +17,7 @@ static int copyin(user_addr_t from,void*to,size_t n){if(copyFail)return 1;memcpy
 struct IOMemoryDescriptor{uint64_t getLength(){return 4096;}void complete(){++completes;}void release(){++releases;}};
 struct IOBufferMemoryDescriptor:IOMemoryDescriptor{void*getBytesNoCopy(){return this;}};
 #define OSDynamicCast(type,p) ((type*)(p))
-struct Surface{uint64_t maliSeq=0,allocSize=4096;uintptr_t kernelAddress(){return (uintptr_t)this;}void release(){++releases;}};
+struct Surface{uint64_t maliSeq=0,deferredInvalidateSeq=0,allocSize=4096;uintptr_t kernelAddress(){return (uintptr_t)this;}void release(){++releases;}};
 struct mali_buffer{IOMemoryDescriptor*memory=nullptr;Surface*surface=nullptr;uint64_t address=0,size=4096,last_seq=0;bool gpuOnlyHeap=false,cachePrimed=false,cpuMapped=false,writeCombined=false,prepared=true;};
 static bool hakios_mali_ready(){return ready;}
 static uint64_t done,nextSeq;
@@ -36,6 +36,7 @@ static uint64_t mach_absolute_time(){static uint64_t t;return ++t;}
 static void absolutetime_to_nanoseconds(uint64_t n,uint64_t*out){*out=n;}
 static uint64_t dpf_enqueue_chain(uint64_t,bool,bool asynchronous){seenAsync=asynchronous;return ++nextSeq;}
 static unsigned gMaliFlush=1,gMaliSubmits;
+static uint64_t dpf_mirror_cpu_syncs=0;
 static bool dpf_queue_started=true;
 struct HakiosMaliUserClient{
  mali_buffer buffers[4];unsigned fSubmits=0,fFailed=0;uint64_t returnedSeq=0;

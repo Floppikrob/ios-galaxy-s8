@@ -148,8 +148,7 @@ struct eagl;
 static int eagl_tracing;                /* this frame's calls are written down (boot-arg gltrace=FIRST-LAST) */
 static int frame_lines;                 /* boot-arg glframes=1: a line for every frame (see frame_end()) */
 static int latency_lines;               /* boot-arg touch_lat=1: when every frame began and ended (see frame_end()) */
-static uint64_t slow_calls_us;          /* boot-arg glslow=US: a line for every call that takes longer (eagl_leave()) */
-static uint64_t call_began_us;          /* (when the call in progress began) */
+static uint64_t slow_calls_us = 2000;          /* boot-arg glslow=US: a line for every call that takes longer (eagl_leave()) */
 static uint64_t now_us(void);
 static void eagl_trace(const char *format, ...) __attribute__((format(printf, 1, 2)));
 static void eagl_trace_floats(const float *values, int count);
@@ -344,6 +343,8 @@ struct eagl {
 	const char *sources[256];       /* the text of the shaders being made, by name (modulo this) */
 	bool fragment[256];             /* ... and which of the two kinds each is */
 	unsigned plain_said;
+    uint64_t call_began_us; // Context-local: concurrent contexts must not overwrite timing.
+    unsigned slow_epoch,slow_reports;
 };
 
 static unsigned trace_first, trace_last;        /* the frames whose calls are written down */
@@ -437,7 +438,8 @@ eagl_enter(struct eagl *e, unsigned offset)
 	slot_calls[offset / 8]++;
 	e->calls++;
 	if (slow_calls_us != 0) {
-		call_began_us = now_us();
+        if(e->slow_epoch!=e->frames){e->slow_epoch=e->frames;e->slow_reports=0;}
+		e->call_began_us = now_us();
 	}
 }
 
@@ -455,8 +457,8 @@ eagl_leave(struct eagl *e, unsigned offset)
 		uint64_t now = now_us();
 
 		/* "tl: slow NAME US at US, frame N": a call that took long, and when it ended (tools/frames.py) */
-		if (now - call_began_us >= slow_calls_us) {
-			say("tl: slow %s %llu at %llu, frame %u%s\n", eagl_slot_name(offset), now - call_began_us, now, e->frames + 1,
+		if (now - e->call_began_us >= slow_calls_us && e->slow_reports++ < 12) {
+			say("tl: slow %s %llu at %llu, frame %u%s\n", eagl_slot_name(offset), now - e->call_began_us, now, e->frames + 1,
 			    e->in_frame ? "" : " (before its first draw)");
 		}
 	}

@@ -5,7 +5,7 @@
 struct Memory{virtual~Memory(){};uint64_t length;uint64_t getLength(){return length;}};
 struct IOBufferMemoryDescriptor:Memory{void*bytes;void*getBytesNoCopy(){return bytes;}};
 #define OSDynamicCast(type,p) dynamic_cast<type*>(p)
-struct Surface{uintptr_t address;uint64_t allocSize;uintptr_t kernelAddress(){return address;}};
+struct Surface{uintptr_t address;uint64_t allocSize;uint64_t deferredInvalidateSeq=0;uintptr_t kernelAddress(){return address;}};
 struct mali_buffer{Memory*memory;Surface*surface;uint64_t size;bool gpuOnlyHeap=false,cachePrimed=false,cpuMapped=false,writeCombined=false;uint64_t last_seq=0;};
 struct Event{void*address;uint64_t length;bool clean;};static std::vector<Event>events;
 static bool ready=true;static bool hakios_mali_ready(){return ready;}
