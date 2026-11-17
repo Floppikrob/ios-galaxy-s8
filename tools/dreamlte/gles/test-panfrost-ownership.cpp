@@ -30,6 +30,7 @@ static bool hakios_mali_unmap(uint64_t,uint64_t){++unmaps;return unmapOK;}
 static void dm_clean(void*,uint64_t){++cleanCalls;}
 static void dm_invalidate(void*,uint64_t){++invalidateCalls;}
 #include "DreamPanfrostSnapshot.inc"
+static bool dream_surface_gpu_readonly(Surface*){return false;}
 #include "DreamPanfrostCache.inc"
 static uint64_t mach_absolute_time(){static uint64_t t;return ++t;}
 static void absolutetime_to_nanoseconds(uint64_t n,uint64_t*out){*out=n;}

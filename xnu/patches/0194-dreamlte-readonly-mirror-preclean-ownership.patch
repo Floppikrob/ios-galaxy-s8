@@ -1,0 +1,73 @@
+--- /dev/null
++++ b/iokit/Kernel/arm/DreamSurfaceCpu.h
+@@ -0,0 +1,10 @@
++/* A CPU write opportunity permanently disqualifies the private-mirror
++ * no-preclean rule, including mappings outside our read-only IOSurface path.
++ * Called BEFORE returning writable access, not after pixels were modified.
++ */
++#ifndef DREAM_SURFACE_CPU_H
++#define DREAM_SURFACE_CPU_H
++static inline void dream_surface_offer_cpu_write(SweetSurface *surface) {
++    if(surface)__atomic_store_n(&surface->cpuWriteOffered,1u,__ATOMIC_RELEASE);
++}
++#endif
+--- a/iokit/Kernel/arm/SweetSurface.h
++++ b/iokit/Kernel/arm/SweetSurface.h
+@@ -30,0 +31,3 @@
++	volatile uint32_t cpuWriteOffered;
++	bool displayMirrorReadOnly;
++	uint32_t displayMirrorReadOnlySeed;
+@@ -48 +51 @@
+-	bool init() APPLE_KEXT_OVERRIDE { maliSeq=0; displayMirror=NULL; displayMirrorSourceSeed=displayMirrorSeed=0; displayMirrorSeq=0; userMemoryPrepared=false; return OSObject::init(); }
++	bool init() APPLE_KEXT_OVERRIDE { maliSeq=0; cpuWriteOffered=0; displayMirrorReadOnly=false; displayMirrorReadOnlySeed=0; displayMirror=NULL; displayMirrorSourceSeed=displayMirrorSeed=0; displayMirrorSeq=0; userMemoryPrepared=false; return OSObject::init(); }
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -30,0 +31 @@
++#include "DreamSurfaceCpu.h"
+@@ -899 +900 @@
+-IOSurfaceRootUserClient::trapLock(void *id, __unused void *options, void *seedOut,
++IOSurfaceRootUserClient::trapLock(void *id, void *options, void *seedOut,
+@@ -905,0 +907 @@
++	if(!((uintptr_t)options & kIOSurfaceLockReadOnly))dream_surface_offer_cpu_write(s);
+@@ -918,0 +921 @@
++	if(!((uintptr_t)options & kIOSurfaceLockReadOnly))dream_surface_offer_cpu_write(s);
+--- a/iokit/Kernel/arm/DreamDisplayMirror.inc
++++ b/iokit/Kernel/arm/DreamDisplayMirror.inc
+@@ -29 +29 @@
+-    if(offers++<8)IOLog("DREAM DISPLAY MIRROR: offer source=%u mirror=%u valid=%u seq=%llu seeds=%u/%u requested=%u/%u\n",q->original,q->mirror,valid,seq,ss,ms,q->originalSeed,q->mirrorSeed);
++    if(offers++<8)IOLog("DREAM DISPLAY MIRROR: offer source=%u mirror=%u valid=%u seq=%llu seeds=%u/%u requested=%u/%u cpu_write_offered=%u\n",q->original,q->mirror,valid,seq,ss,ms,q->originalSeed,q->mirrorSeed,m?__atomic_load_n(&m->cpuWriteOffered,__ATOMIC_ACQUIRE):~0u);
+@@ -32,0 +33,2 @@
++        m->displayMirrorReadOnlySeed=ms;
++        m->displayMirrorReadOnly=!__atomic_load_n(&m->cpuWriteOffered,__ATOMIC_ACQUIRE);
+@@ -53,0 +56,12 @@
++
++/* Only our signed-registered, privately allocated BGRA output mirror qualifies.
++ * First-frame/full CPU/GPU sync has already completed before registration.
++ * CPU writes/driver mappings disqualify permanently; seed mismatch also refuses.
++ * All post-job invalidation and other imported-surface rules remain intact.
++ */
++static bool dream_surface_gpu_readonly(SweetSurface *s) {
++    uint32_t seed;
++    return s && s->displayMirrorReadOnly && !s->userMemoryPrepared &&
++        !__atomic_load_n(&s->cpuWriteOffered,__ATOMIC_ACQUIRE) &&
++        sweet_surface_read_seed(s,&seed) && seed==s->displayMirrorReadOnlySeed;
++}
+--- a/iokit/Kernel/arm/DreamPanfrostCache.inc
++++ b/iokit/Kernel/arm/DreamPanfrostCache.inc
+@@ -7,0 +8 @@
++static uint64_t dpf_mirror_clean_skips,dpf_mirror_clean_skip_bytes;
+@@ -22,0 +24,4 @@
++    }
++    if(to_gpu && b->surface && dream_surface_gpu_readonly(b->surface)) {
++        dpf_wc_barrier();++dpf_mirror_clean_skips;dpf_mirror_clean_skip_bytes+=b->surface->allocSize;
++        return; // CPU only read these completed GPU pixels. POSTinvalidate stays full.
+--- a/iokit/Kernel/arm/DreamPanfrostClient.inc
++++ b/iokit/Kernel/arm/DreamPanfrostClient.inc
+@@ -189,0 +190 @@
++#include "DreamSurfaceCpu.h"
+@@ -548,0 +550 @@
++        if(b->surface)dream_surface_offer_cpu_write(b->surface); // Uncontrolled driver mapping may write pixels.
+@@ -687,0 +690 @@
++        uint64_t mirrorBefore=dpf_mirror_clean_skips,mirrorBytesBefore=dpf_mirror_clean_skip_bytes;
+@@ -717,0 +721 @@
++            IOLog("DREAM GLES MIRROR CACHE: submit=%u preclean_skip=%llu bytes=%llu postinvalidate=full\n",fSubmits,dpf_mirror_clean_skips-mirrorBefore,dpf_mirror_clean_skip_bytes-mirrorBytesBefore);

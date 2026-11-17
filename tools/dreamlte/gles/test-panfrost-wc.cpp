@@ -20,12 +20,15 @@ struct IOBufferMemoryDescriptor:IOMemoryDescriptor{
  }
 };
 #define OSDynamicCast(type,p) dynamic_cast<type*>(p)
-struct Surface{uintptr_t address;uint64_t allocSize;unsigned mapCache;uintptr_t kernelAddress(){return address;}};
+struct Surface{uintptr_t address;uint64_t allocSize;unsigned mapCache;uintptr_t kernelAddress(){return address;}uint32_t cpuWriteOffered=0;};
 struct mali_buffer{IOMemoryDescriptor*memory=nullptr;Surface*surface=nullptr;uint64_t address=0,size=0;bool gpuOnlyHeap=false,cachePrimed=false,cpuMapped=false,writeCombined=false;uint64_t last_seq=0;};
 static unsigned cleans,invalidates;
 static void dm_clean(void*,uint64_t){++cleans;}static void dm_invalidate(void*,uint64_t){++invalidates;}
 static constexpr uint64_t NSEC_PER_SEC=1000000000;
 static bool hakios_mali_wait(uint64_t,uint64_t){return true;}
+using SweetSurface=Surface;
+#include "DreamSurfaceCpu.h"
+static bool dream_surface_gpu_readonly(Surface*){return false;}
 #include "DreamPanfrostCache.inc"
 struct drm_panfrost_create_bo{uint32_t size,flags,handle,pad;uint64_t offset;};
 static void hakios_mali_tag(uint64_t,unsigned,unsigned,unsigned,unsigned,unsigned,unsigned){}
@@ -57,7 +60,7 @@ int main(){HakiosMaliUserClient c;drm_panfrost_create_bo req={8192,0,0,0,0};
  Surface surface{0xfffffff200001000ULL,4096,kIOMapDefaultCache};c.b.surface=&surface;c.b.writeCombined=true;
  beforeC=cleans;beforeI=invalidates;uint64_t wc=dpf_wc_skips;flushSubmit(&c.b);flushComplete(&c.b);
  assert(cleans==beforeC+1&&invalidates==beforeI+1&&dpf_wc_skips==wc);
- assert(c.clientMemoryForType(1,&mode,&out)==0&&mode==kIOMapDefaultCache);out->release();c.reset();
+ assert(c.clientMemoryForType(1,&mode,&out)==0&&mode==kIOMapDefaultCache&&surface.cpuWriteOffered==1);out->release();c.reset();
  failWC=false;failNew=true;unsigned released=releases;assert(c.createBO(&req)==kIOReturnNoMemory&&releases==released+1);failNew=false;
  failAll=true;assert(c.createBO(&req)==kIOReturnNoMemory);failAll=false;
  req.flags=4;beforeA=allocations;assert(c.createBO(&req)==kIOReturnBadArgument&&allocations==beforeA);

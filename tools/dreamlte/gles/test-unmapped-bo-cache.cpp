@@ -13,6 +13,7 @@ static void dm_clean(void*p,uint64_t n){events.push_back({p,n,true});}
 static void dm_invalidate(void*p,uint64_t n){events.push_back({p,n,false});}
 static constexpr uint64_t NSEC_PER_SEC=1000000000;
 static bool hakios_mali_wait(uint64_t,uint64_t){return true;}
+static bool dream_surface_gpu_readonly(Surface*){return false;}
 #include "DreamPanfrostCache.inc"
 int main(){
  IOBufferMemoryDescriptor mem;mem.length=32ull<<20;mem.bytes=(void*)0xfffffff100001000ULL;
