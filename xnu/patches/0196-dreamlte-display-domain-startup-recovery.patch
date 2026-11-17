@@ -1,0 +1,82 @@
+--- a/iokit/Kernel/arm/DreamDisplayIommu.inc
++++ b/iokit/Kernel/arm/DreamDisplayIommu.inc
+@@ -101,0 +102,33 @@
++
++// Only the guarded boot-bypass owner calls this. A fault is never accepted as
++// a successful translation: acknowledge it only while returning to saved bypass.
++static bool df_restore_mmu_bypass(volatile uint32_t *m,uint32_t pt,uint32_t ctrl) {
++    df_write(m,0,7);
++    if(!df_wait(m,8,1,1,20))return false; // Keep tables/DMA retained.
++    const uint32_t fault=m[0x60/4];
++    df_write(m,0xc,pt);df_write(m,0x10,1);
++    if(fault)df_write(m,0x64,fault); // Samsung v7 INT_CLEAR, observed W1C bits only.
++    df_write(m,0,ctrl);
++    bool ok=df_wait(m,0,~0u,ctrl,20) && m[3]==pt && !m[0x60/4];
++    IOLog("DREAM FLIP RESTORE: bypass=%u control=%x pt=%x fault_before=%x fault_after=%x retained=1\n",
++        ok,m[0],m[3],fault,m[0x60/4]);
++    return ok;
++}
++// Restore the saved scanout request AND confirm a fresh frame after a failed
++// domain transition. Merely restoring MMU_CTRL does not prove IDMA resumed.
++static bool df_restore_boot_scanout(volatile uint32_t *d,volatile uint32_t *i,uint32_t base,uint32_t base_c) {
++    const uint32_t saved=d[0x40/4];
++    df_write(d,0x40,saved|(1u<<13)|1u);
++    df_write(i,4,(i[1]&0xffffu)|0xab0000u);
++    df_write(d,0x4c,1u<<13); // Clear BEFORE commit so a fast completion is retained.
++    df_write(i,0x40,base);df_write(i,0x44,base_c);
++    df_write(d,0x60,d[0x60/4]|0x8000003f);
++    bool latched=df_wait(d,0x60,0x8000003f,0,100);
++    bool retired=latched&&df_wait(d,0x4c,1u<<13,1u<<13,40);
++    df_write(d,0x40,saved);
++    uint32_t errors=i[1]&0xaa0000u;
++    IOLog("DREAM FLIP RESTORE: boot_latch=%u retired=%u DMA=%x base=%x retained=1\n",
++        latched,retired,errors,i[0x40/4]);
++    return latched&&retired&&!errors&&i[0x40/4]==base&&i[0x44/4]==base_c;
++}
++
+@@ -133,0 +167,12 @@
++    // Boot recovery may leave sticky status while translation is bypassed.
++    // Clear only observed bits under confirmed block BEFORE starting our trial;
++    // any fault after enable is fresh and still aborts the trial.
++    const uint32_t inherited=m[0x60/4];
++    if(inherited)df_write(m,0x64,inherited);
++    if(m[0x60/4]) {
++        bool restored=df_restore_mmu_bypass(m,pt,ctrl);
++        bool resumed=restored&&df_restore_boot_scanout(d,i,base,base_c);
++        if(!resumed)df_failed=true;
++        IOLog("DREAM FLIP TRIAL: inherited fault not cleared before=%x bypass=%u boot_resumed=%u retained=1\n",
++            inherited,restored,resumed);return;
++    }
+@@ -136,5 +181,9 @@
+-    if(m[0]!=5 || m[0x60/4]) {
+-        df_write(m,0,7);bool blocked=df_wait(m,8,1,1,20);
+-        if(blocked) {df_write(m,0xc,pt);df_write(m,0x10,1);df_write(m,0,ctrl);}
+-        IOLog("DREAM FLIP TRIAL: identity failed rollback=%u; DMA retained\n",blocked);return;
+-    }
++    uint32_t identity_ctrl=m[0],identity_fault=m[0x60/4];
++    if(identity_ctrl!=5 || identity_fault) {
++        bool restored=df_restore_mmu_bypass(m,pt,ctrl);
++        bool resumed=restored&&df_restore_boot_scanout(d,i,base,base_c);
++        if(!resumed)df_failed=true;
++        IOLog("DREAM FLIP TRIAL: identity failed ctrl=%x fresh_fault=%x inherited=%x bypass=%u boot_resumed=%u; DMA retained\n",
++            identity_ctrl,identity_fault,inherited,restored,resumed);return;
++    }
++    IOLog("DREAM FLIP IDENTITY: PASS inherited=%x fresh_fault=0\n",inherited);
+@@ -143,0 +193 @@
++    df_write(d,0x4c,1u<<13);
+@@ -147 +196,0 @@
+-    df_write(d,0x4c,1u<<13);
+@@ -154,0 +204 @@
++    df_write(d,0x4c,1u<<13);
+@@ -157 +206,0 @@
+-    df_write(d,0x4c,1u<<13);
+@@ -159,7 +208,2 @@
+-    bool mmu_restored=false;
+-    if(retired) {
+-        df_write(m,0,7);
+-        if(df_wait(m,8,1,1,20)) {
+-            df_write(m,0xc,pt);df_write(m,0x10,1);df_write(m,0,ctrl);mmu_restored=true;
+-        } else df_write(m,0,5);
+-    }
++    bool mmu_restored=retired&&df_restore_mmu_bypass(m,pt,ctrl);
++    if(!mmu_restored)df_failed=true;
