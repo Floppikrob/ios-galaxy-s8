@@ -1082,8 +1082,17 @@ surface_to_texture(struct eagl *e, struct image *image)
         uint8_t *rgb = NULL, *alpha = NULL;
         size_t nr = 0, na = 0, rr = 0, ra = 0;
         row = (size_t)image->width * 4;
-        if (!b3a8_planes(surface, &rgb, &nr, &rr, &alpha, &na, &ra, image->width, image->height) ||
-            !(flipped = malloc(row * (size_t)image->height)) ||
+        if (!b3a8_planes(surface, &rgb, &nr, &rr, &alpha, &na, &ra, image->width, image->height)) {
+            IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, NULL);
+            return;
+        }
+        if (!trace_placing) {
+            const struct dream_upload_planes planes = { rgb, alpha, nr, rr, na, ra, image->invert };
+            if (dream_staged_upload(e, image, NULL, 0, &planes)) {
+                goto uploaded;
+            }
+        }
+        if (!(flipped = malloc(row * (size_t)image->height)) ||
             !dream_b3a8_unpack(flipped, row * (size_t)image->height, row, rgb, nr, rr, alpha, na, ra,
                 image->width, image->height, image->invert)) {
             free(flipped); IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, NULL); return;
@@ -1115,7 +1124,7 @@ surface_to_texture(struct eagl *e, struct image *image)
 	glGetIntegerv(GL_UNPACK_ALIGNMENT, &alignment);
 	glPixelStorei(GL_UNPACK_ROW_LENGTH, (GLint)(row / pixel));
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-	if (!dream_staged_upload(e,image,base,row)) {
+	if ((image->b3a8 && !trace_placing) || !dream_staged_upload(e, image, base, row, NULL)) {
 		glTexImage2D(image->to, 0, (GLint)internal_format(image->internal, image->format), image->width, image->height, 0,
 		    image->format, image->type, base);
 	}
@@ -1146,6 +1155,7 @@ surface_to_texture(struct eagl *e, struct image *image)
 			say("gl-at:     a table; sixteen of its entries, first to last:%s\n", entries);
 		}
 	}
+uploaded:
 	IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, NULL);
 	free(flipped);
 	image->seed = seed;

@@ -103,24 +103,55 @@ int main(){
    q[0]=p[format==GL_BGRA?2:0];q[1]=p[1];q[2]=p[format==GL_BGRA?0:2];q[3]=p[3];
   }
   i.format=format;i.internal=format;unpack_buffer=0;bound=21;textures[21]={};auto saved=src;
-  assert(dream_staged_upload(&e,&i,src.data(),row)&&finish_seen);state();assert(textures[21].rgba==expected&&src==saved);
+  assert(dream_staged_upload(&e,&i,src.data(),row,nullptr)&&finish_seen);state();assert(textures[21].rgba==expected&&src==saved);
  }
  for(int fault=0;fault<5;fault++){
   surface_alloc_fail=fault==0;staging_lock_fail=fault==1;import_fail=fault==2;storage_fail=fault==3;blit_fail=fault==4;
-  assert(!dream_staged_upload(&e,&i,src.data(),row));state();
+  assert(!dream_staged_upload(&e,&i,src.data(),row,nullptr));state();
  }
  surface_alloc_fail=staging_lock_fail=import_fail=storage_fail=blit_fail=false;
  unsigned before=blits;
- e.api=2;assert(!dream_staged_upload(&e,&i,src.data(),row));e.api=3;
- i.width=2;i.height=2;assert(!dream_staged_upload(&e,&i,src.data(),row));i.width=i.height=257;
- assert(!dream_staged_upload(&e,&i,src.data(),1));
- i.type=0;assert(!dream_staged_upload(&e,&i,src.data(),row));i.type=GL_UNSIGNED_BYTE;
- i.format=0;assert(!dream_staged_upload(&e,&i,src.data(),row));i.format=GL_BGRA;
- i.internal=0;assert(!dream_staged_upload(&e,&i,src.data(),row));i.internal=GL_BGRA;
- e.image_bytes=image_bytes_most;assert(!dream_staged_upload(&e,&i,src.data(),row));e.image_bytes=0;
- share_surfaces=0;assert(!dream_staged_upload(&e,&i,src.data(),row));share_surfaces=1;
- unpack_buffer=77;assert(!dream_staged_upload(&e,&i,src.data(),row));unpack_buffer=0;
- bound=99;assert(!dream_staged_upload(&e,&i,src.data(),row));bound=21;
- assert(!dream_staged_upload(&e,&i,nullptr,row)&&blits==before);state();
+ e.api=2;assert(!dream_staged_upload(&e,&i,src.data(),row,nullptr));e.api=3;
+ i.width=2;i.height=2;assert(!dream_staged_upload(&e,&i,src.data(),row,nullptr));i.width=i.height=257;
+ assert(!dream_staged_upload(&e,&i,src.data(),1,nullptr));
+ i.type=0;assert(!dream_staged_upload(&e,&i,src.data(),row,nullptr));i.type=GL_UNSIGNED_BYTE;
+ i.format=0;assert(!dream_staged_upload(&e,&i,src.data(),row,nullptr));i.format=GL_BGRA;
+ i.internal=0;assert(!dream_staged_upload(&e,&i,src.data(),row,nullptr));i.internal=GL_BGRA;
+ e.image_bytes=image_bytes_most;assert(!dream_staged_upload(&e,&i,src.data(),row,nullptr));e.image_bytes=0;
+ share_surfaces=0;assert(!dream_staged_upload(&e,&i,src.data(),row,nullptr));share_surfaces=1;
+ unpack_buffer=77;assert(!dream_staged_upload(&e,&i,src.data(),row,nullptr));unpack_buffer=0;
+ bound=99;assert(!dream_staged_upload(&e,&i,src.data(),row,nullptr));bound=21;
+ assert(!dream_staged_upload(&e,&i,nullptr,row,nullptr)&&blits==before);state();
+ {
+  const size_t rgb_row = i.width * 4 + 13, alpha_row = i.width + 5;
+  std::vector<uint8_t> rgb(rgb_row * i.height, 0x1f), alpha(alpha_row * i.height, 0x78);
+  for (size_t y = 0; y < (size_t)i.height; ++y) {
+   for (size_t x = 0; x < (size_t)i.width; ++x) {
+    const uint32_t code = ((x * 11 + y) & 1023) | (((x + y * 7) & 1023) << 10)
+        | (((x + y * 21) & 1023) << 20);
+    for (unsigned byte = 0; byte < 4; ++byte) rgb[y * rgb_row + 4 * x + byte] = code >> (8 * byte);
+    alpha[y * alpha_row + x] = x + y * 13;
+   }
+  }
+  const auto old_rgb = rgb, old_alpha = alpha;
+  for (bool invert : {false, true}) {
+   const dream_upload_planes planes = {rgb.data(), alpha.data(), rgb.size(), rgb_row,
+       alpha.size(), alpha_row, invert};
+   assert(dream_b3a8_unpack(expected.data(), expected.size(), i.width * 4,
+       rgb.data(), rgb.size(), rgb_row, alpha.data(), alpha.size(), alpha_row,
+       i.width, i.height, invert));
+   for (size_t at = 0; at < expected.size(); at += 4) std::swap(expected[at], expected[at + 2]);
+   assert(dream_staged_upload(&e, &i, nullptr, 0, &planes) && finish_seen);
+   assert(textures[21].rgba == expected && rgb == old_rgb && alpha == old_alpha);
+   state();
+   auto truncated = planes;
+   truncated.alpha_size = alpha_row;
+   const auto previous = textures[21].rgba;
+   const unsigned blits_before = blits;
+   assert(!dream_staged_upload(&e, &i, nullptr, 0, &truncated));
+   assert(blits == blits_before && textures[21].rgba == previous);
+   state();
+  }
+ }
  textures.clear();puts("PASS: production staged upload: RGBA/BGRA/alpha/oddrows/normalized flips/input unchanged, NULL destination allocation, GPU completion before release, texture identity/unpack/FBO/scissor restored; allocation/lock/import/storage/blit errors + format/quota/PBO gates preserve CPU fallback");
 }
