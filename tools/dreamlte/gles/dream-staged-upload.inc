@@ -1,3 +1,5 @@
+#include "dream_b3a8_unpack_vector.h"
+
 /* Large CPU-origin images pass through a temporary shared BGRA surface.
  * Allocate the persistent texture with NULL data, then fill it by the GPU.
  * This gives Mesa's delayed-mapping render storage a chance to stay private
@@ -37,7 +39,7 @@ dream_staged_upload(struct eagl *e, struct image *image, const uint8_t *pixels, 
         ok=dst&&dream_b3a8_span(IOSurfaceGetAllocSize(staging),stride,w,h,4);
         if (ok && planes) {
             // Decode straight into the shared upload buffer while the original is locked.
-            ok = dream_b3a8_unpack(dst, IOSurfaceGetAllocSize(staging), stride,
+            ok = dream_b3a8_unpack_vector(dst, IOSurfaceGetAllocSize(staging), stride,
                 planes->rgb, planes->rgb_size, planes->rgb_stride,
                 planes->alpha, planes->alpha_size, planes->alpha_stride, w, h, planes->invert);
         }

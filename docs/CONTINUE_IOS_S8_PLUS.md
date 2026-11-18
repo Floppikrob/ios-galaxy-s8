@@ -2,7 +2,7 @@
 
 ## Актуальное продолжение GLES / Mesa / Panfrost — 2026-11-13
 
-Статус: запуск дисплея на ядре 196 подтверждён журналом — не менее 270 завершённых переключений, выборочные пиксели совпали. 30 FPS пока не подтверждены. Установлена оптимизация прямой распаковки b3a8 в буфер загрузки GPU, запись библиотеки проверена, отправлена команда перезагрузки. После следующего возврата в TWRP снять журнал через pull-direct-upload-result.py и проверить вывод кадров и время загрузки текстур. GPU, 2 ГБ ОЗУ, 8 GPU-контекстов и визуальные эффекты сохранены.
+Статус: прямая загрузка текстур подтверждена на телефоне, дисплей завершил не менее 240 переключений. Стабильные 30 FPS пока не получены. Обновление с векторной распаковкой установлено и проверено чтением, телефон перезагружен. После возврата в TWRP снять журнал через pull-vector-unpack-result.py. Ядро 196, GPU, 2 ГБ ОЗУ, 8 контекстов и все эффекты сохранены.
 
 Пользователь попросил продолжить предыдущий чат «Продолжить портирование iOS»; последняя задача — попробовать OpenGL ES и Mesa/Panfrost для отрисовки интерфейса. GPU не отключать, сохранить 2048 MiB, 4 KiB страницы, 8 CPU и 8 GPU-контекстов. Частоты/напряжения не повышались. Предыдущий ход завершился прерыванием до записи системы/нового BOOT; файлы передачи тогда не были обновлены.
 
@@ -1128,3 +1128,14 @@ The GLES adapter now decodes b3a8 planes straight into the existing BGRA upload 
 Installed adapter f66dfe37e4fcb035646edb9340f3208bee4fd0a22a372439513eb2797c00882f through 11 checked data ranges (364544 bytes). The old adapter data blocks were saved for recovery. BOOT 3a31182fdfd0cb52d6c16e9c07aa7520f4c5e715d0084c7d3b2694e861ae91fe, HFS layout, Mesa, PosterBoard and Control Center settings passed verification. Requested a reboot for the direct upload test. The kernel, GPU, 2 GiB RAM, 8 GPU contexts, effects, and earlier copy optimizations are preserved.
 
 The next TWRP capture uses pull-direct-upload-result.py with the dream2lte wrapper. Check DREAM GLES UPLOAD DIRECT, the 196 identity trial, physical flip completion, pixel matches, and comparable texture refill times. The previous 74 ms sample includes more than the eliminated CPU copy. Use repeated interactions and sustained display timing to assess 30 FPS.
+
+
+## 2026-11-18: direct uploads verified and SIMD unpacking installed
+
+The journal from the direct upload trial contains eight successful direct b3a8 uploads. The display startup test passed and at least 240 flips retired without DMA or MMU faults. All 10 sampled buffers matched. The user returned to TWRP. No separate visual report was given. Raw SHA-256 774afdd4894b6e0021ae9ab71e3a8a07f9cf2cc0fa606d87a755d851435b859b, ring total 602453 bytes, flush 18.
+
+The logs still show separate staged texture uploads associated with 93–138 ms GL calls. These calls include work beyond decoding the planes. Median sampled frame time was 66.1 ms, with nine measurements across different scenes. The busiest captured two-second window reported 28 present entries. The two trials have different workloads, so these figures do not establish a speedup or stable 30 FPS.
+
+The new adapter decodes four b3a8 pixels in parallel for direct staging and for the existing temporary-buffer fallback. It preserves scalar clipping and rounding for all ten-bit RGB codes, the full alpha byte, orientation, row padding and last-row bounds. Up to three trailing pixels use the scalar decoder. The display kernel and output packing path did not change. ASan/UBSan exercised all 1024 codes, both orientations, odd strides, unaligned bases, and one-byte truncations. Staged upload, shared copy and the original plane contract tests passed. The target ARM64 build contains vector instructions and passed native signing and symbol checks. An x86 host microbenchmark with random ten-bit inputs at 1125×2436 took about 31 ms before and 2.5 ms after for decoding alone. Phone latency must be measured separately.
+
+Installed 90346893f24f891012c162e0d971ff1c19691b7f0d7fd6b5d73a4f9257f06635 through 10 verified adapter ranges, preserving the exact prior ranges for recovery. BOOT 3a31182fdfd0cb52d6c16e9c07aa7520f4c5e715d0084c7d3b2694e861ae91fe was read back unchanged. Adapter signatures, HFS layout, Mesa, PosterBoard, and Control Center were verified. The phone rebooted for the trial. Follow up with pull-vector-unpack-result.py after the phone returns to TWRP. Check fluidity with matched interactions, startup and flip retirement, pixel checks, texture upload spikes, and the heaviest scenes. Keep GPU, 2 GiB RAM, 8 GPU contexts, all effects and original pixel layout.

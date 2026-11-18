@@ -1093,7 +1093,7 @@ surface_to_texture(struct eagl *e, struct image *image)
             }
         }
         if (!(flipped = malloc(row * (size_t)image->height)) ||
-            !dream_b3a8_unpack(flipped, row * (size_t)image->height, row, rgb, nr, rr, alpha, na, ra,
+            !dream_b3a8_unpack_vector(flipped, row * (size_t)image->height, row, rgb, nr, rr, alpha, na, ra,
                 image->width, image->height, image->invert)) {
             free(flipped); IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, NULL); return;
         }

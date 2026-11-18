@@ -4,6 +4,7 @@
 #include <string.h>
 #define DREAM_B3A8_VECTOR_TEST 1
 #include "dream_b3a8_vector.h"
+#include "dream_b3a8_unpack_vector.h"
 static uint32_t rng=0x98572;
 static void randomize(uint8_t*p,size_t n){while(n--){rng^=rng<<13;rng^=rng>>17;rng^=rng<<5;*p++=(uint8_t)rng;}}
 static uint64_t pixels;
@@ -22,7 +23,50 @@ static void check(unsigned w,unsigned h,unsigned off,int invert){
  assert(!dream_b3a8_pack_vector(r2+off,nr-off,rr,a2+off,na-off,ra,b+off,needB-1,rb,w,h,invert));
  assert(!memcmp(r1,r2,nr)&&!memcmp(a1,a2,na));free(b);free(saved);free(r1);free(r2);free(a1);free(a2);
 }
+static void check_unpack(unsigned w, unsigned h, unsigned offset, int invert)
+{
+ const size_t rb = 4 * w + 7, rr = 4 * w + 13, ra = w + 9;
+ const size_t nb = (h - 1) * rb + 4 * w, nr = (h - 1) * rr + 4 * w, na = (h - 1) * ra + w;
+ uint8_t *bgra = malloc(nb + offset), *expected = malloc(nb + offset);
+ uint8_t *rgb = malloc(nr + offset), *alpha = malloc(na + offset);
+ assert(bgra && expected && rgb && alpha);
+ memset(bgra, 0x9a, nb + offset);
+ memset(expected, 0x9a, nb + offset);
+ randomize(rgb, nr + offset);
+ randomize(alpha, na + offset);
+ if (w >= 1024) {
+  // Test all ten-bit values independently in all three channels.
+  for (unsigned x = 0; x < 1024; ++x) {
+   const uint32_t pixel = x | ((1023 - x) << 10) | (((x + 384) & 1023) << 20) | (3u << 30);
+   for (unsigned j = 0; j < 4; ++j) rgb[offset + 4 * x + j] = pixel >> (8 * j);
+  }
+ }
+ assert(dream_b3a8_unpack(expected + offset, nb, rb, rgb + offset, nr, rr,
+      alpha + offset, na, ra, w, h, invert));
+ assert(dream_b3a8_unpack_vector(bgra + offset, nb, rb, rgb + offset, nr, rr,
+      alpha + offset, na, ra, w, h, invert));
+ assert(!memcmp(bgra, expected, nb + offset));
+ for (unsigned plane = 0; plane < 3; ++plane) {
+  assert(!dream_b3a8_unpack_vector(bgra + offset, nb - (plane == 0), rb,
+       rgb + offset, nr - (plane == 1), rr,
+       alpha + offset, na - (plane == 2), ra, w, h, invert));
+  assert(!memcmp(bgra, expected, nb + offset));
+ }
+ free(bgra);
+ free(expected);
+ free(rgb);
+ free(alpha);
+}
 int main(void){
+ for (unsigned offset = 0; offset < 16; ++offset)
+  for (unsigned w = 1; w <= 129; ++w)
+   for (int invert = 0; invert < 2; ++invert)
+    check_unpack(w, (w % 7) + 1, offset, invert);
+ for (int invert = 0; invert < 2; ++invert) {
+  check_unpack(1125, 2436, 3, invert);
+  check_unpack(16384, 3, 7, invert);
+ }
+ puts("PASS: vector unpack matches scalar for all 1024 codes, alpha, both orientations, unaligned rows and short spans.");
  for(unsigned off=0;off<16;off++)for(unsigned w=1;w<=129;w++)for(int inv=0;inv<2;inv++)check(w,(w%7)+1,off,inv);
  for(int inv=0;inv<2;inv++){check(1125,2436,3,inv);check(16384,3,7,inv);check(33,17,1,inv);}
  uint8_t b[8]={0},r[8]={0},a[8]={0};
