@@ -1,3 +1,11 @@
+## Vector unpacking test on the Galaxy S8+
+
+The phone returned to TWRP. The journal contains eight successful direct uploads on the installed vector build. Kernel 196 passed the display startup trial and retired at least 330 flips without DMA or MMU errors. All 10 sampled buffer checks matched. No panic, compositor crash or stuck frame was captured. Raw journal SHA-256 is 66a76221be60746238a02019e959b16a1c798d200d8f75a0e0ccee4193129616. The journal contains 597147 bytes and ends at flush 17. No separate visual report was given.
+
+The six 1125×2436 direct uploads were followed by GL calls taking 90–168 ms, with a median of 140.8 ms. The preceding scalar direct-upload trial had six calls at 97–194 ms, with a median of 144.9 ms. Different scenes and the lack of timings for individual upload steps limit the comparison. The call includes more than the vector decoder. The busiest sampled window logged 42 present entries in 2.001 seconds, about 21 entries per second. That counter records entries to present. Separately, the completed-flip counter verifies working scanout.
+
+The median sampled output copy remained near 16 ms. One frame with 121 draws took 82.9 ms including 15.3 ms of copy and zero texture refills. Another with 57 draws and zero refills took 58.2 ms including 16.5 ms of copy. This establishes a remaining draw cost even in frames with no new uploads. Stable 30 FPS is still pending. Further work should measure where draw calls wait and how many batches reach the GPU during a matched interaction. A new upload decoder alone cannot close that gap. Preserve the tested vector adapter, kernel 196, 2 GiB RAM, 8 GPU contexts, frame copy, and visual effects. The phone was left in TWRP after the capture.
+
 ## 2026-11-18: direct uploads verified and SIMD unpacking installed
 
 The journal from the direct upload trial contains eight successful direct b3a8 uploads. The display startup test passed and at least 240 flips retired without DMA or MMU faults. All 10 sampled buffers matched. The user returned to TWRP. No separate visual report was given. Raw SHA-256 774afdd4894b6e0021ae9ab71e3a8a07f9cf2cc0fa606d87a755d851435b859b, ring total 602453 bytes, flush 18.
