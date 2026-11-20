@@ -84,6 +84,13 @@ def build(canvas=(FB_W, FB_H)):
     set_prop(chosen, 'dram-size', mkadt.u64(DRAM_SIZE))
     set_prop(chosen, 'firmware-version', mkadt.cstr('dreamlte-entry'))
     set_prop(chosen, 'system-firmware-version', mkadt.cstr('dreamlte-entry'))
+    # S8_ACPM_FW=FILE: Samsung's exynos8895_acpm_dvfs.fw (not redistributable,
+    # kept on the user's PC) for the kernel's ACPM DVFS loader (patch 0137).
+    fw = os.environ.get('S8_ACPM_FW')
+    if fw:
+        blob = Path(fw).read_bytes()
+        assert len(blob) % 4 == 0 and 0 < len(blob) <= 0x10000, 'S8_ACPM_FW: unexpected size'
+        set_prop(chosen, 's8-acpm-dvfs-fw', blob)
     cpus = child(root, 'cpus')
     cpu0 = child(cpus, 'cpu0')
     for key, value in cpu_node(0):

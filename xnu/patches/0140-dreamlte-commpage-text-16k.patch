@@ -1,0 +1,21 @@
+diff --git a/osfmk/arm/pmap/pmap.c b/osfmk/arm/pmap/pmap.c
+--- a/osfmk/arm/pmap/pmap.c
++++ b/osfmk/arm/pmap/pmap.c
+@@ -10888,6 +10888,17 @@ pmap_create_commpages(vm_map_address_t *kernel_data_addr, vm_map_address_t *kern
+ 
+ 	do {
+ 		int text_leaf_index = random() % num_ptes;
++#if defined(SWEET)
++		/*
++		 * Galaxy S8: 4K hardware pages under 16K VM pages. A random 4K leaf
++		 * left the text commpage off a 16K boundary 3 boots out of 4, and
++		 * write_pte_fast() panicked ("PTE write is unaligned") right after
++		 * AMFI registration. Keep the slide on 16K.
++		 */
++		if (TEST_PAGE_RATIO_4) {
++			text_leaf_index &= ~3;
++		}
++#endif
+ 
+ 		// Generate a VA for the commpage text with the same root and twig index as data
+ 		// comm page, but with new leaf index we've just generated.
