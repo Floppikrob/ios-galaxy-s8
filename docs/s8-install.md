@@ -79,7 +79,8 @@ The kernel uses the last 4 MiB of USERDATA as its log ring; a 16 GB image does n
 bash tools/dreamlte/make-boot.sh xnu/out/kernel.development.a5xelte backup/BOOT.img s8-ios-boot.img \
   debug=0xc serial=3 cpus=4 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 ufsroot=USERDATA \
   unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1 \
-  launchd_unsecure_cache=1 wdt=-1 a5touchprobe=0 a5fb_keep_on=1 a5fb_noconsole=1 sweetfb_native=1
+  launchd_unsecure_cache=1 wdt=-1 a5touchprobe=0 a5fb_keep_on=1 a5fb_noconsole=1 sweetfb_native=1 \
+  vm_compression_limit=1048576
 ```
 
 The script builds the ADT (`tools/mkadt_dreamlte.py`) and the payload (`tools/mkpayload.py`), compiles the `shim/dreamlte` loader and packs BOOT with the stock header.
@@ -129,3 +130,4 @@ Restore BOOT and Data from the TWRP backup (or `dd` the saved `BOOT.img` back to
 | `a5touchprobe=0` | Disable the Galaxy A5 touch probe (it aborts on the S8) |
 | `wdt=-1 wdt_test=no_user_checkin` | No watchdogs (the system is slow) |
 | `ignition_level=1 launchd_unsecure_cache=1` | Load the shared cache from the cryptex without signature checks |
+| `vm_compression_limit=1048576` | Cap the compressor at 4 GiB (pages). The macOS-config kernel otherwise reserves 16x RAM of kernel VA for it, which does not fit with more than 1 GiB of RAM (`kmem_range_init` panic) |
