@@ -1,0 +1,96 @@
+diff --git a/bsd/dev/s8_cpufreq.c b/bsd/dev/s8_cpufreq.c
+index ed5db0b..de1e471 100644
+--- a/bsd/dev/s8_cpufreq.c
++++ b/bsd/dev/s8_cpufreq.c
+@@ -62,8 +62,11 @@ extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+  * it into the SRAM and attaches it (acpm.c plugins_init(), firmware
+  * exynos8895_acpm_dvfs.fw shipped in its firmware/ directory). That binary
+  * is not part of this repository: a local s8_acpm_dvfs_fw.h (const uint8_t
+- * s8_acpm_dvfs_fw[]) supplies it, else nothing is loaded.
++ * s8_acpm_dvfs_fw[]) supplies it, or the ADT property /chosen
++ * "s8-acpm-dvfs-fw" (tools/mkadt_dreamlte.py with S8_ACPM_FW=FILE), so a CI
++ * kernel can use a copy that stays on the user's PC; else nothing is loaded.
+  */
++#include <pexpert/device_tree.h>
+ #if __has_include("s8_acpm_dvfs_fw.h")
+ #include "s8_acpm_dvfs_fw.h"
+ #define HAVE_DVFS_FW 1
+@@ -239,10 +242,38 @@ sram_string(uint32_t off, char *out, unsigned n)
+ 	out[i] = 0;
+ }
+ 
++/* The DVFS plugin binary: built in, else the ADT's /chosen "s8-acpm-dvfs-fw". */
++static const uint8_t *dvfs_fw;
++static uint32_t dvfs_fw_len;
++
++static void
++dvfs_fw_find(void)
++{
++#if HAVE_DVFS_FW
++	dvfs_fw = s8_acpm_dvfs_fw;
++	dvfs_fw_len = (uint32_t)sizeof(s8_acpm_dvfs_fw);
++	LOG("dvfs plugin: built in, %u bytes", dvfs_fw_len);
++#else
++	DTEntry chosen;
++	void const *prop = NULL;
++	unsigned int size = 0;
++	if (SecureDTLookupEntry(NULL, "/chosen", &chosen) == kSuccess &&
++	    SecureDTGetProperty(chosen, "s8-acpm-dvfs-fw", &prop, &size) == kSuccess &&
++	    size >= 4 && (size & 3) == 0) {
++		dvfs_fw = (const uint8_t *)prop;
++		dvfs_fw_len = size;
++		LOG("dvfs plugin: from the ADT, %u bytes", dvfs_fw_len);
++	} else {
++		LOG("dvfs plugin: none (no s8_acpm_dvfs_fw.h, no ADT /chosen s8-acpm-dvfs-fw)");
++	}
++#endif
++}
++
+ /* List the plugins; load and attach the DVFS one if it is not attached yet. */
+ static void
+ plugins(void)
+ {
++	dvfs_fw_find();
+ 	uint32_t table = sr(INITDATA_OFF), count = sr(INITDATA_OFF + 4);
+ 	for (uint32_t i = 0; i < count && i < 16; i++) {
+ 		uint32_t b = table + i * PLUGIN_BYTES;
+@@ -260,25 +291,24 @@ plugins(void)
+ 			LOG("plugin %u: detach: %d (reply %#x %#x), attached now %u", i, e, cmd[0], cmd[1], sram[b + 28]);
+ 			continue;
+ 		}
+-#if HAVE_DVFS_FW
+-		if (attached || !stay || strncmp(n, "exynos8895_acpm_dvfs", 20) != 0) {
++		if (dvfs_fw == NULL || attached || !stay || strncmp(n, "exynos8895_acpm_dvfs", 20) != 0) {
+ 			continue;
+ 		}
+ 		uint32_t at = base & ~1u;
+-		if (at == 0 || at + sizeof(s8_acpm_dvfs_fw) > SRAM_SIZE) {
+-			LOG("plugin %u: %u bytes do not fit at %#x", i, (unsigned)sizeof(s8_acpm_dvfs_fw), at);
++		if (at == 0 || at + dvfs_fw_len > SRAM_SIZE) {
++			LOG("plugin %u: %u bytes do not fit at %#x", i, dvfs_fw_len, at);
+ 			continue;
+ 		}
+-		for (uint32_t o = 0; o < sizeof(s8_acpm_dvfs_fw); o += 4) {
++		for (uint32_t o = 0; o < dvfs_fw_len; o += 4) {
+ 			uint32_t w;
+-			memcpy(&w, s8_acpm_dvfs_fw + o, 4);
++			memcpy(&w, dvfs_fw + o, 4);
+ 			sw(at + o, w);
+ 		}
+ 		load_channel(ACPM_CHANNEL);
+ 		uint32_t cmd[4] = { DP_ATTACH | (id << PROTO_ID_SHIFT), 0, 0, 0 };
+ 		int e = acpm_call(cmd);
+ 		LOG("plugin %u: %u bytes loaded at %#x, attach: %d (reply %#x %#x), attached now %u", i,
+-		    (unsigned)sizeof(s8_acpm_dvfs_fw), at, e, cmd[0], cmd[1], sram[b + 28]);
++		    dvfs_fw_len, at, e, cmd[0], cmd[1], sram[b + 28]);
+ 		fvmap_off = at + size;  /* cal-if fvmap_init(base + size) */
+ 		/* its channel: the one whose owner mask names this plugin (the DT's 5 is not it here) */
+ 		for (unsigned c = 0; c < chans_count; c++) {
+@@ -288,7 +318,6 @@ plugins(void)
+ 				break;
+ 			}
+ 		}
+-#endif
+ 	}
+ }
+ 
