@@ -12,7 +12,7 @@ This project ports Apple's open-source XNU kernel (xnu-8796, the iOS 16 generati
 | --- | --- |
 | Boot | Stock Samsung S-Boot → our loader in the BOOT partition → XNU. Recovery (TWRP), EFS and the bootloaders are not touched |
 | CPU | 4 Cortex-A53 cores (MPIDR 0x100–0x103), started through the PMU + PSCI. 4 KiB pages, GIC-400, 26 MHz timer |
-| Memory | 512 MiB of the upper bank at `0x880000000` |
+| Memory | 2 GiB: the whole upper bank at `0x880000000` (needs `vm_compression_limit=1048576`) |
 | Storage | Own Exynos UFS driver. The iOS root is HFS+ in USERDATA (`sda24`), read/write |
 | iOS userland | iPhone X 16.7.16 root filesystem and shared cache; launchd, daemons, backboardd, SpringBoard |
 | Display | S-Boot framebuffer, 1440×2960 (DECON in command mode). CoreAnimation renders on the CPU |
@@ -41,7 +41,7 @@ This project ports Apple's open-source XNU kernel (xnu-8796, the iOS 16 generati
 - [ ] 1125×2436 mode without the hang
 - [x] RTC (date/time)
 - [ ] Battery stub or driver (MAX77865 fuel gauge)
-- [ ] More RAM (512 MiB of 4 GiB today)
+- [x] 2 GiB of RAM (the upper bank); the other 2 GiB sit in banks with firmware carve-outs
 - [ ] Vibration motor, backlight brightness
 - [ ] Wi-Fi (BCM4361): a large job
 
