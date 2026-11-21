@@ -1,0 +1,31 @@
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -1626,7 +1626,26 @@
+ 	s->as_fault = s8gpu_rd(S8GPU_AS0 + 0x1c);
+ 	s->as_fault_addr = s8gpu_rd(S8GPU_AS0 + 0x20) | (uint64_t)s8gpu_rd(S8GPU_AS0 + 0x24) << 32;
+ 	if (!(irq & (done | fail))) {
+-		s8gpu_wr(js + 0x60, 3);                 /* JS_COMMAND_HARD_STOP */
++		/*
++		 * Where the chain stopped (first Metal draws, 2026-11-21: vertex/
++		 * tiler chains stay ACTIVE): the job the slot is on, the last one,
++		 * GPU status and fault registers.
++		 */
++		if (s8gpu_user_faults < 16) {
++			IOLog("S8 MALI: slot %u timeout: head 0x%llx tail 0x%llx js 0x%x config 0x%x "
++			    "gpu_status 0x%x gpu_fault 0x%x at 0x%llx js_state 0x%x\n", s->slot,
++			    s8gpu_rd(js + 0x00) | (uint64_t)s8gpu_rd(js + 0x04) << 32,
++			    s8gpu_rd(js + 0x08) | (uint64_t)s8gpu_rd(js + 0x0c) << 32,
++			    s8gpu_rd(js + 0x24), s8gpu_rd(js + 0x18), s8gpu_rd(0x34), s8gpu_rd(0x3c),
++			    s8gpu_rd(0x40) | (uint64_t)s8gpu_rd(0x44) << 32, s8gpu_rd(0x100c));
++		}
++		/*
++		 * HARD_STOP goes to JS_COMMAND (+0x20); +0x60 is JS_COMMAND_NEXT,
++		 * so the old write left the job running and every later job on
++		 * the slot timed out behind it.
++		 */
++		s8gpu_wr(js + 0x60, 0);                 /* JS_COMMAND_NEXT: NOP */
++		s8gpu_wr(js + 0x20, 3);                 /* JS_COMMAND: HARD_STOP */
+ 		s8gpu_wait(S8GPU_JOB_IRQ_RAWSTAT, done | fail, done | fail, 100000);
+ 		s->result = 2;
+ 	} else {

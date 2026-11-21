@@ -1,0 +1,96 @@
+diff --git a/osfmk/arm/commpage/commpage.c b/osfmk/arm/commpage/commpage.c
+--- a/osfmk/arm/commpage/commpage.c
++++ b/osfmk/arm/commpage/commpage.c
+@@ -53,6 +53,8 @@
+ #include <libkern/OSAtomic.h>
+ #include <stdatomic.h>
+ #include <kern/remote_time.h>
++
++extern uint64_t ml_user_timebase_adjust(void);
+ #include <machine/atomic.h>
+ #include <machine/machine_remote_time.h>
+ #include <machine/machine_routines.h>
+@@ -725,7 +727,8 @@ void
+ commpage_update_timebase(void)
+ {
+ 	if (commPagePtr) {
+-		*((uint64_t*)(_COMM_PAGE_TIMEBASE_OFFSET + _COMM_PAGE_RW_OFFSET)) = rtclock_base_abstime;
++		/* ml_user_timebase_adjust(): CNTPCT - CNTVCT where the kernel counts on CNTPCT (S8). */
++		*((uint64_t*)(_COMM_PAGE_TIMEBASE_OFFSET + _COMM_PAGE_RW_OFFSET)) = rtclock_base_abstime + ml_user_timebase_adjust();
+ 	}
+ }
+ 
+diff --git a/osfmk/arm64/machine_routines.c b/osfmk/arm64/machine_routines.c
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -461,10 +461,58 @@ user_cont_hwclock_allowed(void)
+  *
+  */
+ 
++#if defined(DREAMLTE)
++/*
++ * Galaxy S8: XNU counts Mach time on CNTPCT_EL0 here (0112), so user space
++ * has gone through the mach_absolute_time trap: 12% of backboardd's busy
++ * time while CoreAnimation draws. Boot-arg s8utb=1 lets user space read
++ * CNTVCT_EL0 instead; the commpage offset carries CNTPCT - CNTVCT
++ * (ml_user_timebase_adjust), and each CPU logs that difference so a CPU
++ * with another firmware offset shows up (S8UTB lines).
++ */
++static int s8_utb = -1;
++
++static bool
++s8_user_timebase(void)
++{
++	if (s8_utb < 0) {
++		int v = 0;
++		PE_parse_boot_argn("s8utb", &v, sizeof(v));
++		s8_utb = v ? 1 : 0;
++	}
++	return s8_utb == 1;
++}
++
++static uint64_t
++s8_cntpct_minus_cntvct(void)
++{
++	uint64_t v1, p, v2;
++	__builtin_arm_isb(ISB_SY);
++	v1 = __builtin_arm_rsr64("CNTVCT_EL0");
++	__builtin_arm_isb(ISB_SY);
++	p = __builtin_arm_rsr64("CNTPCT_EL0");
++	__builtin_arm_isb(ISB_SY);
++	v2 = __builtin_arm_rsr64("CNTVCT_EL0");
++	return p - (v1 + (v2 - v1) / 2);
++}
++#endif
++
++uint64_t
++ml_user_timebase_adjust(void)
++{
++#if defined(DREAMLTE)
++	return s8_user_timebase() ? s8_cntpct_minus_cntvct() : 0;
++#else
++	return 0;
++#endif
++}
++
+ uint8_t
+ user_timebase_type(void)
+ {
+-#if defined(A5XELTE)
++#if defined(DREAMLTE)
++	return s8_user_timebase() ? USER_TIMEBASE_SPEC : USER_TIMEBASE_NONE;
++#elif defined(A5XELTE)
+ 	/* CNTVCT has different firmware offsets across Exynos7580 CPUs. */
+ 	return USER_TIMEBASE_NONE;
+ #elif HAS_ACNTVCT
+@@ -2323,6 +2371,10 @@ void
+ wfe_timeout_init(void)
+ {
+ 	_enable_timebase_event_stream(arm64_eventi);
++#if defined(DREAMLTE)
++	printf("S8UTB: cpu %d cntpct-cntvct %lld user timebase %s\n", cpu_number(),
++	    (long long)s8_cntpct_minus_cntvct(), s8_user_timebase() ? "on" : "off");
++#endif
+ }
+ 
+ /**

@@ -1,0 +1,45 @@
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -1646,7 +1646,40 @@
+ 		 */
+ 		s8gpu_wr(js + 0x60, 0);                 /* JS_COMMAND_NEXT: NOP */
+ 		s8gpu_wr(js + 0x20, 3);                 /* JS_COMMAND: HARD_STOP */
+-		s8gpu_wait(S8GPU_JOB_IRQ_RAWSTAT, done | fail, done | fail, 100000);
++		bool stopped = s8gpu_wait(S8GPU_JOB_IRQ_RAWSTAT, done | fail, done | fail, 100000);
++		/*
++		 * 2026-11-21: the hard stop does not end a vertex job that hangs
++		 * (the slot stays ACTIVE on it), so every later job waits behind
++		 * it. Soft-reset the GPU and bring it back as s8gpu_init does,
++		 * keeping the page tables (the mappings of /dev/s8mali clients).
++		 */
++		if (!stopped || (s8gpu_rd(js + 0x24) & 0xff) == 0x08) {
++			s8gpu_wr(0x024, 0xffffffffu);           /* GPU_IRQ_CLEAR */
++			s8gpu_wr(0x030, 1);                     /* SOFT_RESET */
++			bool reset = s8gpu_wait(0x020, 1u << 8, 1u << 8, 100000);
++			s8gpu_wr(0x024, 0xffffffffu);
++			uint32_t l2 = s8gpu_rd(0x120), tiler = s8gpu_rd(0x110);
++			s8gpu_wr(0x1a0, l2);
++			bool l2_on = s8gpu_wait(0x160, l2, l2, 100000);
++			s8gpu_wr(0x190, tiler);
++			bool tiler_on = s8gpu_wait(0x150, tiler, tiler, 100000);
++			s8gpu_wr(0x180, s8gpu_shaders);
++			bool sh_on = s8gpu_wait(0x140, s8gpu_shaders, s8gpu_shaders, 100000);
++			s8gpu_wr(S8GPU_AS0 + 0x00, (uint32_t)S8GPU_PT_PA);
++			s8gpu_wr(S8GPU_AS0 + 0x04, (uint32_t)(S8GPU_PT_PA >> 32));
++			s8gpu_wr(S8GPU_AS0 + 0x08, 0x88888888u);
++			s8gpu_wr(S8GPU_AS0 + 0x0c, 0x88888888u);
++			s8gpu_wr(S8GPU_AS0 + 0x30, 6);
++			s8gpu_wr(S8GPU_AS0 + 0x34, 0);
++			s8gpu_wr(S8GPU_AS0 + 0x18, 1);          /* AS_COMMAND_UPDATE */
++			bool as_on = s8gpu_wait(S8GPU_AS0 + 0x28, 1, 0, 100000);
++			s8gpu_wr(S8GPU_JOB_IRQ_CLEAR, 0xffffffffu);
++			s8gpu_wr(0x2004, 0xffffffffu);          /* MMU_IRQ_CLEAR */
++			if (s8gpu_user_faults < 16) {
++				IOLog("S8 MALI: slot %u still active after HARD_STOP: GPU reset %d l2 %d tiler %d "
++				    "shaders %d as0 %d\n", s->slot, reset, l2_on, tiler_on, sh_on, as_on);
++			}
++		}
+ 		s->result = 2;
+ 	} else {
+ 		s->result = (irq & fail) ? 1 : 0;
