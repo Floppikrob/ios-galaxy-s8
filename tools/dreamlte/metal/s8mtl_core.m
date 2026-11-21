@@ -15,6 +15,19 @@ uint64_t mach_absolute_time(void);
 static int s8_dev = -1;
 static unsigned s8_forwarded;
 
+/*
+ * SpringBoard aborted in a loop in MPSLibrary::MPSKey_Compile ("MPSKernel
+ * MTLComputePipelineStateCache unable to load function ...",
+ * MTLReportFailure -> abort): MetalPerformanceShaders has no kernels for
+ * this device. Metal reads MTL_ERROR_MODE when it reports a failure, so a
+ * process that loads this plugin logs such failures instead of aborting.
+ */
+int setenv(const char *, const char *, int);
+__attribute__((constructor)) static void s8_error_mode(void)
+{
+	setenv("MTL_ERROR_MODE", "nslog", 0);
+}
+
 int s8_fd(void)
 {
 	if (s8_dev < 0)
