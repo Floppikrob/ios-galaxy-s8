@@ -1,0 +1,22 @@
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -1173,8 +1173,16 @@
+ #define S8GPU_PANEL_SIZE        (5760ULL * 2960)
+ /* GPU memory for iOS programs (/dev/s8mali): free RAM of the high bank,
+  * mapped GPU VA = PA. */
+-#define S8GPU_HEAP_PA           0x8b0000000ULL
+-#define S8GPU_HEAP_SIZE         0x20000000ULL                   /* 512 MiB */
++/*
++ * 0x8b0000000 (512 MiB) was free with XNU on 512 MiB; with XNU on most of
++ * the bank (S8_DRAM_MIB=2040) it is XNU's memory and the first Metal boot
++ * panicked in pmap_enter_pv ("IOMemoryDescriptor physical with managed
++ * page 0x8b0000000"). The heap is now the 256 MiB below the blob/page
++ * tables (S8_BLIT_RAM_PA): boot with S8_DRAM_MIB<=1784 when /dev/s8mali
++ * is used (s8metal=1).
++ */
++#define S8GPU_HEAP_SIZE         0x10000000ULL                   /* 256 MiB */
++#define S8GPU_HEAP_PA           (S8_BLIT_RAM_PA - S8GPU_HEAP_SIZE)  /* 0x8ef800000 */
+ #define S8GPU_HEAP_UNIT         0x10000ULL                      /* 64 KiB */
+ #define S8GPU_HEAP_UNITS        (S8GPU_HEAP_SIZE / S8GPU_HEAP_UNIT)
+ #define S8GPU_ALLOCS            256

@@ -730,3 +730,55 @@ built in CI or booted yet.
   S8MALI_MAP_SURFACE), boot-50 command line, overlay = bundle with the draw
   path + `quartzcore.s8sc`. Boot twice: the overlay installs on the first
   boot, the plugin is used from the second.
+
+## User timebase, GPU memory with 2 GiB XNU, Metal stage 3 on the phone (2026-11-21, Dino42Git fork)
+
+Booted on a G950F with XNU on 2040 MiB (`S8_DRAM_MIB=2040`), 8 cores, ACPM
+clocks, GPU present (`s8gpu=1 sweetfb_gpu=1`).
+
+- `0141`: the present blob and the Mali page tables move to the last 8 MiB
+  of the bank (0x8ff800000); 0x8a0000000 is XNU memory once XNU has more
+  than 512 MiB. The GPU still sees the blob at `S8_BLIT_BASE_PA`.
+- `0144`-`0146` (boot-arg `s8utb=1`): user space reads CNTVCT directly
+  (USER_TIMEBASE_SPEC) instead of the `mach_absolute_time` trap. Measured
+  CNTPCT-CNTVCT on all eight cores: 0 or 1 tick (`S8UTB: 8 cpus, spread 1
+  ticks (same)`), so the commpage offset is 0. backboardd profile: the trap
+  went from ~10-12 % of its busy samples to 0. 0145/0146 fix two panics of
+  0144's logging (printf before the boot CPU has a thread; printf with
+  interrupts off on the secondaries): the offsets are recorded per CPU and
+  printed from `ml_cpu_init_completed`.
+- `0148`: the `/dev/s8mali` heap was a fixed 512 MiB at 0x8b0000000, XNU
+  memory with `S8_DRAM_MIB=2040` (first Metal boot: `IOMemoryDescriptor
+  physical with managed page 0x8b0000000`, then pmap_enter_pv panic). It is
+  now 256 MiB right below the blob RAM (0x8ef800000); boot Metal with
+  `S8_DRAM_MIB<=1784`.
+- `0149`: HARD_STOP went to JS_COMMAND_NEXT (+0x60), so a hung job kept its
+  slot and every later job timed out behind it; it now goes to JS_COMMAND
+  (+0x20). A timeout logs JS_HEAD/TAIL/STATUS and the GPU fault registers.
+- `0150`: a vertex job that hangs survives HARD_STOP: soft-reset the GPU
+  and bring it back (power, AS0) keeping the page tables.
+- Metal plugin / air2nir fixes (stage 3 on the phone, overlay as above):
+  - air2nir: 8-bit ALU lowered to 32 bit as 16 bit already was
+    (`bi_pack_add_swz_v4i8 swz0 < 8` on fixed_frag_lph_cph/cpf); mismatched
+    operand sizes (frem in path_cubic/path_stroke_curve) coerced. Cache:
+    133/135 (all but inplace_copy: image writes).
+  - air2nir: vertex inputs used driver_location = VERT_ATTRIB_GENERIC0 + n
+    (15 + n) as the attribute index, past the driver's table (and 16/17 are
+    vertex/instance ID): every vertex job hung. Now n.
+  - plugin: RSD texture/sampler/UBO counts declared as the full tables
+    (the compiler leaves textures/samplers at 0: ADDR_RANGE_FAULT on the
+    first fragment job); attribute table padded to the attributes the
+    vertex shader reads (fixed_vert reads 5 with a 4-entry descriptor: hang);
+    thread storage sized for 2048 threads per core (256 left it ~80 KiB
+    short: MMU write fault after the TLS allocation); `MTL_ERROR_MODE=nslog`
+    in every process that loads the plugin (SpringBoard aborted in a loop
+    in MPSLibrary::MPSKey_Compile).
+  - Result on the phone: a self-test draw (test shaders, texture x colour)
+    gives exactly the expected pixels, as separate vertex/tiler jobs and as
+    a chain. CoreAnimation's own draws (fixed_vert + fixed_frag with
+    `fc_framebuffer_fetch=1`) now finish the vertex and tiler jobs for the
+    first draws, but its fragment jobs stop with INSTR_INVALID_ENC (0x51)
+    or IMPRECISE_FAULT (0x5b), and a third draw per pass (std_vert1 +
+    luma_boost) still hangs on the tiler. The screen stays black. Next:
+    narrow fixed_frag down (framebuffer fetch / LD_TILE conversion words,
+    function-constant branches) in the self-test.

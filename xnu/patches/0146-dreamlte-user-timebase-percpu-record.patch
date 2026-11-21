@@ -1,0 +1,105 @@
+diff --git a/osfmk/arm64/machine_routines.c b/osfmk/arm64/machine_routines.c
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -497,6 +497,59 @@
+ }
+ #endif
+ 
++#if defined(DREAMLTE)
++/*
++ * Secondary CPUs reach wfe_timeout_init with interrupts off, where printf
++ * panics ("Console I/O from interrupt-disabled context"). They only record
++ * their difference here; ml_cpu_init_completed() prints all eight later.
++ */
++#define S8UTB_NCPU  8
++#define S8UTB_NOISE 16
++static int64_t s8utb_diff[S8UTB_NCPU];
++static uint64_t s8utb_mpidr[S8UTB_NCPU];
++static uint32_t s8utb_seen;
++
++static void
++s8utb_record(void)
++{
++	uint64_t mpidr = __builtin_arm_rsr64("MPIDR_EL1") & 0xffffffULL;
++	unsigned int i = (unsigned int)(((mpidr >> 8) & 0xff) * 4 + (mpidr & 0xff));
++	if (i >= S8UTB_NCPU) {
++		return;
++	}
++	s8utb_diff[i] = (int64_t)s8_cntpct_minus_cntvct();
++	s8utb_mpidr[i] = mpidr;
++	__atomic_fetch_or(&s8utb_seen, 1u << i, __ATOMIC_RELEASE);
++}
++
++static void
++s8utb_report(void)
++{
++	uint32_t seen = __atomic_load_n(&s8utb_seen, __ATOMIC_ACQUIRE);
++	int64_t lo = 0, hi = 0;
++	bool first = true;
++	for (unsigned int i = 0; i < S8UTB_NCPU; i++) {
++		if (!(seen & (1u << i))) {
++			printf("S8UTB: slot %u not recorded\n", i);
++			continue;
++		}
++		printf("S8UTB: mpidr %#llx cntpct-cntvct %lld\n",
++		    s8utb_mpidr[i], (long long)s8utb_diff[i]);
++		if (first || s8utb_diff[i] < lo) {
++			lo = s8utb_diff[i];
++		}
++		if (first || s8utb_diff[i] > hi) {
++			hi = s8utb_diff[i];
++		}
++		first = false;
++	}
++	printf("S8UTB: %u cpus, spread %lld ticks (%s), user timebase %s\n",
++	    (unsigned)__builtin_popcount(seen), (long long)(hi - lo),
++	    (hi - lo) <= 2 * S8UTB_NOISE ? "same" : "DIFFERENT",
++	    s8_user_timebase() ? "on" : "off");
++}
++#endif
++
+ uint64_t
+ ml_user_timebase_adjust(void)
+ {
+@@ -504,6 +557,10 @@
+ 	uint64_t d = s8_cntpct_minus_cntvct();
+ 	printf("S8UTB: boot mpidr %#llx cntpct-cntvct %lld user timebase %s\n",
+ 	    __builtin_arm_rsr64("MPIDR_EL1") & 0xffffffULL, (long long)d, s8_user_timebase() ? "on" : "off");
++	/* A few ticks either way is read latency, not a firmware offset. */
++	if ((int64_t)d >= -S8UTB_NOISE && (int64_t)d <= S8UTB_NOISE) {
++		d = 0;
++	}
+ 	return s8_user_timebase() ? d : 0;
+ #else
+ 	return 0;
+@@ -713,6 +770,11 @@
+ 	if (SCHED(cpu_init_completed) != NULL) {
+ 		SCHED(cpu_init_completed)();
+ 	}
++#if defined(DREAMLTE)
++	if (ml_get_interrupts_enabled()) {
++		s8utb_report();
++	}
++#endif
+ }
+ 
+ /*
+@@ -2376,15 +2438,10 @@
+ 	_enable_timebase_event_stream(arm64_eventi);
+ #if defined(DREAMLTE)
+ 	/*
+-	 * The boot CPU gets here in arm_init, before it has a thread: no
+-	 * cpu_number() or printf yet (0144 panicked in current_percpu_base).
+-	 * ml_user_timebase_adjust() logs the boot CPU's difference later.
++	 * No printf here: the boot CPU has no thread yet (0144 panic) and the
++	 * secondaries run with interrupts off (0145 panic). Record only.
+ 	 */
+-	if (current_thread() != THREAD_NULL) {
+-		printf("S8UTB: mpidr %#llx cntpct-cntvct %lld user timebase %s\n",
+-		    __builtin_arm_rsr64("MPIDR_EL1") & 0xffffffULL,
+-		    (long long)s8_cntpct_minus_cntvct(), s8_user_timebase() ? "on" : "off");
+-	}
++	s8utb_record();
+ #endif
+ }
+ 

@@ -1,0 +1,32 @@
+diff --git a/osfmk/vm/vm_kern.c b/osfmk/vm/vm_kern.c
+--- a/osfmk/vm/vm_kern.c
++++ b/osfmk/vm/vm_kern.c
+@@ -3656,13 +3656,28 @@ kmem_range_init(void)
+ 
+ 	kmem_scramble_ranges();
+ 
++#if defined(SWEET)
++	/*
++	 * sprayqtn_range_size is sane_size / 2 rounded to a page, so its 1/8 is
++	 * not always page aligned: with some kernel sizes the large sprayqtn
++	 * range started at ...6800 and a later kernel mapping there tripped
++	 * "write_pte_fast: PTE write is unaligned". Keep both starts on a
++	 * 16K boundary.
++	 */
++	range_adjustment = (sprayqtn_range_size >> 3) & ~(vm_size_t)PAGE_MAX_MASK;
++#else
+ 	range_adjustment = sprayqtn_range_size >> 3;
++#endif
+ 	kmem_large_ranges[KMEM_RANGE_ID_SPRAYQTN].min_address =
+ 	    kmem_ranges[KMEM_RANGE_ID_SPRAYQTN].min_address + range_adjustment;
+ 	kmem_large_ranges[KMEM_RANGE_ID_SPRAYQTN].max_address =
+ 	    kmem_ranges[KMEM_RANGE_ID_SPRAYQTN].max_address;
+ 
++#if defined(SWEET)
++	range_adjustment = (data_range_size >> 3) & ~(vm_size_t)PAGE_MAX_MASK;
++#else
+ 	range_adjustment = data_range_size >> 3;
++#endif
+ 	kmem_large_ranges[KMEM_RANGE_ID_DATA].min_address =
+ 	    kmem_ranges[KMEM_RANGE_ID_DATA].min_address + range_adjustment;
+ 	kmem_large_ranges[KMEM_RANGE_ID_DATA].max_address =

@@ -1,0 +1,34 @@
+diff --git a/osfmk/arm64/machine_routines.c b/osfmk/arm64/machine_routines.c
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -501,7 +501,10 @@ uint64_t
+ ml_user_timebase_adjust(void)
+ {
+ #if defined(DREAMLTE)
+-	return s8_user_timebase() ? s8_cntpct_minus_cntvct() : 0;
++	uint64_t d = s8_cntpct_minus_cntvct();
++	printf("S8UTB: boot mpidr %#llx cntpct-cntvct %lld user timebase %s\n",
++	    __builtin_arm_rsr64("MPIDR_EL1") & 0xffffffULL, (long long)d, s8_user_timebase() ? "on" : "off");
++	return s8_user_timebase() ? d : 0;
+ #else
+ 	return 0;
+ #endif
+@@ -2372,8 +2375,16 @@ wfe_timeout_init(void)
+ {
+ 	_enable_timebase_event_stream(arm64_eventi);
+ #if defined(DREAMLTE)
+-	printf("S8UTB: cpu %d cntpct-cntvct %lld user timebase %s\n", cpu_number(),
+-	    (long long)s8_cntpct_minus_cntvct(), s8_user_timebase() ? "on" : "off");
++	/*
++	 * The boot CPU gets here in arm_init, before it has a thread: no
++	 * cpu_number() or printf yet (0144 panicked in current_percpu_base).
++	 * ml_user_timebase_adjust() logs the boot CPU's difference later.
++	 */
++	if (current_thread() != THREAD_NULL) {
++		printf("S8UTB: mpidr %#llx cntpct-cntvct %lld user timebase %s\n",
++		    __builtin_arm_rsr64("MPIDR_EL1") & 0xffffffULL,
++		    (long long)s8_cntpct_minus_cntvct(), s8_user_timebase() ? "on" : "off");
++	}
+ #endif
+ }
+ 

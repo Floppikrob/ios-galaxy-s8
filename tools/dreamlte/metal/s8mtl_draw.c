@@ -459,7 +459,11 @@ int s8d_init(void)
 	s8g.null_texture_desc = s8g.statics.gpu + 0x480;
 	s8g.tiler_features = info.tiler_features;
 	s8g.core_id_range = util_last_bit(info.shader_present);
-	s8g.threads_per_core = 256;     /* G71: THREAD_MAX_THREADS */
+	/* 256 left the thread storage too small: the first CoreAnimation
+	 * fragment job wrote ~80 KiB past its end (MMU write fault right after
+	 * the TLS allocation). Size it for the largest per-core thread count
+	 * of Bifrost (2048); it only costs memory. */
+	s8g.threads_per_core = 2048;
 	s8g.state = 1;
 	s8_log("MTL draw: %u shaders in the cache, tiler heap %u MiB, %u cores",
 	    s8g.count, S8_TILER_HEAP >> 20, util_bitcount(info.shader_present));
@@ -655,6 +659,7 @@ struct s8d_pipeline {
 	struct s8d_vertex_attrib attribs[S8D_MAX_ATTRIBS];
 	struct s8d_vertex_layout layouts[S8D_MAX_BUFFERS];
 	unsigned nattribs;
+	unsigned vs_attr_count;         /* attributes the vertex shader reads (RSD) */
 	uint32_t rt_conv[2];                    /* 32-bit, 16-bit */
 	uint32_t tls_size;
 	bool writes_psiz;
@@ -814,7 +819,20 @@ struct s8d_pipeline *s8d_pipeline_new(const struct s8d_pipeline_desc *d, unsigne
 		why = "memory";
 		goto fail;
 	}
-	memcpy(vrsd.cpu, &p->vs->rsd, sizeof(p->vs->rsd));
+	/* The hardware bounds texture/sampler/UBO indices by the RSD counts
+	 * (the compiler leaves textures and samplers at 0); the full tables are
+	 * always bound, so declare them whole. Without it the first fragment
+	 * job on the Mali stopped with ADDR_RANGE_FAULT. */
+	{
+		pan_unpack(&p->vs->rsd, RENDERER_STATE, vrs);
+		p->vs_attr_count = vrs.shader.attribute_count;
+		pan_pack((struct mali_renderer_state_packed *)vrsd.cpu, RENDERER_STATE, cfg) {
+			cfg = vrs;
+			cfg.shader.texture_count = S8_TEX_COUNT;
+			cfg.shader.sampler_count = S8_SAMPLER_COUNT;
+			cfg.properties.uniform_buffer_count = S8_UBO_COUNT;
+		}
+	}
 	p->vs_rsd = vrsd.gpu;
 	p->writes_psiz = p->vs->writes_psiz;
 	p->tls_size = MAX2(p->vs->tls_size, p->fs ? p->fs->tls_size : 0);
@@ -844,6 +862,9 @@ struct s8d_pipeline *s8d_pipeline_new(const struct s8d_pipeline_desc *d, unsigne
 		pan_unpack(&p->fs->rsd, RENDERER_STATE, rs);
 		pan_pack(&p->fs_rsd, RENDERER_STATE, cfg) {
 			cfg = rs;
+			cfg.shader.texture_count = S8_TEX_COUNT;           /* see the vertex RSD note */
+			cfg.shader.sampler_count = S8_SAMPLER_COUNT;
+			cfg.properties.uniform_buffer_count = S8_UBO_COUNT;
 			cfg.multisample_misc.sample_mask = 0xFFFF;
 			cfg.multisample_misc.depth_function = MALI_FUNC_ALWAYS;
 			cfg.multisample_misc.shader_depth_range_fixed = true;
@@ -1385,7 +1406,11 @@ static int s8_attributes(struct s8d_cmdbuf *cb, struct s8d_pipeline *pl, unsigne
     uint64_t *attribs, uint64_t *bufs)
 {
 	*attribs = *bufs = 0;
-	if (pl->nattribs == 0)
+	/* The table covers every attribute the shader reads (fixed_vert reads
+	 * 5 with a 4-attribute vertex descriptor: its vertex job read past the
+	 * table and hung the Mali). Extra ones are constant 0. */
+	unsigned nattr = MAX2(pl->nattribs, pl->vs_attr_count);
+	if (nattr == 0)
 		return 0;
 	int slot_of[S8D_MAX_BUFFERS];
 	unsigned nslots = 0, used[S8D_MAX_BUFFERS];
@@ -1399,7 +1424,7 @@ static int s8_attributes(struct s8d_cmdbuf *cb, struct s8d_pipeline *pl, unsigne
 		}
 	}
 	struct s8_ptr bd = s8_alloc_descs(&cb->arena, nslots * 2 + 1, ATTRIBUTE_BUFFER);
-	struct s8_ptr ad = s8_alloc_descs(&cb->arena, pl->nattribs, ATTRIBUTE);
+	struct s8_ptr ad = s8_alloc_descs(&cb->arena, nattr, ATTRIBUTE);
 	if (!bd.cpu || !ad.cpu)
 		return -1;
 	struct mali_attribute_buffer_packed *bdesc = bd.cpu;
@@ -1429,7 +1454,13 @@ static int s8_attributes(struct s8d_cmdbuf *cb, struct s8d_pipeline *pl, unsigne
 	}
 	memset(&bdesc[nslots * 2], 0, pan_size(ATTRIBUTE_BUFFER));
 	struct mali_attribute_packed *adesc = ad.cpu;
-	for (unsigned i = 0; i < pl->nattribs; i++) {
+	for (unsigned i = 0; i < nattr; i++) {
+		if (i >= pl->nattribs) {
+			pan_pack(&adesc[i], ATTRIBUTE, cfg) {
+				cfg.format = (MALI_CONSTANT << 12) | PAN_V6_SWIZZLE(0, 0, 0, 0);
+			}
+			continue;
+		}
 		const struct s8d_vertex_attrib *a = &pl->attribs[i];
 		enum pipe_format pf = s8_vertex_format(a->format);
 		unsigned b = a->buffer < S8D_MAX_BUFFERS ? a->buffer : 0;
@@ -1714,6 +1745,8 @@ static int s8_preload(struct s8d_cmdbuf *cb, struct s8_pass *p)
 	pan_unpack(&sh->rsd, RENDERER_STATE, rs);
 	pan_pack((struct mali_renderer_state_packed *)rsd.cpu, RENDERER_STATE, cfg) {
 		cfg = rs;
+		cfg.shader.texture_count = 1;           /* its one texture and sampler (RSD bounds) */
+		cfg.shader.sampler_count = 1;
 		cfg.multisample_misc.sample_mask = 0xFFFF;
 		cfg.multisample_misc.depth_function = MALI_FUNC_ALWAYS;
 		cfg.stencil_mask_misc.stencil_mask_front = 0xFF;

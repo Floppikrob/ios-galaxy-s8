@@ -840,6 +840,12 @@ nir_shader *Translator::run()
 			continue;
 		if (a.kind == "air.vertex_input") {
 			nir_variable *v = io_var(nir_var_shader_in, "attr", glsl(t), VERT_ATTRIB_GENERIC0 + a.location);
+			/* The Bifrost back end uses driver_location as the attribute
+			 * descriptor index; the driver's table is indexed by the Metal
+			 * attribute (0..), not VERT_ATTRIB_GENERIC0 + n (15 + n: past
+			 * the table, and 16/17 are vertex/instance ID). With 15 + n
+			 * every vertex job hung the Mali (S8, 2026-11-21). */
+			v->data.driver_location = a.location;
 			vals[&arg] = { nir_load_var(&b, v) };
 		} else if (a.kind == "air.fragment_input") {
 			nir_variable *v = io_var(nir_var_shader_in, a.varying.c_str(), glsl(t), varying_slot(a.varying));
@@ -1261,6 +1267,21 @@ void Translator::emit(Instruction &i)
 	Type *t = i.getType();
 	if (auto *bo = dyn_cast<BinaryOperator>(&i)) {
 		nir_def *x = def(bo->getOperand(0)), *y = def(bo->getOperand(1));
+		if (x->bit_size != y->bit_size && x->bit_size > 1 && y->bit_size > 1) {
+			/* path_cubic_vert/path_stroke_curve_vert reach an frem with
+			 * operands of two sizes (nir_fmod assertion): log it and use
+			 * the result type's size for both. */
+			std::string s;
+			raw_string_ostream os(s);
+			bo->print(os);
+			fprintf(stderr, "air2nir: size mismatch %u/%u in%s\n", x->bit_size, y->bit_size, os.str().c_str());
+			unsigned w = bits(t);
+			bool fl = bo->getType()->isFPOrFPVectorTy();
+			if (x->bit_size != w)
+				x = fl ? nir_f2fN(&b, x, w) : nir_u2uN(&b, x, w);
+			if (y->bit_size != w)
+				y = fl ? nir_f2fN(&b, y, w) : nir_u2uN(&b, y, w);
+		}
 		switch (bo->getOpcode()) {
 		case Instruction::Add: r = nir_iadd(&b, x, y); break;
 		case Instruction::Sub: r = nir_isub(&b, x, y); break;
@@ -1562,10 +1583,12 @@ static unsigned s8_lower16(const nir_instr *instr, void *data)
 	/* conversions keep their sizes (they are the 16/32-bit boundary) */
 	if (nir_op_infos[alu->op].is_conversion || nir_op_is_vec_or_mov(alu->op))
 		return 0;
-	if (alu->def.bit_size == 16)
+	/* 8-bit too: Mesa's Bifrost packer cannot encode some v4i8 swizzles
+	 * either (bi_pack_add_swz_v4i8 "swz0 < 8" on fixed_frag_lph_cph/cpf). */
+	if (alu->def.bit_size == 16 || alu->def.bit_size == 8)
 		return 32;
 	for (unsigned i = 0; i < nir_op_infos[alu->op].num_inputs; i++)
-		if (nir_src_bit_size(alu->src[i].src) == 16)
+		if (nir_src_bit_size(alu->src[i].src) == 16 || nir_src_bit_size(alu->src[i].src) == 8)
 			return 32;
 	return 0;
 }
@@ -1634,6 +1657,8 @@ static nir_variable *test_var(nir_shader *s, nir_variable_mode mode, const char 
 	nir_variable *v = nir_variable_create(s, mode, t, name);
 	v->data.location = location;
 	v->data.driver_location = location;
+	if (mode == nir_var_shader_in && s->info.stage == MESA_SHADER_VERTEX)
+		v->data.driver_location = location - VERT_ATTRIB_GENERIC0;   /* see the vertex_input note */
 	return v;
 }
 
