@@ -1,0 +1,76 @@
+diff --git a/bsd/kern/sweet_amfi.c b/bsd/kern/sweet_amfi.c
+--- a/bsd/kern/sweet_amfi.c
++++ b/bsd/kern/sweet_amfi.c
+@@ -33,6 +33,7 @@
+ #include <kern/startup.h>
+ #include <libkern/amfi/amfi.h>
+ #include <mach/kern_return.h>
++#include <pexpert/pexpert.h>
+ #include <sys/codesign.h>
+ #include <sys/mount.h>
+ #include <sys/priv.h>
+@@ -323,8 +324,55 @@
+ 	}
+ }
+ 
++/*
++ * User space reaches AMFI through __mac_syscall("AMFI", op, arg) (libmis,
++ * AppleMobileFileIntegrity.framework, libsystem_trace, Security). With the
++ * policy named PORT_NAME " AMFI" every call failed with "Policy not found";
++ * installd then could not tell whether code signing enforcement is on and
++ * failed every app signature check (MIS 0xe8008001), staged system apps
++ * included. Ops (iOS 16.7 shared cache):
++ *   90/91 dyld policy, 95 cdhash in trust cache, 96 boot-arg state,
++ *   97-100 local signing keys, 101 load trust cache.
++ * Only 96 is answered: the value of boot-arg s8amfi_bootargs (default 0,
++ * "enforcement on"). installd treats (state & 0x86) != 0 as "code signing
++ * enforcement is disabled": ad hoc signatures allowed, no trust cache
++ * presence check (there is no trust cache in this kernel). Other ops keep
++ * failing (ENOSYS), as before. First use of each op is logged.
++ */
++static uint64_t sweet_amfi_seen;
++static uint64_t sweet_amfi_bootargs;
++static int sweet_amfi_bootargs_read;
++
++static int
++sweet_amfi_syscall(struct proc *p, int call, user_addr_t arg)
++{
++	if (call >= 64 && call < 128 && !(sweet_amfi_seen & (1ULL << (call - 64)))) {
++		sweet_amfi_seen |= 1ULL << (call - 64);
++		char name[32];
++		proc_name(proc_pid(p), name, sizeof(name));
++		printf(PORT_NAME " AMFI: %s op %d\n", name, call);
++	}
++	switch (call) {
++	case 96: {      /* amfi_interface_query_bootarg_state(uint64_t *) */
++		if (!sweet_amfi_bootargs_read) {
++			uint64_t v = 0;
++			if (PE_parse_boot_argn("s8amfi_bootargs", &v, sizeof(v))) {
++				sweet_amfi_bootargs = v;
++			}
++			sweet_amfi_bootargs_read = 1;
++			printf(PORT_NAME " AMFI: boot-arg state 0x%llx\n", sweet_amfi_bootargs);
++		}
++		uint64_t state = sweet_amfi_bootargs;
++		return copyout(&state, arg, sizeof(state));
++	}
++	default:
++		return ENOSYS;
++	}
++}
++
+ static const struct mac_policy_ops sweet_amfi_mac_ops = {
+ 	.mpo_vnode_check_signature = sweet_amfi_vnode_check_signature,
++	.mpo_policy_syscall = sweet_amfi_syscall,
+ };
+ 
+ /*
+@@ -378,7 +426,7 @@
+ static mac_policy_handle_t sweet_sandbox_mac_handle;
+ 
+ static struct mac_policy_conf sweet_amfi_mac_conf = {
+-	.mpc_name = PORT_NAME " AMFI",
++	.mpc_name = "AMFI",             /* the name user space asks for */
+ 	.mpc_fullname = PORT_NAME " built-in Mobile File Integrity",
+ 	.mpc_ops = &sweet_amfi_mac_ops,
+ };
