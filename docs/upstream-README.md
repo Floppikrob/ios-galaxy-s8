@@ -206,7 +206,7 @@ Not in git: partition backups, live device trees, recovery images, Apple firmwar
 - Touch: Goodix GT9896 at I²C `0x5d` on QUP SE7 (`0xa84000`), powered by PM6150L LDO11 through RPMh.
 - Buttons: power and volume down on the PM6150 PON block, volume up on PM6150L GPIO2 (SPMI SID 4).
 
-More in [`NOTES.md`](NOTES.md).
+More in [the upstream engineering notes](https://github.com/dipa-studio/ios-sweet/blob/main/NOTES.md).
 
 ## Credits
 

@@ -2,15 +2,11 @@
 
 - For Samsung SM-A510F work, read `A5XELTE_PROGRESS.md` and `docs/a5xelte-migration-map.md` first. Record new device evidence in the former and commit completed changes. Keep private VM addresses, passwords, device dumps and downloaded Apple binaries out of git.
 - Preserve recovery p11, EFS p3 and the existing Linux BOOT checkpoint. Current XNU trials may write only the explicitly authorized BOOT p10; the donor's Xiaomi `fastboot` and USERDATA instructions are not A5XELTE instructions.
-- Keep build success, recovered kernel markers, physical screen reports and iOS runtime behavior as separate claims. `NOTES.md` below is SWEET donor history; do not edit it to imply Samsung behavior.
+- Keep build success, recovered kernel markers, physical screen reports and iOS runtime behavior as separate claims.
 
 ## Original SWEET contributor instructions (donor reference)
 
-- Read `NOTES.md` before starting; it contains the project goal, hardware facts,
-  current blocker, local artifact locations and the next concrete action.
-- The user switches agents frequently. Update the active handoff in `NOTES.md`
-  after each milestone and before stopping. Record commits, CI run IDs, exact
-  build/boot results and unfinished work. Distinguish observations from guesses.
+- Record Samsung S8+ bring-up in `docs/CONTINUE_IOS_S8_PLUS.md` and `docs/dream2lte-fts-transport.md`.
 - Commit completed changes. Use `gh` for GitHub Actions kernel builds and logs.
   Local single-file cross-compiles are useful before spending a CI run.
 - Device bring-up uses temporary `fastboot boot` images. Preserve the Android
