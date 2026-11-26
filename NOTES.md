@@ -696,3 +696,63 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
      cpu_init, before arm_vm_init.
   5. panic hook at top of panic_trap_to_debugger: va_copy + _doprnt(fmt, &copy, sweet_early_putc, 16).
   Verify with tools/xnu-cc.py (compile+symbols) and patch-order simulation before the single CI run.
+
+
+## Galaxy S8+ diagnostic handoff (2026-11-12)
+
+See `docs/dream2lte-fts-transport.md` for current device evidence and the pending FTS transaction-reset test. This is dream2lte evidence, separate from the SWEET donor history above.
+
+
+## Galaxy S8+ local build milestone (2026-11-12)
+
+Local WSL build now links a complete ARM64 kernel. Details and exact limitations: `docs/dream2lte-linux-build.md`. Optional STOP-separated FTS test was locally built and flashed; physical boot/touch result pending. Reset-only CI build booted but still returned ID bytes on READ_EVENT.
+
+
+Galaxy S8+ update: local kernel boot confirmed, STOP split did not fix touch. New Samsung FTS8CD56 reset/ready handshake test flashed; see docs/dream2lte-fts-transport.md. Hardware result pending.
+
+
+Galaxy S8+ update: reset/ready confirmed by event0x10; polling after ID still repeats ID bytes. Optional TX FIFO prefill test built locally and flashed. See docs/dream2lte-fts-transport.md; hardware result pending.
+
+
+Galaxy S8+ research update: user asked to investigate GitHub rather than continue blind trials. Exact board has samsung,scl-clk-stretching. Stock completion check differs from current XNU path; latest successful transfer still reports busy0x2000d. Research and next isolated STOP-completion test documented in docs/dream2lte-fts-transport.md. No additional flash during research turn.
+
+
+Galaxy S8+ update: implemented optional board-specific STOP completion wait, built and flashed. Hardware result pending; exact image/hash/checks in docs/dream2lte-fts-transport.md.
+
+
+Galaxy S8+ update: TWRP touch works. STOP wait passes but iOS still gets ID bytes. Optional normal A2 calibration test locally built/flashed; physical result pending. See docs/dream2lte-fts-transport.md.
+
+
+Galaxy S8+ update: A2 did not resolve touch. Test now probes ID before reset to isolate the repeated-ID response. Built/flashed, hardware result pending; see docs/dream2lte-fts-transport.md.
+
+
+Galaxy S8+ update: probe-before-reset changed repeats fromID toready0x10 but no touch. Added exact Samsung counted FIFO+86 polling path; built/flashed, hardware result pending. See docs/dream2lte-fts-transport.md.
+
+
+Galaxy S8+ milestone: user confirms touchscreen working with counted bulk FIFO and2CPUs. Preserve working image. User requested4CPUs; image prepared changing only cpus, not flashed because ADB absent. See docs/dream2lte-fts-transport.md.
+
+
+Galaxy S8+ update: saved verified working-touch2CPU fullBOOT and log (realdown/up).4CPU test flashed, readback verified, reboot issued. Physical result and4/4CPU log pending; see docs/dream2lte-fts-transport.md.
+
+
+Galaxy S8+ update:4/4CPUs and SGI1 confirmed by fresh log; touch events present. Verified full4CPU BOOT saved. Existing topology/PMU/GIC code reviewed,8CPU image flashed changing only boot count; physical result and8/8log pending. See docs/dream2lte-fts-transport.md.
+
+Galaxy S8+ performance: fresh log confirms8/8CPU. FPS30 profiling trial flashed; user runtime results pending. GPU TWRP identifies Mali-G71MP20; no XNU GPU acceleration yet. See docs/dream2lte-fts-transport.md for exact state.
+
+Galaxy S8+ GPU milestone: hardware WRITE_VALUE test PASS. GPU page tables, descriptor fetch and memory write/readback confirmed; no shader/graphics acceleration yet. Full verified BOOT backup preserved; details docs/dream2lte-fts-transport.md.
+
+Galaxy S8+ GPU milestone: actual Bifrost compute add7 shader PASS (12345678 to1234567f), noMMUfaults. Graphics/UIaccelerationnotyetimplemented. VerifiedfullBOOTbackupandlogpreserved; see docs/dream2lte-fts-transport.md.
+
+S8 GPU display: first frame copied successfully but11.2ms; user explicitly requests optimize WITHOUTdisablingGPU. Persistent AS/buffer reuse build nowflashedGPUcopy1, hardwarepending. Do not performance-rollbackGPU withoutrequest. Exactstate docs/dream2lte-fts-transport.md.
+
+S8 verified persistentGPUblitPASS;840presentmean6.30ms. GPUstaysenabled. ActualXNU RAMstill512MiB(131072x4K),TWRP3.399GiBmanaged. Prior2GiBkmemVAbootstrapblockerneedsreviewbeforeRAMincrease. Details docs/dream2lte-fts-transport.md.
+
+S8 RAM1GiB+GPUcopy8trialflashed,hardwarepending. DefaultgeneratorRAMstill512MiB;trialS8_RAM_MIB1024. GPUremainsenabledperuser. NeedfreshbootpagecountandCOPY8selftest/timings;see docs/dream2lte-fts-transport.md.
+
+S8 RAM1GiBconfirmed262144pages,8CPUs,COPY8selftestPASS,userreportsmuch smoother. Hz60GPUtrialflashed(nowGPUcopy1),resultpending. Knownworking1GiBbackupverified. Details docs/dream2lte-fts-transport.md.
+
+S8 CPU/UIcounterprofiling sweetload1flashed,hardwarepending. Avoidsdeepstackwalkunder tasklock duringmeasurement,keepsGPUcopy8/1GiB/8CPU/60Hz. Need30-40sactiveGUIthenTWRPlog. Details docs/dream2lte-fts-transport.md.
+
+S8 CPUdiagnosis: softwarebackboardd~3.3cores plusReportCrash~1.8cores;locationd65crashes/260s. ActualiOScacheONLYlocationdThrottle3->60s andWireless10->60sappliedinplaceverifiedexactfilebackup;BOOT/GPUunchanged. RootconfigbackupseparatefromBOOT. RuntimebenefitpendingnextUItest;see docs/dream2lte-fts-transport.md.
+
+S8 crash-throttlevalidated:locationd65->4crashes/similar260s;ReportCrashop6reports108/109->19/110;idleoverall1-3percentnow. HeavyCPUsoftwareUI3-4coresstilllags.GPUcopyunchanged6-7msandstillenabled. Nochanges/rebootthischeck;see docs/dream2lte-fts-transport.md.
