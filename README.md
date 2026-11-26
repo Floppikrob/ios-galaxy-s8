@@ -1,4 +1,22 @@
-# iOS on the Samsung Galaxy S8
+# iOS on the Samsung Galaxy S8 and S8+
+
+This branch ports XNU 8796 and the iPhone X iOS 16 userland to Samsung phones with Exynos 8895. The latest hardware tests are on the Galaxy S8+ (SM-G955F, `dream2lte`). The original Galaxy S8 (SM-G950F, `dreamlte`) status and its separate installation guide are below.
+
+## Galaxy S8+ status
+
+| Area | Verified on SM-G955F |
+| --- | --- |
+| iOS interface | SpringBoard, lock screen and touch input |
+| CPU and memory | 8 CPU cores, 2 GiB usable RAM and 4 KiB pages |
+| Graphics | Hardware OpenGL ES rendering through Mesa/Panfrost on Mali-G71, with an EAGL bridge and 8 GPU contexts |
+| Display | 1125 x 2436 render surface, GPU copy and scaling to the 1440 x 2960 panel, and pipelined scanout through the DPU IOMMU |
+| Latest graphics test | Kernel 196 passed display startup. The vector upload build logged 8 successful direct uploads, at least 330 completed flips without DMA or MMU errors, and 10 matching pixel checks |
+
+Stable 30 FPS is still pending. Heavy scenes can stall even without texture uploads. Metal remains outside the verified graphics path.
+
+See the [S8+ bring-up notes](docs/dream2lte-bringup.md), the [latest test results and handoff](docs/CONTINUE_IOS_S8_PLUS.md), and the [driver journal](docs/dream2lte-fts-transport.md). The S8 installation instructions below target SM-G950F. The S8+ uses a different partition layout and requires its own verified images and backups.
+
+## Original Galaxy S8 status
 
 **iOS 16.7 on the Samsung Galaxy S8 (SM-G950F, Exynos 8895, `dreamlte`).**
 
